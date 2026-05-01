@@ -1,0 +1,12 @@
+services:
+  power-meter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: home-power-meter:latest
+    container_name: home-power-meter
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8484:8484"

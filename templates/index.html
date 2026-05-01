@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero-panel">
+    <div>
+        <p class="eyebrow">{{ month_label }}</p>
+        <h1>Учет Электроэнергии</h1>
+    </div>
+    <div class="hero-grid stats-grid">
+        <article class="stat-card">
+            <span class="stat-label">Текущая нагрузка дома</span>
+            <strong class="stat-value">{{ summary.current_power_kw }} кВт</strong>
+        </article>
+        <article class="stat-card">
+            <span class="stat-label">Энергия за месяц</span>
+            <strong class="stat-value">{{ summary.month_energy_kwh }} кВт·ч</strong>
+        </article>
+        <article class="stat-card">
+            <span class="stat-label">Оценка стоимости</span>
+            <strong class="stat-value">{{ summary.estimated_cost }}</strong>
+        </article>
+        <article class="stat-card">
+            <span class="stat-label">Устройств онлайн</span>
+            <strong class="stat-value">{{ summary.device_count }}</strong>
+        </article>
+    </div>
+</section>
+
+<section class="device-section">
+    <div class="section-heading">
+        <h2>Устройства</h2>
+    </div>
+    <div class="device-grid">
+        {% for device in summary.devices %}
+        <article class="device-card">
+            <a class="device-image" href="/devices/{{ device.slug }}" aria-label="Открыть детали устройства {{ device.name }}">
+                <span>{{ device.image_label }}</span>
+            </a>
+            <div class="device-card-body">
+                <div>
+                    <p class="device-room">{{ device.room }}</p>
+                    <h3>{{ device.name }}</h3>
+                </div>
+                <dl class="device-metrics">
+                    <div>
+                        <dt>Текущая мощность</dt>
+                        <dd>{{ device.current_power_kw }} кВт</dd>
+                    </div>
+                    <div>
+                        <dt>Энергия за месяц</dt>
+                        <dd>{{ device.month_energy_kwh }} кВт·ч</dd>
+                    </div>
+                    <div>
+                        <dt>Последний замер</dt>
+                        <dd>{{ device.last_seen or 'Пока нет данных' }}</dd>
+                    </div>
+                </dl>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

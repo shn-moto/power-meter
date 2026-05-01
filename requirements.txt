@@ -1,0 +1,5 @@
+fastapi==0.115.12
+jinja2==3.1.6
+psycopg[binary]==3.2.13
+tinytuya==1.18.0
+uvicorn[standard]==0.34.2

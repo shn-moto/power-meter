@@ -1,0 +1,287 @@
+:root {
+    --bg: #f1ece2;
+    --bg-strong: #e2d3b4;
+    --surface: rgba(255, 251, 243, 0.82);
+    --surface-strong: rgba(255, 251, 243, 0.95);
+    --text: #1f2022;
+    --muted: #585552;
+    --accent: #ba5b2e;
+    --accent-deep: #7d3516;
+    --line: rgba(31, 32, 34, 0.14);
+    --shadow: 0 24px 50px rgba(72, 46, 21, 0.16);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    color: var(--text);
+    background:
+        radial-gradient(circle at top right, rgba(186, 91, 46, 0.28), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(125, 53, 22, 0.2), transparent 34%),
+        linear-gradient(135deg, #f6f0e7, var(--bg));
+}
+
+.page-shell {
+    width: min(1280px, calc(100vw - 40px));
+    margin: 0 auto;
+    padding: 28px 0 60px;
+}
+
+.site-header {
+    margin-bottom: 24px;
+}
+
+.site-brand,
+.back-link {
+    color: var(--accent-deep);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.site-subtitle,
+.hero-copy,
+.section-heading p,
+.device-room,
+.stat-label,
+.device-metrics dt,
+.summary-grid dt,
+.chart-empty {
+    color: var(--muted);
+}
+
+.hero-panel,
+.detail-card,
+.device-card {
+    background: var(--surface);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--shadow);
+}
+
+.hero-panel,
+.detail-header {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 20px;
+    align-items: start;
+    margin-bottom: 24px;
+}
+
+.hero-panel {
+    border-radius: 30px;
+    padding: 28px;
+}
+
+.eyebrow {
+    margin: 0 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 0.78rem;
+    color: var(--accent-deep);
+}
+
+h1,
+h2,
+h3,
+p {
+    margin-top: 0;
+}
+
+.stats-grid,
+.device-grid,
+.detail-layout {
+    display: grid;
+    gap: 20px;
+}
+
+.stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stat-card,
+.detail-card {
+    border-radius: 24px;
+    padding: 20px;
+}
+
+.stat-value {
+    display: block;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+}
+
+.device-section {
+    margin-top: 16px;
+}
+
+.section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.device-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.device-card {
+    border-radius: 28px;
+    overflow: hidden;
+}
+
+.device-image {
+    display: flex;
+    align-items: end;
+    min-height: 220px;
+    padding: 20px;
+    text-decoration: none;
+    color: white;
+    background:
+        linear-gradient(180deg, rgba(31, 32, 34, 0.1), rgba(31, 32, 34, 0.72)),
+        linear-gradient(135deg, #db8553, #7d3516 65%, #31251f);
+}
+
+.device-image span {
+    font-size: 1.5rem;
+    font-weight: 700;
+    max-width: 12ch;
+}
+
+.device-card-body {
+    padding: 18px 20px 22px;
+}
+
+.device-metrics,
+.summary-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.device-metrics div,
+.summary-grid div {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+}
+
+.device-metrics dd,
+.device-metrics dt,
+.summary-grid dd,
+.summary-grid dt {
+    margin: 0;
+}
+
+.detail-layout {
+    grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
+}
+
+.chart-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.period-buttons,
+.custom-range-form {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+button,
+input {
+    border: 1px solid rgba(125, 53, 22, 0.16);
+    border-radius: 999px;
+    padding: 11px 16px;
+    font: inherit;
+    background: var(--surface-strong);
+}
+
+button {
+    cursor: pointer;
+}
+
+.period-buttons .is-active,
+button:hover {
+    background: var(--accent);
+    color: white;
+    border-color: transparent;
+}
+
+.chart-frame {
+    position: relative;
+    min-height: 320px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.44), rgba(255,255,255,0.18));
+    border-radius: 22px;
+    overflow: hidden;
+}
+
+.chart-svg {
+    width: 100%;
+    height: 320px;
+    display: block;
+}
+
+[data-chart-grid] line {
+    stroke: rgba(31, 32, 34, 0.1);
+    stroke-width: 1;
+}
+
+[data-chart-line] {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 4;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.chart-empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 1rem;
+}
+
+.raw-dps {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.92rem;
+}
+
+@media (max-width: 900px) {
+    .hero-panel,
+    .detail-header,
+    .detail-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .page-shell {
+        width: min(100vw - 24px, 100%);
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chart-toolbar {
+        flex-direction: column;
+    }
+}

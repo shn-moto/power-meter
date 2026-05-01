@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+snapshot.json
+devices.json
+devices.catalog.json
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db

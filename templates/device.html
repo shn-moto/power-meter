@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="detail-header">
+    <div>
+        <p class="eyebrow">{{ device.room }}</p>
+        <h1>{{ device.name }}</h1>
+        <p class="hero-copy">График потребления, сводка и сырые данные DPS.</p>
+    </div>
+    <a class="back-link" href="/">Назад к панели</a>
+</section>
+
+<section class="detail-layout" data-device-page data-device-slug="{{ device.slug }}">
+    <article class="detail-card">
+        <div class="chart-toolbar">
+            <div class="period-buttons">
+                <button type="button" data-period="today">Сегодня</button>
+                <button type="button" data-period="7d">7 дней</button>
+                <button type="button" data-period="30d">30 дней</button>
+                <button type="button" data-period="month" class="is-active">Месяц</button>
+                <button type="button" data-period="90d">90 дней</button>
+            </div>
+            <form class="custom-range-form" data-custom-range>
+                <input type="date" name="start" required>
+                <input type="date" name="end" required>
+                <button type="submit">Применить</button>
+            </form>
+        </div>
+        <div class="chart-frame">
+            <svg viewBox="0 0 960 320" class="chart-svg" data-chart>
+                <g data-chart-grid></g>
+                <polyline data-chart-line points="" />
+            </svg>
+            <div class="chart-empty" data-chart-empty hidden>За этот период данные пока не собраны.</div>
+        </div>
+    </article>
+
+    <aside class="detail-sidebar">
+        <article class="detail-card">
+            <h2>Сводка</h2>
+            <dl class="summary-grid" data-device-summary>
+                <div><dt>Энергия</dt><dd>--</dd></div>
+                <div><dt>Средняя мощность</dt><dd>--</dd></div>
+                <div><dt>Пиковая мощность</dt><dd>--</dd></div>
+                <div><dt>Среднее напряжение</dt><dd>--</dd></div>
+                <div><dt>Замеров</dt><dd>--</dd></div>
+                <div><dt>Последний замер</dt><dd>--</dd></div>
+            </dl>
+        </article>
+        <article class="detail-card">
+            <h2>Сырые данные DPS</h2>
+            <pre class="raw-dps" data-raw-dps>{}</pre>
+        </article>
+    </aside>
+</section>
+
+<script src="/static/device.js" defer></script>
+{% endblock %}
