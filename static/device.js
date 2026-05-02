@@ -114,6 +114,8 @@ if (page) {
 
     const getTodayKey = () => toDateKey(new Date());
 
+    const getCurrentMonthKey = () => toMonthKey(new Date());
+
     const getEffectiveDayKey = () => selectedDayKey || getTodayKey();
 
     const getMonthRange = (monthKey) => {
@@ -134,6 +136,20 @@ if (page) {
             return { period: 'custom', ...getMonthRange(selectedMonthKey) };
         }
         return { period: currentPeriod, start: null, end: null };
+    };
+
+    const shouldRefreshAggregate = () => {
+        const todayKey = getTodayKey();
+        if (currentPeriod === DAY_PERIOD) {
+            return !selectedDayKey || selectedDayKey >= todayKey;
+        }
+        if (currentPeriod === MONTH_PERIOD) {
+            return !selectedMonthKey || selectedMonthKey >= getCurrentMonthKey();
+        }
+        if (currentPeriod === 'custom') {
+            return Boolean(currentStart && currentEnd && currentStart <= todayKey && currentEnd >= todayKey);
+        }
+        return true;
     };
 
     const setSelectedPeriodInput = (period) => {
@@ -245,7 +261,7 @@ if (page) {
                 throw new Error(payload.detail || 'Не удалось выполнить действие.');
             }
             await Promise.all([
-                loadPeriod(currentPeriod, currentStart, currentEnd),
+                loadCurrentPeriod(),
                 loadLive(),
             ]);
         } catch (error) {
@@ -592,6 +608,9 @@ if (page) {
         if (document.hidden) {
             return;
         }
-        loadPeriod(currentPeriod, currentStart, currentEnd);
+        if (!shouldRefreshAggregate()) {
+            return;
+        }
+        loadCurrentPeriod();
     }, AGGREGATE_REFRESH_INTERVAL_MS);
 }
