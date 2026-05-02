@@ -8,6 +8,7 @@ import tinytuya
 
 from app.storage import (
     get_device_by_id,
+    replace_device_capabilities,
     get_device_row,
     get_known_local_ips,
     init_db,
@@ -340,3 +341,23 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         "connection_ready": connection_ready,
         "connection_message": connection_message,
     }
+
+
+def sync_config_device_capabilities(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
+    cloud_config = load_cloud_config(required=False)
+    if not cloud_config or not devices:
+        return
+
+    cloud = tinytuya.Cloud(
+        apiRegion=cloud_config.region,
+        apiKey=cloud_config.api_key,
+        apiSecret=cloud_config.api_secret,
+        apiDeviceID=cloud_config.api_device_id or devices[0].device_id,
+    )
+
+    for device in devices:
+        dps_info = cloud.getdps(device.device_id)
+        if not isinstance(dps_info, dict) or not dps_info.get("success"):
+            continue
+        capabilities = _build_capabilities(dps_info.get("result") or {})
+        replace_device_capabilities(config, device.slug, capabilities)

@@ -12,11 +12,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+import tinytuya
 
-from app.device_registry import DEVICE_KIND_LABELS, connect_device
+from app.device_registry import DEVICE_KIND_LABELS, connect_device, sync_config_device_capabilities
 from config import AppConfig, load_app_config, load_devices
 from app.storage import (
     DeviceSample,
+    get_control_device,
     get_device_capabilities,
     get_dashboard_summary,
     get_device_row,
@@ -33,7 +35,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-3"
+templates.env.globals["static_asset_version"] = "20260502-4"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -81,9 +83,18 @@ FUNCTION_LABELS = {
     "work_mode": ("Режим", "Переключение режимов работы"),
 }
 
+SUPPORTED_CONTROL_TYPES = {
+    "switch": "toggle",
+    "countdown_1": "timer",
+}
+
 
 class ConnectDevicePayload(BaseModel):
     device_id: str
+
+
+class DeviceFunctionPayload(BaseModel):
+    value: Any
 
 
 def _get_timezone(config: AppConfig) -> ZoneInfo:
@@ -157,38 +168,8 @@ def _format_dps_value(capability: dict[str, Any] | None, raw_value: Any) -> str:
     return str(raw_value)
 
 
-def _build_interpreted_dps(raw_dps: dict[str, Any], capabilities: list[dict[str, Any]]) -> list[dict[str, str]]:
-    capability_map: dict[str, dict[str, Any]] = {}
-    for capability in capabilities:
-        dp_id = capability.get("dp_id")
-        if dp_id is None:
-            continue
-        key = str(dp_id)
-        current = capability_map.get(key)
-        if current is None or capability.get("capability_source") == "status":
-            capability_map[key] = capability
-
-    def sort_key(item: tuple[str, Any]) -> tuple[int, str]:
-        key = str(item[0])
-        return (0, f"{int(key):08d}") if key.isdigit() else (1, key)
-
-    interpreted: list[dict[str, str]] = []
-    for dp_key, raw_value in sorted(raw_dps.items(), key=sort_key):
-        capability = capability_map.get(str(dp_key))
-        capability_code = str((capability or {}).get("capability_code") or "")
-        label = DPS_LABELS.get(capability_code) or str((capability or {}).get("capability_name") or "").strip() or f"DP {dp_key}"
-        interpreted.append(
-            {
-                "label": label,
-                "value": _format_dps_value(capability, raw_value),
-            }
-        )
-
-    return interpreted
-
-
 def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str, str]]:
-    functions: list[dict[str, str]] = []
+    functions: list[dict[str, Any]] = []
     seen_codes: set[str] = set()
 
     for capability in capabilities:
@@ -197,6 +178,9 @@ def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str
 
         code = str(capability.get("capability_code") or "").strip()
         if not code or code in seen_codes:
+            continue
+        control_type = SUPPORTED_CONTROL_TYPES.get(code)
+        if not control_type:
             continue
         seen_codes.add(code)
 
@@ -216,12 +200,58 @@ def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str
             else:
                 description = "Доступная функция устройства"
 
-        functions.append({
-            "label": label,
-            "description": description,
-        })
+        values_json = capability.get("values_json") or {}
+        functions.append(
+            {
+                "code": code,
+                "label": label,
+                "description": description,
+                "control_type": control_type,
+                "dp_id": int(capability.get("dp_id") or 0),
+                "min": int(values_json.get("min", 0) or 0),
+                "max": int(values_json.get("max", 0) or 0),
+                "step": int(values_json.get("step", 1) or 1),
+                "unit": UNIT_LABELS.get(str(values_json.get("unit") or "").strip(), str(values_json.get("unit") or "").strip()),
+            }
+        )
 
     return functions
+
+
+def _attach_function_state(functions: list[dict[str, Any]], raw_dps: dict[str, Any]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for item in functions:
+        current_raw = raw_dps.get(str(item["dp_id"])) if item.get("dp_id") else None
+        current_value = current_raw
+        current_label = "Нет данных"
+
+        if item["control_type"] == "toggle":
+            current_value = bool(current_raw) if current_raw is not None else False
+            current_label = "Включено" if current_value else "Выключено"
+        elif item["control_type"] == "timer":
+            try:
+                current_value = int(current_raw or 0)
+            except (TypeError, ValueError):
+                current_value = 0
+            current_label = _format_duration(current_value) if current_value else "Не задан"
+
+        enriched.append({
+            **item,
+            "current_value": current_value,
+            "current_label": current_label,
+        })
+
+    return enriched
+
+
+def _apply_device_command(device: tinytuya.Device, function_code: str, dp_id: int, value: Any) -> None:
+    if function_code == "switch":
+        device.set_status(bool(value), switch=dp_id)
+        return
+    if function_code == "countdown_1":
+        device.set_value(dp_id, int(value))
+        return
+    raise ValueError("Функция пока не поддерживается")
 
 
 def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_raw: str | None) -> tuple[datetime, datetime]:
@@ -310,7 +340,9 @@ async def lifespan(app: FastAPI):
     app.state.live_samples = {}
     app.state.last_saved_at = {}
     await asyncio.to_thread(init_db, app.state.app_config)
-    await asyncio.to_thread(sync_devices, app.state.app_config, load_devices())
+    configured_devices = load_devices()
+    await asyncio.to_thread(sync_devices, app.state.app_config, configured_devices)
+    await asyncio.to_thread(sync_config_device_capabilities, app.state.app_config, configured_devices)
     app.state.poller = asyncio.create_task(_poll_loop(app))
     yield
     app.state.poller.cancel()
@@ -345,14 +377,12 @@ async def device_details(request: Request, slug: str) -> HTMLResponse:
     device = await asyncio.to_thread(get_device_row, config, slug)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
-    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
 
     return templates.TemplateResponse(
         request=request,
         name="device.html",
         context={
             "device": dict(device),
-            "device_functions": _build_device_functions(capabilities),
             "page_title": f"{device['name']} - детали",
         },
     )
@@ -397,6 +427,56 @@ async def connect_device_api(request: Request, payload: ConnectDevicePayload) ->
     return JSONResponse(jsonable_encoder(result))
 
 
+@app.post("/api/devices/{slug}/functions/{function_code}")
+async def device_function_api(request: Request, slug: str, function_code: str, payload: DeviceFunctionPayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = await asyncio.to_thread(get_control_device, config, slug)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    if not device.ip_address:
+        raise HTTPException(status_code=400, detail="Для устройства не найден локальный адрес")
+
+    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
+    functions = _build_device_functions(capabilities)
+    function = next((item for item in functions if item["code"] == function_code), None)
+    if not function:
+        raise HTTPException(status_code=404, detail="Функция не найдена")
+
+    try:
+        if function["control_type"] == "toggle":
+            value = bool(payload.value)
+        elif function["control_type"] == "timer":
+            value = int(payload.value)
+            if value < function["min"] or (function["max"] and value > function["max"]):
+                raise ValueError("Значение таймера вне допустимого диапазона")
+        else:
+            raise ValueError("Функция пока не поддерживается")
+
+        tinytuya_device = tinytuya.Device(device.device_id, device.ip_address, device.local_key)
+        tinytuya_device.set_version(device.version)
+        tinytuya_device.set_socketTimeout(1.5)
+        tinytuya_device.set_socketRetryLimit(1)
+        await asyncio.to_thread(_apply_device_command, tinytuya_device, function_code, function["dp_id"], value)
+
+        captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
+        sample = DeviceSample(
+            device_slug=device.slug,
+            captured_at=captured_at,
+            power_w=power_w,
+            voltage_v=voltage_v,
+            raw_dps=raw_dps,
+        )
+        request.app.state.live_samples[device.slug] = sample
+        await asyncio.to_thread(save_sample, config, sample)
+        request.app.state.last_saved_at[device.slug] = captured_at
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Не удалось выполнить команду: {error}") from error
+
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/api/devices/{slug}/stats")
 async def device_stats_api(
     request: Request,
@@ -414,6 +494,8 @@ async def device_stats_api(
     bucket = pick_bucket(range_start, range_end)
     stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, bucket)
     stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(slug))
+    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
+    stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
     return JSONResponse(
         jsonable_encoder({
             "device": dict(device),

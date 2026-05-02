@@ -487,6 +487,68 @@ def get_device_capabilities(config: AppConfig, slug: str) -> list[dict[str, Any]
             return cursor.fetchall()
 
 
+def replace_device_capabilities(config: AppConfig, slug: str, capabilities: list[dict[str, Any]]) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM device_capabilities WHERE device_slug = %s", (slug,))
+            if capabilities:
+                cursor.executemany(
+                    """
+                    INSERT INTO device_capabilities (
+                        device_slug, capability_source, capability_code, capability_name,
+                        value_type, dp_id, values_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            slug,
+                            capability.get("capability_source") or "status",
+                            capability.get("capability_code") or "unknown",
+                            capability.get("capability_name"),
+                            capability.get("value_type"),
+                            capability.get("dp_id"),
+                            Jsonb(capability.get("values_json") or {}),
+                        )
+                        for capability in capabilities
+                    ],
+                )
+        connection.commit()
+
+
+def get_control_device(config: AppConfig, slug: str) -> TuyaDeviceConfig | None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.slug, d.name, d.room, d.image_label, d.device_id,
+                       c.local_key, c.ip_address, c.version, c.power_dps_key,
+                       c.power_scale, c.voltage_dps_keys
+                FROM devices d
+                JOIN device_connections c ON c.device_slug = d.slug
+                WHERE d.slug = %s
+                """,
+                (slug,),
+            )
+            row = cursor.fetchone()
+
+    if not row:
+        return None
+
+    return TuyaDeviceConfig(
+        slug=row["slug"],
+        name=row["name"],
+        room=row["room"],
+        image_label=row["image_label"],
+        device_id=row["device_id"],
+        local_key=row["local_key"],
+        ip_address=row["ip_address"],
+        version=float(row["version"]),
+        power_dps_key=str(row["power_dps_key"] or ""),
+        power_scale=float(row["power_scale"] or 1),
+        voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
+    )
+
+
 def get_device_by_id(config: AppConfig, device_id: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
