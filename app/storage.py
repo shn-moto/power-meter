@@ -1061,8 +1061,8 @@ def _integrate_energy_counter_kwh(rows: list[dict[str, Any]], dp_key: str, scale
     return total_kwh
 
 
-def _get_energy_counter_meta(config: AppConfig, device_id: str) -> tuple[str, int] | None:
-    for capability in get_device_capabilities(config, device_id):
+def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]]) -> tuple[str, int] | None:
+    for capability in capabilities:
         code = str(capability.get("capability_code") or "")
         if code not in {"total_forward_energy", "add_ele"}:
             continue
@@ -1072,6 +1072,16 @@ def _get_energy_counter_meta(config: AppConfig, device_id: str) -> tuple[str, in
         values_json = capability.get("values_json") or {}
         return str(dp_id), int(values_json.get("scale", 0) or 0)
     return None
+
+
+def _get_energy_counter_meta(
+    config: AppConfig,
+    device_id: str,
+    capabilities: list[dict[str, Any]] | None = None,
+) -> tuple[str, int] | None:
+    if capabilities is not None:
+        return _get_energy_counter_meta_from_capabilities(capabilities)
+    return _get_energy_counter_meta_from_capabilities(get_device_capabilities(config, device_id))
 
 
 def _build_series_from_energy_counter(
@@ -1105,9 +1115,15 @@ def _build_series_from_energy_counter(
     ]
 
 
-def _calculate_energy_wh(config: AppConfig, device_id: str, rows: list[dict[str, Any]]) -> float:
+def _calculate_energy_wh(
+    config: AppConfig,
+    device_id: str,
+    rows: list[dict[str, Any]],
+    capabilities: list[dict[str, Any]] | None = None,
+    energy_counter_meta: tuple[str, int] | None = None,
+) -> float:
     integrated_wh = _integrate_energy_wh(rows)
-    energy_counter_meta = _get_energy_counter_meta(config, device_id)
+    energy_counter_meta = energy_counter_meta or _get_energy_counter_meta(config, device_id, capabilities)
     if not energy_counter_meta:
         return integrated_wh
 
@@ -1170,6 +1186,7 @@ def _prepare_chart_series(
     period: str,
     bucket: str,
     series: list[dict[str, Any]],
+    energy_counter_meta: tuple[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     chart_metric = "energy_kwh"
     chart = {
@@ -1181,7 +1198,7 @@ def _prepare_chart_series(
     }
 
     max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
-    energy_counter_meta = _get_energy_counter_meta(config, device_id)
+    energy_counter_meta = energy_counter_meta or _get_energy_counter_meta(config, device_id)
     if energy_counter_meta:
         fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
         fallback_max = max((float(item.get("energy_kwh") or 0.0) for item in fallback_series), default=0.0)
@@ -1300,9 +1317,24 @@ def get_device_stats(
 ) -> dict[str, Any]:
     rows = get_samples(config, device_id, start, end)
     latest = get_latest_sample(config, device_id)
+    return _build_device_stats_result(config, device_id, rows, latest, start, end, period, bucket)
+
+
+def _build_device_stats_result(
+    config: AppConfig,
+    device_id: str,
+    rows: list[dict[str, Any]],
+    latest: dict[str, Any] | None,
+    start: datetime,
+    end: datetime,
+    period: str,
+    bucket: str,
+    capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     series = _build_series(rows, bucket)
-    chart_series, chart = _prepare_chart_series(config, device_id, rows, start, end, period, bucket, series)
-    total_energy_wh = _calculate_energy_wh(config, device_id, rows)
+    energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+    chart_series, chart = _prepare_chart_series(config, device_id, rows, start, end, period, bucket, series, energy_counter_meta)
+    total_energy_wh = _calculate_energy_wh(config, device_id, rows, capabilities, energy_counter_meta)
     normalized_powers = [
         _normalize_sample_power_w(float(row["power_w"]), row.get("voltage_v"), row.get("raw_dps"))
         for row in rows
@@ -1331,6 +1363,67 @@ def get_device_stats(
         "series": chart_series,
         "chart": chart,
     }
+
+
+def get_device_context_and_stats(
+    config: AppConfig,
+    device_id: str,
+    start: datetime,
+    end: datetime,
+    period: str,
+    bucket: str,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
+                       product_name, category_code, product_id, icon
+                FROM devices
+                WHERE device_id = %s
+                """,
+                (device_id,),
+            )
+            device = cursor.fetchone()
+            if not device:
+                return None, [], None
+
+            cursor.execute(
+                """
+                SELECT capability_source, capability_code, capability_name, value_type, dp_id, values_json
+                FROM device_capabilities
+                WHERE device_id = %s
+                ORDER BY dp_id ASC NULLS LAST, capability_source DESC, capability_code ASC
+                """,
+                (device_id,),
+            )
+            capabilities = cursor.fetchall()
+
+            cursor.execute(
+                """
+                SELECT captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
+                """,
+                (device_id, start, end),
+            )
+            rows = cursor.fetchall()
+
+            cursor.execute(
+                """
+                SELECT captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = %s
+                ORDER BY captured_at DESC
+                LIMIT 1
+                """,
+                (device_id,),
+            )
+            latest = cursor.fetchone()
+
+    stats = _build_device_stats_result(config, device_id, rows, latest, start, end, period, bucket, capabilities)
+    return device, capabilities, stats
 
 
 def pick_bucket(start: datetime, end: datetime, period: str = "custom") -> str:

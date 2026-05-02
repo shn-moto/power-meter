@@ -21,6 +21,7 @@ from app.storage import (
     DeviceSample,
     get_control_device,
     get_device_capabilities,
+    get_device_context_and_stats,
     get_dashboard_summary,
     get_device_row,
     get_device_rows,
@@ -456,15 +457,12 @@ def _build_device_stats_payload(
     end_raw: str | None,
     live_sample: DeviceSample | None,
 ) -> dict[str, Any] | None:
-    device = get_device_row(config, device_id)
-    if not device:
-        return None
-
     range_start, range_end = _resolve_period(config, period, start_raw, end_raw)
     bucket = pick_bucket(range_start, range_end, period)
-    stats = get_device_stats(config, device_id, range_start, range_end, period, bucket)
+    device, capabilities, stats = get_device_context_and_stats(config, device_id, range_start, range_end, period, bucket)
+    if not device:
+        return None
     stats = _apply_live_stats(config, stats, live_sample)
-    capabilities = get_device_capabilities(config, device_id)
     _augment_current_summary(stats["summary"], capabilities)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
     return {
