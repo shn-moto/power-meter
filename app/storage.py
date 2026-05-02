@@ -1164,11 +1164,7 @@ def _calculate_energy_wh(
     counter_kwh = _integrate_energy_counter_kwh(rows, *energy_counter_meta)
     if counter_kwh is None:
         return integrated_wh
-
-    counter_wh = counter_kwh * 1000.0
-    if counter_wh > max(integrated_wh * 5, 10.0):
-        return counter_wh
-    return integrated_wh
+    return counter_kwh * 1000.0
 
 
 def _row_from_live_sample(sample: DeviceSample) -> dict[str, Any]:
@@ -1326,7 +1322,7 @@ def _prepare_chart_series(
     if energy_counter_meta:
         fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
         fallback_max = max((float(item.get("energy_kwh") or 0.0) for item in fallback_series), default=0.0)
-        if fallback_max > max(max_chart_value * 5, 0.01):
+        if fallback_series and fallback_max > 0.0:
             series = fallback_series
 
     chart_series_by_bucket = {
