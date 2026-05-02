@@ -5,7 +5,7 @@ if (dashboardPage) {
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
-    const deviceGrid = dashboardPage.querySelector('[data-device-grid]');
+    const deviceGrid = document.querySelector('[data-device-grid]');
     let isLoading = false;
 
     const escapeHtml = (value) => String(value ?? '')
