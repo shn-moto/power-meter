@@ -911,14 +911,6 @@ def _merge_live_sample(rows: list[dict[str, Any]], live_sample: DeviceSample | N
     return [*rows, _row_from_live_sample(live_sample)]
 
 
-def _is_sample_recent(config: AppConfig, captured_at: datetime | None, now: datetime) -> bool:
-    if captured_at is None:
-        return False
-
-    max_age_seconds = max(config.poll_interval_seconds * 3, config.sample_write_interval_seconds * 2, 3)
-    return (now - captured_at).total_seconds() <= max_age_seconds
-
-
 def get_sample_age_seconds(captured_at: datetime | None, now: datetime) -> int | None:
     if captured_at is None:
         return None
@@ -1031,7 +1023,8 @@ def get_dashboard_summary(
             raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
             effective_captured_at = _parse_dt(latest["captured_at"]) if latest else None
 
-        if _is_sample_recent(config, effective_captured_at, now):
+        last_seen_status = get_sample_status(effective_captured_at, now)
+        if last_seen_status == "ok":
             online_device_count += 1
 
         total_power_w += current_power_w
@@ -1047,7 +1040,7 @@ def get_dashboard_summary(
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
                 "last_seen": last_seen,
                 "last_seen_age_seconds": last_seen_age_seconds,
-                "last_seen_status": get_sample_status(effective_captured_at, now),
+                "last_seen_status": last_seen_status,
                 "raw_dps": raw_dps,
             }
         )
