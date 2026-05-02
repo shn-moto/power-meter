@@ -1211,6 +1211,96 @@ def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
     return "ok"
 
 
+def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, int]]:
+    metadata: dict[str, tuple[str, int]] = {}
+    for row in rows:
+        device_id = str(row.get("device_id") or "")
+        if not device_id or device_id in metadata:
+            continue
+        dp_id = row.get("dp_id")
+        if dp_id is None:
+            continue
+        values_json = row.get("values_json") or {}
+        metadata[device_id] = (str(dp_id), int(values_json.get("scale", 0) or 0))
+    return metadata
+
+
+def _group_rows_by_device(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("device_id") or "")].append(row)
+    return grouped
+
+
+def _get_dashboard_summary_context(
+    config: AppConfig,
+    month_start: datetime,
+    now: datetime,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+    dict[str, tuple[str, int]],
+]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.slug, d.name, d.room, d.image_label, d.device_kind, d.is_energy_meter,
+                      d.product_name, d.category_code, d.image_id, d.device_id,
+                       COALESCE(c.ip_address, '') AS ip_address,
+                       (COALESCE(c.ip_address, '') <> '') AS connection_ready
+                FROM devices d
+                LEFT JOIN device_connections c ON c.device_id = d.device_id
+                ORDER BY name
+                """
+            )
+            device_rows = [row for row in cursor.fetchall() if row.get("is_energy_meter")]
+            device_ids = [str(row.get("device_id") or "") for row in device_rows if row.get("device_id")]
+            if not device_ids:
+                return device_rows, {}, {}, {}
+
+            cursor.execute(
+                """
+                SELECT device_id, capability_code, dp_id, values_json
+                FROM device_capabilities
+                WHERE device_id = ANY(%s) AND capability_code IN ('total_forward_energy', 'add_ele')
+                ORDER BY device_id ASC, dp_id ASC NULLS LAST, capability_code ASC
+                """,
+                (device_ids,),
+            )
+            energy_counter_rows = cursor.fetchall()
+
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (device_id) device_id, captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = ANY(%s)
+                ORDER BY device_id ASC, captured_at DESC
+                """,
+                (device_ids,),
+            )
+            latest_rows = cursor.fetchall()
+
+            cursor.execute(
+                """
+                SELECT device_id, captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = ANY(%s) AND captured_at >= %s AND captured_at <= %s
+                ORDER BY device_id ASC, captured_at ASC
+                """,
+                (device_ids, month_start, now),
+            )
+            month_rows = cursor.fetchall()
+
+    return (
+        device_rows,
+        {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
+        _group_rows_by_device(month_rows),
+        _build_energy_counter_meta_by_device(energy_counter_rows),
+    )
+
+
 def _prepare_chart_series(
     config: AppConfig,
     device_id: str,
@@ -1286,15 +1376,24 @@ def get_dashboard_summary(
     online_device_count = 0
     live_samples = live_samples or {}
 
-    for device in get_device_rows(config):
-        if not device.get("is_energy_meter"):
-            continue
+    device_rows, latest_by_device, month_rows_by_device, energy_counter_meta_by_device = _get_dashboard_summary_context(
+        config,
+        month_start,
+        now,
+    )
+
+    for device in device_rows:
 
         device_id = str(device.get("device_id") or "")
         live_sample = live_samples.get(device_id)
-        latest = get_latest_sample(config, device_id)
-        samples = _merge_live_sample(get_samples(config, device_id, month_start, now), live_sample)
-        device_energy_wh = _calculate_energy_wh(config, device_id, samples)
+        latest = latest_by_device.get(device_id)
+        samples = _merge_live_sample(month_rows_by_device.get(device_id, []), live_sample)
+        device_energy_wh = _calculate_energy_wh(
+            config,
+            device_id,
+            samples,
+            energy_counter_meta=energy_counter_meta_by_device.get(device_id),
+        )
         total_energy_wh += device_energy_wh
 
         if live_sample:

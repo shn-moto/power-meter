@@ -44,6 +44,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.globals["static_asset_version"] = "20260503-01"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
+AGGREGATE_CACHE_TTL_SECONDS = 5.0
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -526,6 +527,43 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
     }
 
 
+def _get_aggregate_cache_key(*parts: str) -> tuple[str, ...]:
+    return tuple(parts)
+
+
+def _get_cached_aggregate_payload(request: Request, key: tuple[str, ...]) -> dict[str, Any] | None:
+    cache: dict[tuple[str, ...], dict[str, Any]] = request.app.state.aggregate_cache
+    entry = cache.get(key)
+    if not entry:
+        return None
+    if monotonic() - float(entry.get("created_at") or 0.0) > AGGREGATE_CACHE_TTL_SECONDS:
+        cache.pop(key, None)
+        return None
+    return entry.get("payload")
+
+
+def _set_cached_aggregate_payload(request: Request, key: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]:
+    cache: dict[tuple[str, ...], dict[str, Any]] = request.app.state.aggregate_cache
+    cache[key] = {
+        "created_at": monotonic(),
+        "payload": payload,
+    }
+    return payload
+
+
+def _invalidate_aggregate_cache(request: Request, *, device_id: str | None = None) -> None:
+    cache: dict[tuple[str, ...], dict[str, Any]] = request.app.state.aggregate_cache
+    keys_to_remove = []
+    for key in cache:
+        if key[:1] == ("summary",):
+            keys_to_remove.append(key)
+            continue
+        if device_id and len(key) > 1 and key[1] == device_id:
+            keys_to_remove.append(key)
+    for key in keys_to_remove:
+        cache.pop(key, None)
+
+
 def _build_device_stats_payload(
     config: AppConfig,
     device_id: str,
@@ -560,6 +598,7 @@ async def lifespan(app: FastAPI):
     app.state.live_samples = {}
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
+    app.state.aggregate_cache = {}
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
     await asyncio.to_thread(init_db, app.state.app_config)
     configured_devices = load_devices()
@@ -584,8 +623,12 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    month_start, now = _month_window(config)
-    summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+    summary_cache_key = _get_aggregate_cache_key("summary", "dashboard")
+    summary = _get_cached_aggregate_payload(request, summary_cache_key)
+    if summary is None:
+        month_start, now = _month_window(config)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return templates.TemplateResponse(
         request=request,
@@ -601,14 +644,19 @@ def dashboard(request: Request) -> HTMLResponse:
 @app.get("/devices/{device_id}", response_class=HTMLResponse)
 def device_details(request: Request, device_id: str) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    payload = _build_device_stats_payload(
-        config,
-        device_id,
-        "day",
-        None,
-        None,
-        request.app.state.live_samples.get(device_id),
-    )
+    stats_cache_key = _get_aggregate_cache_key("device-stats", device_id, "day", "", "")
+    payload = _get_cached_aggregate_payload(request, stats_cache_key)
+    if payload is None:
+        payload = _build_device_stats_payload(
+            config,
+            device_id,
+            "day",
+            None,
+            None,
+            request.app.state.live_samples.get(device_id),
+        )
+        if payload:
+            payload = _set_cached_aggregate_payload(request, stats_cache_key, payload)
     if not payload:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
     device = payload["device"]
@@ -647,8 +695,12 @@ async def healthcheck() -> JSONResponse:
 @app.get("/api/summary")
 def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    month_start, now = _month_window(config)
-    summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+    summary_cache_key = _get_aggregate_cache_key("summary", "api")
+    summary = _get_cached_aggregate_payload(request, summary_cache_key)
+    if summary is None:
+        month_start, now = _month_window(config)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return JSONResponse(jsonable_encoder(summary))
 
@@ -712,6 +764,7 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
         request.app.state.live_samples[device.device_id] = sample
         save_sample(config, sample)
         request.app.state.last_saved_at[device.device_id] = captured_at
+        _invalidate_aggregate_cache(request, device_id=device.device_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -729,14 +782,19 @@ def device_stats_api(
     end: str | None = Query(default=None),
 ) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    payload = _build_device_stats_payload(
-        config,
-        device_id,
-        period,
-        start,
-        end,
-        request.app.state.live_samples.get(device_id),
-    )
+    stats_cache_key = _get_aggregate_cache_key("device-stats", device_id, period, start or "", end or "")
+    payload = _get_cached_aggregate_payload(request, stats_cache_key)
+    if payload is None:
+        payload = _build_device_stats_payload(
+            config,
+            device_id,
+            period,
+            start,
+            end,
+            request.app.state.live_samples.get(device_id),
+        )
+        if payload:
+            payload = _set_cached_aggregate_payload(request, stats_cache_key, payload)
     if not payload:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
     return JSONResponse(jsonable_encoder(payload))
