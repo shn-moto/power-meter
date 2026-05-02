@@ -21,6 +21,26 @@ def _normalize_power(power_w: float, voltage_v: float | None) -> float:
     return power_w
 
 
+def _normalize_power_by_measurements(dps: dict[str, Any], power_w: float, voltage_v: float | None) -> float:
+    try:
+        current_raw = float(dps.get("4"))
+    except (TypeError, ValueError):
+        current_raw = None
+
+    if current_raw is None or current_raw <= 0 or voltage_v is None or voltage_v <= 0:
+        return power_w
+
+    current_a = current_raw / 1000.0 if current_raw > 10 else current_raw
+    apparent_power_w = current_a * voltage_v
+    if apparent_power_w <= 0:
+        return power_w
+
+    if power_w > apparent_power_w * 3 and (power_w / 10.0) <= apparent_power_w * 1.6:
+        return power_w / 10.0
+
+    return power_w
+
+
 def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device = tinytuya.Device(
         device_config.device_id,
@@ -44,6 +64,7 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
         if key in dps and dps[key] is not None
     ]
     voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+    power_w = _normalize_power_by_measurements(dps, power_w, voltage_v)
     power_w = _normalize_power(power_w, voltage_v)
     return power_w, voltage_v, dps
 

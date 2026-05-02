@@ -263,6 +263,7 @@ def init_db(config: AppConfig) -> None:
         """,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_device_time_source ON samples(device_id, captured_at, source)",
         "CREATE INDEX IF NOT EXISTS idx_samples_device_time ON samples(device_id, captured_at)",
+        "CREATE INDEX IF NOT EXISTS idx_samples_device_time_desc ON samples(device_id, captured_at DESC)",
         "ALTER TABLE device_events ADD COLUMN IF NOT EXISTS device_id TEXT",
         """
         DO $$
@@ -652,7 +653,49 @@ def _normalize_json_field(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _normalize_sample_power_w(power_w: float, voltage_v: float | None) -> float:
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_voltage_value(value: Any) -> float | None:
+    voltage = _coerce_float(value)
+    if voltage is None:
+        return None
+    if abs(voltage) >= 1000:
+        return voltage / 10.0
+    return voltage
+
+
+def _normalize_power_by_measurements(
+    power_w: float,
+    voltage_v: float | None,
+    raw_dps: dict[str, Any] | None,
+) -> float:
+    payload = _normalize_json_field(raw_dps)
+    if not payload:
+        return power_w
+
+    current_raw = _coerce_float(payload.get("4"))
+    measured_voltage = voltage_v if voltage_v is not None else _normalize_voltage_value(payload.get("6"))
+    if current_raw is None or measured_voltage is None or current_raw <= 0 or measured_voltage <= 0:
+        return power_w
+
+    current_a = current_raw / 1000.0 if current_raw > 10 else current_raw
+    apparent_power_w = current_a * measured_voltage
+    if apparent_power_w <= 0:
+        return power_w
+
+    if power_w > apparent_power_w * 3 and (power_w / 10.0) <= apparent_power_w * 1.6:
+        return power_w / 10.0
+
+    return power_w
+
+
+def _normalize_sample_power_w(power_w: float, voltage_v: float | None, raw_dps: dict[str, Any] | None = None) -> float:
+    power_w = _normalize_power_by_measurements(power_w, voltage_v, raw_dps)
     if power_w > 5000 and voltage_v is not None and 180 <= voltage_v <= 260:
         return power_w / 10.0
     return power_w
@@ -875,7 +918,7 @@ def _integrate_energy_wh(rows: list[dict[str, Any]]) -> float:
         current_dt = _parse_dt(current["captured_at"])
         next_dt = _parse_dt(following["captured_at"])
         hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
-        total_wh += _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v")) * hours
+        total_wh += _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"), current.get("raw_dps")) * hours
     return total_wh
 
 
@@ -970,7 +1013,7 @@ def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
         next_dt = _parse_dt(following["captured_at"])
         hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
         group = grouped[_bucket_start(current_dt, bucket)]
-        power_w = _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"))
+        power_w = _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"), current.get("raw_dps"))
         group["energy_wh"] += power_w * hours
         group["power_sum"] += power_w
         group["count"] += 1
@@ -1204,12 +1247,12 @@ def get_dashboard_summary(
         total_energy_wh += device_energy_wh
 
         if live_sample:
-            current_power_w = _normalize_sample_power_w(float(live_sample.power_w), live_sample.voltage_v)
+            current_power_w = _normalize_sample_power_w(float(live_sample.power_w), live_sample.voltage_v, live_sample.raw_dps)
             last_seen = _format_display_datetime(config, live_sample.captured_at)
             raw_dps = live_sample.raw_dps
             effective_captured_at = live_sample.captured_at
         else:
-            current_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v")) if latest else 0.0
+            current_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else 0.0
             last_seen = _format_display_datetime(config, latest["captured_at"]) if latest else None
             raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
             effective_captured_at = _parse_dt(latest["captured_at"]) if latest else None
@@ -1260,17 +1303,24 @@ def get_device_stats(
     series = _build_series(rows, bucket)
     chart_series, chart = _prepare_chart_series(config, device_id, rows, start, end, period, bucket, series)
     total_energy_wh = _calculate_energy_wh(config, device_id, rows)
-    normalized_powers = [_normalize_sample_power_w(float(row["power_w"]), row.get("voltage_v")) for row in rows]
+    normalized_powers = [
+        _normalize_sample_power_w(float(row["power_w"]), row.get("voltage_v"), row.get("raw_dps"))
+        for row in rows
+    ]
     average_power_w = sum(normalized_powers) / max(len(normalized_powers), 1) if normalized_powers else 0.0
     peak_power_w = max(normalized_powers, default=0.0)
     voltages = [float(row["voltage_v"]) for row in rows if row["voltage_v"] is not None]
     latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
+    latest_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else None
+    latest_voltage_v = float(latest["voltage_v"]) if latest and latest["voltage_v"] is not None else None
 
     return {
         "summary": {
             "energy_kwh": round(total_energy_wh / 1000.0, 3),
             "average_power_kw": round(average_power_w / 1000.0, 3),
             "peak_power_kw": round(peak_power_w / 1000.0, 3),
+            "latest_power_w": round(latest_power_w, 1) if latest_power_w is not None else None,
+            "latest_voltage_v": round(latest_voltage_v, 1) if latest_voltage_v is not None else None,
             "average_voltage_v": round(sum(voltages) / len(voltages), 1) if voltages else None,
             "sample_count": len(rows),
             "latest_sample": _format_display_datetime(config, latest["captured_at"]) if latest else None,

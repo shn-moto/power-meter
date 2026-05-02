@@ -2,6 +2,7 @@ const page = document.querySelector('[data-device-page]');
 
 if (page) {
     const deviceId = page.dataset.deviceId;
+    const initialPayloadNode = document.querySelector('[data-initial-device-stats]');
     const periodInputs = [...page.querySelectorAll('input[data-period]')];
     const customRangeForm = page.querySelector('[data-custom-range]');
     const summary = page.querySelector('[data-device-summary]');
@@ -13,7 +14,8 @@ if (page) {
     const timerForm = document.querySelector('[data-timer-form]');
     const timerCancel = document.querySelector('[data-timer-cancel]');
     const chartInstance = window.echarts ? window.echarts.init(chart) : null;
-    let currentPeriod = 'month';
+    const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
+    let currentPeriod = 'day';
     let currentStart = null;
     let currentEnd = null;
     let isLoading = false;
@@ -24,6 +26,26 @@ if (page) {
             return '--';
         }
         return `${value}${suffix}`;
+    };
+
+    const formatPower = (value) => {
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            return '--';
+        }
+        if (Math.abs(value) >= 1000) {
+            return `${formatNumber(value / 1000)} кВт`;
+        }
+        return `${formatNumber(value)} Вт`;
+    };
+
+    const formatCurrent = (value) => {
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            return '--';
+        }
+        if (Math.abs(value) >= 1000) {
+            return `${formatNumber(value / 1000)} А`;
+        }
+        return `${Math.round(value)} мА`;
     };
 
     const formatNumber = (value) => {
@@ -154,6 +176,9 @@ if (page) {
     const renderSummary = (payload) => {
         const fields = payload.summary;
         const values = [
+            formatPower(fields.current_power_w),
+            formatCurrent(fields.current_current_ma),
+            formatValue(fields.current_voltage_v, ' В'),
             `${fields.energy_kwh} кВт·ч`,
             `${fields.average_power_kw} кВт`,
             `${fields.peak_power_kw} кВт`,
@@ -333,7 +358,12 @@ if (page) {
         });
     }
 
-    loadPeriod(currentPeriod, currentStart, currentEnd);
+    if (initialPayload) {
+        renderSummary(initialPayload);
+        renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
+    } else {
+        loadPeriod(currentPeriod, currentStart, currentEnd);
+    }
     window.addEventListener('resize', () => {
         chartInstance?.resize();
     });

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,7 +38,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-14"
+templates.env.globals["static_asset_version"] = "20260502-15"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 
@@ -205,6 +206,77 @@ def _format_dps_value(capability: dict[str, Any] | None, raw_value: Any) -> str:
     return str(raw_value)
 
 
+def _read_measurement_from_capabilities(
+    raw_dps: dict[str, Any],
+    capabilities: list[dict[str, Any]],
+    capability_code: str,
+) -> float | None:
+    preferred: dict[str, Any] | None = None
+    fallback: dict[str, Any] | None = None
+
+    for capability in capabilities:
+        if str(capability.get("capability_code") or "") != capability_code:
+            continue
+        if capability.get("capability_source") == "status":
+            preferred = capability
+            break
+        fallback = capability
+
+    capability = preferred or fallback
+    if not capability:
+        return None
+
+    dp_id = capability.get("dp_id")
+    if dp_id is None:
+        return None
+
+    raw_value = raw_dps.get(str(dp_id))
+    if raw_value is None:
+        return None
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+    values_json = capability.get("values_json") or {}
+    scale = int(values_json.get("scale", 0) or 0)
+    if scale > 0:
+        value /= 10 ** scale
+    elif capability_code == "cur_voltage" and abs(value) >= 1000:
+        value /= 10.0
+
+    unit = str(values_json.get("unit") or "").strip()
+    if capability_code == "cur_current" and unit == "A":
+        value *= 1000.0
+
+    if capability_code == "cur_power":
+        current_ma = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_current")
+        voltage_v = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_voltage")
+        if current_ma is not None and voltage_v is not None and current_ma > 0 and voltage_v > 0:
+            apparent_power_w = (current_ma / 1000.0) * voltage_v
+            if value > apparent_power_w * 3 and (value / 10.0) <= apparent_power_w * 1.6:
+                value /= 10.0
+
+    return value
+
+
+def _augment_current_summary(summary: dict[str, Any], capabilities: list[dict[str, Any]]) -> None:
+    raw_dps = summary.get("latest_raw_dps") or {}
+    current_ma = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_current")
+    power_w = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_power")
+    voltage_v = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_voltage")
+
+    if power_w is None:
+        power_w = summary.get("latest_power_w")
+    if voltage_v is None:
+        voltage_v = summary.get("latest_voltage_v")
+
+    summary["current_power_w"] = round(power_w, 1) if power_w is not None else None
+    summary["current_voltage_v"] = round(voltage_v, 1) if voltage_v is not None else None
+    summary["current_current_ma"] = round(current_ma, 1) if current_ma is not None else None
+
+
 def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str, str]]:
     functions: list[dict[str, Any]] = []
     seen_codes: set[str] = set()
@@ -369,9 +441,42 @@ def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample 
     stats["summary"]["latest_sample_age_seconds"] = get_sample_age_seconds(live_sample.captured_at, now)
     stats["summary"]["latest_sample_status"] = get_sample_status(live_sample.captured_at, now)
     stats["summary"]["latest_raw_dps"] = live_sample.raw_dps
+    stats["summary"]["latest_power_w"] = round(live_sample.power_w, 1)
     if live_sample.voltage_v is not None:
         stats["summary"]["average_voltage_v"] = round(live_sample.voltage_v, 1)
+        stats["summary"]["latest_voltage_v"] = round(live_sample.voltage_v, 1)
     return stats
+
+
+def _build_device_stats_payload(
+    config: AppConfig,
+    device_id: str,
+    period: str,
+    start_raw: str | None,
+    end_raw: str | None,
+    live_sample: DeviceSample | None,
+) -> dict[str, Any] | None:
+    device = get_device_row(config, device_id)
+    if not device:
+        return None
+
+    range_start, range_end = _resolve_period(config, period, start_raw, end_raw)
+    bucket = pick_bucket(range_start, range_end, period)
+    stats = get_device_stats(config, device_id, range_start, range_end, period, bucket)
+    stats = _apply_live_stats(config, stats, live_sample)
+    capabilities = get_device_capabilities(config, device_id)
+    _augment_current_summary(stats["summary"], capabilities)
+    stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
+    return {
+        "device": dict(device),
+        "period": {
+            "name": period,
+            "start": range_start.isoformat(),
+            "end": range_end.isoformat(),
+            "bucket": bucket,
+        },
+        **stats,
+    }
 
 
 @asynccontextmanager
@@ -414,15 +519,25 @@ async def dashboard(request: Request) -> HTMLResponse:
 @app.get("/devices/{device_id}", response_class=HTMLResponse)
 async def device_details(request: Request, device_id: str) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_device_row, config, device_id)
-    if not device:
+    payload = await asyncio.to_thread(
+        _build_device_stats_payload,
+        config,
+        device_id,
+        "day",
+        None,
+        None,
+        request.app.state.live_samples.get(device_id),
+    )
+    if not payload:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
+    device = payload["device"]
 
     return templates.TemplateResponse(
         request=request,
         name="device.html",
         context={
             "device": _decorate_device_media(dict(device)),
+            "initial_stats_json": json.dumps(jsonable_encoder(payload), ensure_ascii=False),
             "page_title": f"{device['name']} - детали",
         },
     )
@@ -521,30 +636,20 @@ async def device_function_api(request: Request, device_id: str, function_code: s
 async def device_stats_api(
     request: Request,
     device_id: str,
-    period: str = Query(default="month"),
+    period: str = Query(default="day"),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
 ) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_device_row, config, device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Устройство не найдено")
-
-    range_start, range_end = _resolve_period(config, period, start, end)
-    bucket = pick_bucket(range_start, range_end, period)
-    stats = await asyncio.to_thread(get_device_stats, config, device_id, range_start, range_end, period, bucket)
-    stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(device_id))
-    capabilities = await asyncio.to_thread(get_device_capabilities, config, device_id)
-    stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
-    return JSONResponse(
-        jsonable_encoder({
-            "device": dict(device),
-            "period": {
-                "name": period,
-                "start": range_start.isoformat(),
-                "end": range_end.isoformat(),
-                "bucket": bucket,
-            },
-            **stats,
-        })
+    payload = await asyncio.to_thread(
+        _build_device_stats_payload,
+        config,
+        device_id,
+        period,
+        start,
+        end,
+        request.app.state.live_samples.get(device_id),
     )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    return JSONResponse(jsonable_encoder(payload))
