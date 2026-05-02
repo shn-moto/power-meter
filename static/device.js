@@ -3,6 +3,9 @@ const page = document.querySelector('[data-device-page]');
 if (page) {
     const LIVE_REFRESH_INTERVAL_MS = 1000;
     const AGGREGATE_REFRESH_INTERVAL_MS = 5000;
+    const DAY_PERIOD = 'day';
+    const MONTH_PERIOD = 'month';
+    const YEAR_PERIOD = 'year';
     const deviceId = page.dataset.deviceId;
     const initialPayloadNode = document.querySelector('[data-initial-device-stats]');
     const periodInputs = [...page.querySelectorAll('input[data-period]')];
@@ -12,6 +15,10 @@ if (page) {
     const chart = page.querySelector('[data-chart]');
     const chartEmpty = page.querySelector('[data-chart-empty]');
     const chartMeta = page.querySelector('[data-chart-meta]');
+    const dayNav = page.querySelector('[data-day-nav]');
+    const dayNavLabel = page.querySelector('[data-day-nav-label]');
+    const dayNavPrev = page.querySelector('[data-day-nav-prev]');
+    const dayNavNext = page.querySelector('[data-day-nav-next]');
     const timerDialog = document.querySelector('[data-timer-dialog]');
     const timerForm = document.querySelector('[data-timer-form]');
     const timerCancel = document.querySelector('[data-timer-cancel]');
@@ -29,9 +36,18 @@ if (page) {
     let currentPeriod = 'day';
     let currentStart = null;
     let currentEnd = null;
+    let selectedDayKey = null;
+    let selectedMonthKey = null;
     let isAggregateLoading = false;
     let isLiveLoading = false;
     let timerFunction = null;
+
+    const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+    });
 
     const formatValue = (value, suffix = '') => {
         if (value === null || value === undefined || Number.isNaN(value)) {
@@ -71,6 +87,96 @@ if (page) {
             return value.toFixed(2).replace(/0$/, '').replace(/\.$/, '');
         }
         return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+    };
+
+    const toDateKey = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const toMonthKey = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        return `${year}-${month}`;
+    };
+
+    const parseDateKey = (value) => {
+        const [year, month, day] = String(value || '').split('-').map(Number);
+        return new Date(year, (month || 1) - 1, day || 1, 12, 0, 0, 0);
+    };
+
+    const parseMonthKey = (value) => {
+        const [year, month] = String(value || '').split('-').map(Number);
+        return new Date(year, (month || 1) - 1, 1, 12, 0, 0, 0);
+    };
+
+    const getTodayKey = () => toDateKey(new Date());
+
+    const getEffectiveDayKey = () => selectedDayKey || getTodayKey();
+
+    const getMonthRange = (monthKey) => {
+        const monthDate = parseMonthKey(monthKey);
+        const start = toDateKey(new Date(monthDate.getFullYear(), monthDate.getMonth(), 1, 12, 0, 0, 0));
+        const end = toDateKey(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0, 12, 0, 0, 0));
+        return { start, end };
+    };
+
+    const getAggregateRequest = () => {
+        if (currentPeriod === 'custom') {
+            return { period: 'custom', start: currentStart, end: currentEnd };
+        }
+        if (currentPeriod === DAY_PERIOD && selectedDayKey) {
+            return { period: 'custom', start: selectedDayKey, end: selectedDayKey };
+        }
+        if (currentPeriod === MONTH_PERIOD && selectedMonthKey) {
+            return { period: 'custom', ...getMonthRange(selectedMonthKey) };
+        }
+        return { period: currentPeriod, start: null, end: null };
+    };
+
+    const setSelectedPeriodInput = (period) => {
+        periodInputs.forEach((input) => {
+            input.checked = input.value === period;
+        });
+    };
+
+    const updateDayNav = () => {
+        const isDayView = currentPeriod === DAY_PERIOD;
+        dayNav.hidden = !isDayView;
+        if (!isDayView) {
+            return;
+        }
+
+        const dayKey = getEffectiveDayKey();
+        dayNavLabel.textContent = dateFormatter.format(parseDateKey(dayKey));
+        dayNavPrev.disabled = isAggregateLoading;
+        dayNavNext.disabled = isAggregateLoading || dayKey >= getTodayKey();
+    };
+
+    const drillToDay = (timestamp) => {
+        selectedDayKey = toDateKey(new Date(timestamp));
+        selectedMonthKey = null;
+        currentPeriod = DAY_PERIOD;
+        currentStart = null;
+        currentEnd = null;
+        customRangeForm.reset();
+        setSelectedPeriodInput(DAY_PERIOD);
+        updateDayNav();
+        loadCurrentPeriod();
+    };
+
+    const drillToMonth = (timestamp) => {
+        selectedMonthKey = toMonthKey(new Date(timestamp));
+        selectedDayKey = null;
+        currentPeriod = MONTH_PERIOD;
+        currentStart = null;
+        currentEnd = null;
+        customRangeForm.reset();
+        setSelectedPeriodInput(MONTH_PERIOD);
+        updateDayNav();
+        loadCurrentPeriod();
     };
 
     const applyReadingStatus = (node, status) => {
@@ -327,10 +433,17 @@ if (page) {
                     data: series.map((item) => ({
                         value: Number(item.chart_value ?? 0),
                         tooltipLabel: item.tooltip_label,
+                        timestamp: item.timestamp,
                     })),
+                    cursor: currentPeriod === 'week' || currentPeriod === MONTH_PERIOD || currentPeriod === YEAR_PERIOD ? 'pointer' : 'default',
                 },
             ],
         }, true);
+    };
+
+    const loadCurrentPeriod = () => {
+        const request = getAggregateRequest();
+        return loadPeriod(request.period, request.start, request.end);
     };
 
     const loadPeriod = async (period, start, end) => {
@@ -338,6 +451,7 @@ if (page) {
             return;
         }
         isAggregateLoading = true;
+        updateDayNav();
         const query = new URLSearchParams({ period });
         if (start && end) {
             query.set('start', start);
@@ -350,6 +464,7 @@ if (page) {
             renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });
         } finally {
             isAggregateLoading = false;
+            updateDayNav();
         }
     };
 
@@ -375,8 +490,11 @@ if (page) {
             currentPeriod = input.value;
             currentStart = null;
             currentEnd = null;
+            selectedDayKey = null;
+            selectedMonthKey = null;
             customRangeForm.reset();
-            loadPeriod(currentPeriod, currentStart, currentEnd);
+            updateDayNav();
+            loadCurrentPeriod();
         });
     });
 
@@ -394,8 +512,31 @@ if (page) {
             currentPeriod = 'custom';
             currentStart = start;
             currentEnd = end;
+            selectedDayKey = null;
+            selectedMonthKey = null;
+            updateDayNav();
             loadPeriod(currentPeriod, currentStart, currentEnd);
         });
+    });
+
+    dayNavPrev?.addEventListener('click', () => {
+        const currentDate = parseDateKey(getEffectiveDayKey());
+        currentDate.setDate(currentDate.getDate() - 1);
+        selectedDayKey = toDateKey(currentDate);
+        updateDayNav();
+        loadCurrentPeriod();
+    });
+
+    dayNavNext?.addEventListener('click', () => {
+        const currentDate = parseDateKey(getEffectiveDayKey());
+        currentDate.setDate(currentDate.getDate() + 1);
+        const nextKey = toDateKey(currentDate);
+        if (nextKey > getTodayKey()) {
+            return;
+        }
+        selectedDayKey = nextKey === getTodayKey() ? null : nextKey;
+        updateDayNav();
+        loadCurrentPeriod();
     });
 
     if (timerCancel) {
@@ -420,10 +561,24 @@ if (page) {
         renderAggregateSummary(initialPayload);
         renderLiveSummary(initialPayload);
         renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
+        updateDayNav();
     } else {
-        loadPeriod(currentPeriod, currentStart, currentEnd);
+        loadCurrentPeriod();
         loadLive();
     }
+    chartInstance?.on('click', (params) => {
+        const timestamp = params?.data?.timestamp;
+        if (!timestamp) {
+            return;
+        }
+        if (currentPeriod === 'week' || currentPeriod === MONTH_PERIOD) {
+            drillToDay(timestamp);
+            return;
+        }
+        if (currentPeriod === YEAR_PERIOD) {
+            drillToMonth(timestamp);
+        }
+    });
     window.addEventListener('resize', () => {
         chartInstance?.resize();
     });

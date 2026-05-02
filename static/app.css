@@ -492,6 +492,31 @@ button:hover {
     overflow: hidden;
 }
 
+.chart-day-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 14px;
+}
+
+.chart-day-nav[hidden] {
+    display: none;
+}
+
+.chart-day-nav-button {
+    min-width: 110px;
+}
+
+.chart-day-nav-label {
+    flex: 1 1 auto;
+    text-align: center;
+    color: #d8efff;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: none;
+}
+
 .chart-canvas {
     width: 100%;
     height: 320px;
@@ -728,6 +753,19 @@ button:hover {
 
     .custom-range-form {
         flex-direction: column;
+    }
+
+    .chart-day-nav {
+        gap: 10px;
+    }
+
+    .chart-day-nav-button {
+        min-width: 0;
+        flex: 0 0 auto;
+    }
+
+    .chart-day-nav-label {
+        font-size: 0.92rem;
     }
 
     .registry-item {
