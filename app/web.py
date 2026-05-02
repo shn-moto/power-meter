@@ -35,7 +35,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-6"
+templates.env.globals["static_asset_version"] = "20260502-7"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -262,15 +262,15 @@ def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_r
         start = datetime.fromisoformat(start_raw).replace(tzinfo=now.tzinfo)
         end = datetime.fromisoformat(end_raw).replace(tzinfo=now.tzinfo) + timedelta(days=1)
         return start, end
-    if period == "today":
+    if period == "day":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, now
-    if period == "7d":
-        return now - timedelta(days=7), now
-    if period == "30d":
-        return now - timedelta(days=30), now
-    if period == "90d":
-        return now - timedelta(days=90), now
+    if period == "week":
+        start = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, now
+    if period == "year":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, now
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return month_start, now
 
@@ -491,7 +491,7 @@ async def device_stats_api(
         raise HTTPException(status_code=404, detail="Устройство не найдено")
 
     range_start, range_end = _resolve_period(config, period, start, end)
-    bucket = pick_bucket(range_start, range_end)
+    bucket = pick_bucket(range_start, range_end, period)
     stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, bucket)
     stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(slug))
     capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)

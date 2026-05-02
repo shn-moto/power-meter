@@ -653,6 +653,8 @@ def _bucket_start(dt: datetime, bucket: str) -> datetime:
         return dt.replace(minute=0, second=0, microsecond=0)
     if bucket == "day":
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "month":
+        return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
 
 
@@ -661,7 +663,21 @@ def _bucket_duration_hours(bucket: str) -> float:
         return 1.0
     if bucket == "day":
         return 24.0
+    if bucket == "month":
+        return 24.0 * 30.0
     return 0.25
+
+
+def _next_bucket_start(dt: datetime, bucket: str) -> datetime:
+    if bucket == "hour":
+        return dt + timedelta(hours=1)
+    if bucket == "day":
+        return dt + timedelta(days=1)
+    if bucket == "month":
+        if dt.month == 12:
+            return dt.replace(year=dt.year + 1, month=1, day=1)
+        return dt.replace(month=dt.month + 1, day=1)
+    return dt + timedelta(minutes=15)
 
 
 def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
@@ -753,32 +769,53 @@ def _prepare_chart_series(
     config: AppConfig,
     slug: str,
     rows: list[dict[str, Any]],
+    start: datetime,
+    end: datetime,
     bucket: str,
     series: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    chart_metric = "avg_power_kw" if bucket in {"15m", "hour"} else "energy_kwh"
+    chart_metric = "energy_kwh"
     chart = {
         "metric": chart_metric,
-        "unit": "кВт" if chart_metric == "avg_power_kw" else "кВт·ч",
-        "label": "Средняя мощность" if chart_metric == "avg_power_kw" else "Энергия",
+        "unit": "кВт·ч",
+        "label": "Потребление",
+        "bucket": bucket,
     }
 
     max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
-    if chart_metric == "avg_power_kw" and max_chart_value <= 0.01:
-        energy_counter_meta = _get_energy_counter_meta(config, slug)
-        if energy_counter_meta:
-            fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
-            fallback_max = max((float(item.get("avg_power_kw") or 0.0) for item in fallback_series), default=0.0)
-            if fallback_max > max_chart_value:
-                series = fallback_series
+    energy_counter_meta = _get_energy_counter_meta(config, slug)
+    if energy_counter_meta:
+        fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
+        fallback_max = max((float(item.get("energy_kwh") or 0.0) for item in fallback_series), default=0.0)
+        if fallback_max > max(max_chart_value * 5, 0.01):
+            series = fallback_series
 
-    return [
-        {
+    chart_series_by_bucket = {
+        _parse_dt(item["timestamp"]): {
             **item,
             "chart_value": round(float(item.get(chart_metric) or 0.0), 4),
         }
         for item in series
-    ], chart
+    }
+
+    filled_series: list[dict[str, Any]] = []
+    current = _bucket_start(start, bucket)
+    last = _bucket_start(end, bucket)
+    while current <= last:
+        filled_series.append(
+            chart_series_by_bucket.get(
+                current,
+                {
+                    "timestamp": current.isoformat(),
+                    "energy_kwh": 0.0,
+                    "avg_power_kw": 0.0,
+                    "chart_value": 0.0,
+                },
+            )
+        )
+        current = _next_bucket_start(current, bucket)
+
+    return filled_series, chart
 
 
 def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetime) -> dict[str, Any]:
@@ -829,7 +866,7 @@ def get_device_stats(
     rows = get_samples(config, slug, start, end)
     latest = get_latest_sample(config, slug)
     series = _build_series(rows, bucket)
-    chart_series, chart = _prepare_chart_series(config, slug, rows, bucket, series)
+    chart_series, chart = _prepare_chart_series(config, slug, rows, start, end, bucket, series)
     total_energy_wh = _integrate_energy_wh(rows)
     average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
     peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)
@@ -850,10 +887,17 @@ def get_device_stats(
     }
 
 
-def pick_bucket(start: datetime, end: datetime) -> str:
+def pick_bucket(start: datetime, end: datetime, period: str = "custom") -> str:
+    if period == "day":
+        return "hour"
+    if period in {"week", "month"}:
+        return "day"
+    if period == "year":
+        return "month"
+
     span = end - start
     if span <= timedelta(days=2):
-        return "15m"
-    if span <= timedelta(days=31):
         return "hour"
-    return "day"
+    if span <= timedelta(days=62):
+        return "day"
+    return "month"

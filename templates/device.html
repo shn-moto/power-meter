@@ -13,24 +13,44 @@
 <section class="detail-layout" data-device-page data-device-slug="{{ device.slug }}">
     <article class="detail-card">
         <div class="chart-toolbar">
-            <div class="period-buttons">
-                <button type="button" data-period="today">Сегодня</button>
-                <button type="button" data-period="7d">7 дней</button>
-                <button type="button" data-period="30d">30 дней</button>
-                <button type="button" data-period="month" class="is-active">Месяц</button>
-                <button type="button" data-period="90d">90 дней</button>
-            </div>
+            <fieldset class="period-switcher" data-period-switcher>
+                <label class="period-option">
+                    <input type="radio" name="period" value="day" data-period>
+                    <span>День</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="period" value="week" data-period>
+                    <span>Неделя</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="period" value="month" data-period checked>
+                    <span>Месяц</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="period" value="year" data-period>
+                    <span>Год</span>
+                </label>
+            </fieldset>
             <form class="custom-range-form" data-custom-range>
-                <input type="date" name="start" required>
-                <input type="date" name="end" required>
-                <button type="submit">Применить</button>
+                <label class="date-field">
+                    <span>С</span>
+                    <input type="date" name="start">
+                </label>
+                <label class="date-field">
+                    <span>По</span>
+                    <input type="date" name="end">
+                </label>
             </form>
         </div>
+        <div class="chart-meta" data-chart-meta>Потребление по дням</div>
         <div class="chart-frame">
             <svg viewBox="0 0 960 320" class="chart-svg" data-chart>
                 <g data-chart-grid></g>
-                <polyline data-chart-line points="" />
+                <g data-chart-y-axis></g>
+                <g data-chart-bars></g>
+                <g data-chart-x-axis></g>
             </svg>
+            <div class="chart-tooltip" data-chart-tooltip hidden></div>
             <div class="chart-empty" data-chart-empty hidden>За этот период данные пока не собраны.</div>
         </div>
     </article>

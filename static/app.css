@@ -284,19 +284,81 @@ p {
     grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
 }
 
-.chart-toolbar {
-    display: flex;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
-    margin-bottom: 16px;
+.detail-sidebar {
+    display: grid;
+    gap: 20px;
+    align-content: start;
 }
 
-.period-buttons,
+.chart-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.period-switcher,
 .custom-range-form {
     display: flex;
+    align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.period-switcher {
+    margin: 0;
+    padding: 6px;
+    border: 1px solid rgba(125, 53, 22, 0.12);
+    border-radius: 999px;
+    background: rgba(255, 251, 243, 0.7);
+}
+
+.period-option {
+    position: relative;
+}
+
+.period-option input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.period-option span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 86px;
+    padding: 10px 16px;
+    border-radius: 999px;
+    font-weight: 700;
+    color: var(--muted);
+    transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.period-option input:checked + span {
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+    color: white;
+    box-shadow: 0 12px 24px rgba(125, 53, 22, 0.2);
+}
+
+.date-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px 6px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(125, 53, 22, 0.12);
+    background: rgba(255, 251, 243, 0.7);
+    color: var(--muted);
+    font-weight: 700;
+}
+
+.date-field input {
+    border: 0;
+    padding: 8px 12px;
+    min-width: 148px;
+    background: transparent;
 }
 
 button,
@@ -312,11 +374,17 @@ button {
     cursor: pointer;
 }
 
-.period-buttons .is-active,
 button:hover {
     background: var(--accent);
     color: white;
     border-color: transparent;
+}
+
+.chart-meta {
+    margin-bottom: 12px;
+    color: var(--accent-deep);
+    font-weight: 700;
+    letter-spacing: 0.03em;
 }
 
 .chart-frame {
@@ -338,12 +406,51 @@ button:hover {
     stroke-width: 1;
 }
 
-[data-chart-line] {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 4;
-    stroke-linejoin: round;
-    stroke-linecap: round;
+[data-chart-y-axis] text,
+[data-chart-x-axis] text {
+    fill: var(--muted);
+    font-size: 12px;
+}
+
+.chart-bar {
+    fill: url(#chart-bar-gradient);
+    fill: var(--accent);
+    opacity: 0.9;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+    transform-origin: center bottom;
+}
+
+.chart-bar:hover,
+.chart-bar:focus {
+    opacity: 1;
+    fill: var(--accent-deep);
+}
+
+.chart-tooltip {
+    position: absolute;
+    z-index: 2;
+    min-width: 164px;
+    max-width: 220px;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: rgba(31, 32, 34, 0.9);
+    color: white;
+    box-shadow: 0 18px 40px rgba(31, 32, 34, 0.24);
+    pointer-events: none;
+}
+
+.chart-tooltip strong,
+.chart-tooltip span {
+    display: block;
+}
+
+.chart-tooltip strong {
+    margin-bottom: 4px;
+    font-size: 0.92rem;
+}
+
+.chart-tooltip span {
+    color: rgba(255, 255, 255, 0.82);
 }
 
 .chart-empty {
@@ -519,6 +626,29 @@ button:hover {
     }
 
     .chart-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .period-switcher,
+    .custom-range-form {
+        width: 100%;
+    }
+
+    .period-switcher {
+        justify-content: space-between;
+    }
+
+    .period-option {
+        flex: 1 1 calc(50% - 8px);
+    }
+
+    .period-option span,
+    .date-field {
+        width: 100%;
+    }
+
+    .custom-range-form {
         flex-direction: column;
     }
 
