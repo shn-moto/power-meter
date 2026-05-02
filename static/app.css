@@ -280,6 +280,23 @@ p {
     margin: 0;
 }
 
+.reading-status {
+    font-weight: 700;
+    transition: color 0.2s ease;
+}
+
+.reading-status.is-ok {
+    color: #2f7d32;
+}
+
+.reading-status.is-warning {
+    color: #9a6a00;
+}
+
+.reading-status.is-error {
+    color: #b03e3e;
+}
+
 .detail-layout {
     grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
 }

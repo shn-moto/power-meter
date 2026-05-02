@@ -910,6 +910,23 @@ def _is_sample_recent(config: AppConfig, captured_at: datetime | None, now: date
     return (now - captured_at).total_seconds() <= max_age_seconds
 
 
+def get_sample_age_seconds(captured_at: datetime | None, now: datetime) -> int | None:
+    if captured_at is None:
+        return None
+    return max(int((now - captured_at).total_seconds()), 0)
+
+
+def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
+    age_seconds = get_sample_age_seconds(captured_at, now)
+    if age_seconds is None:
+        return "error"
+    if age_seconds > 3600:
+        return "error"
+    if age_seconds > 60:
+        return "warning"
+    return "ok"
+
+
 def _prepare_chart_series(
     config: AppConfig,
     slug: str,
@@ -1009,6 +1026,7 @@ def get_dashboard_summary(
             online_device_count += 1
 
         total_power_w += current_power_w
+        last_seen_age_seconds = get_sample_age_seconds(effective_captured_at, now)
         devices.append(
             {
                 "slug": device["slug"],
@@ -1018,6 +1036,8 @@ def get_dashboard_summary(
                 "current_power_kw": round(current_power_w / 1000.0, 3),
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
                 "last_seen": last_seen,
+                "last_seen_age_seconds": last_seen_age_seconds,
+                "last_seen_status": get_sample_status(effective_captured_at, now),
                 "raw_dps": raw_dps,
             }
         )
@@ -1048,6 +1068,7 @@ def get_device_stats(
     average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
     peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)
     voltages = [float(row["voltage_v"]) for row in rows if row["voltage_v"] is not None]
+    latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
 
     return {
         "summary": {
@@ -1057,6 +1078,8 @@ def get_device_stats(
             "average_voltage_v": round(sum(voltages) / len(voltages), 1) if voltages else None,
             "sample_count": len(rows),
             "latest_sample": _format_display_datetime(config, latest["captured_at"]) if latest else None,
+            "latest_sample_age_seconds": get_sample_age_seconds(latest_captured_at, end),
+            "latest_sample_status": get_sample_status(latest_captured_at, end),
             "latest_raw_dps": _normalize_json_field(latest["raw_dps"]) if latest else {},
         },
         "series": chart_series,

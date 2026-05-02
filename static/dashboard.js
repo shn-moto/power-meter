@@ -15,6 +15,11 @@ if (dashboardPage) {
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
 
+    const applyReadingStatus = (node, status) => {
+        node.classList.remove('is-ok', 'is-warning', 'is-error');
+        node.classList.add('reading-status', `is-${status || 'error'}`);
+    };
+
     const renderCardMarkup = (device) => `
         <a class="device-image" href="/devices/${encodeURIComponent(device.slug)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
             <span>${escapeHtml(device.image_label)}</span>
@@ -35,7 +40,7 @@ if (dashboardPage) {
                 </div>
                 <div>
                     <dt>Последний замер</dt>
-                    <dd data-device-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</dd>
+                    <dd class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</dd>
                 </div>
             </dl>
         </div>
@@ -49,7 +54,9 @@ if (dashboardPage) {
         card.querySelector('[data-device-name]').textContent = device.name;
         card.querySelector('[data-device-current-power]').textContent = `${device.current_power_kw} кВт`;
         card.querySelector('[data-device-month-energy]').textContent = `${device.month_energy_kwh} кВт·ч`;
-        card.querySelector('[data-device-last-seen]').textContent = device.last_seen || 'Пока нет данных';
+        const lastSeen = card.querySelector('[data-device-last-seen]');
+        lastSeen.textContent = device.last_seen || 'Пока нет данных';
+        applyReadingStatus(lastSeen, device.last_seen_status);
     };
 
     const syncDevices = (devices) => {

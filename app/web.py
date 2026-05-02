@@ -24,6 +24,8 @@ from app.storage import (
     get_device_row,
     get_device_rows,
     get_device_stats,
+    get_sample_age_seconds,
+    get_sample_status,
     get_polling_devices,
     init_db,
     pick_bucket,
@@ -35,7 +37,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-11"
+templates.env.globals["static_asset_version"] = "20260502-12"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -327,7 +329,10 @@ def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample 
     if not live_sample:
         return stats
 
+    now = datetime.now(_get_timezone(config))
     stats["summary"]["latest_sample"] = _format_live_timestamp(config, live_sample.captured_at)
+    stats["summary"]["latest_sample_age_seconds"] = get_sample_age_seconds(live_sample.captured_at, now)
+    stats["summary"]["latest_sample_status"] = get_sample_status(live_sample.captured_at, now)
     stats["summary"]["latest_raw_dps"] = live_sample.raw_dps
     if live_sample.voltage_v is not None:
         stats["summary"]["average_voltage_v"] = round(live_sample.voltage_v, 1)

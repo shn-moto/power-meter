@@ -39,6 +39,11 @@ if (page) {
         return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
     };
 
+    const applyReadingStatus = (node, status) => {
+        node.classList.remove('is-ok', 'is-warning', 'is-error');
+        node.classList.add('reading-status', `is-${status || 'error'}`);
+    };
+
     const describeBucket = (bucket) => {
         if (bucket === 'hour') {
             return 'часам';
@@ -160,6 +165,8 @@ if (page) {
         [...summary.querySelectorAll('dd')].forEach((node, index) => {
             node.textContent = values[index];
         });
+
+        applyReadingStatus(summary.querySelector('[data-device-latest-sample]'), fields.latest_sample_status);
 
         renderFunctions(payload.device_functions || []);
     };

@@ -52,7 +52,7 @@
                     </div>
                     <div>
                         <dt>Последний замер</dt>
-                        <dd data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</dd>
+                        <dd class="reading-status is-{{ device.last_seen_status }}" data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</dd>
                     </div>
                 </dl>
             </div>
