@@ -138,7 +138,10 @@ if (page) {
             if (!response.ok) {
                 throw new Error(payload.detail || 'Не удалось выполнить действие.');
             }
-            await loadPeriod(currentPeriod, currentStart, currentEnd);
+            await Promise.all([
+                loadPeriod(currentPeriod, currentStart, currentEnd),
+                loadLive(),
+            ]);
         } catch (error) {
             window.alert(error.message);
         } finally {
@@ -225,7 +228,6 @@ if (page) {
         summaryPeakPower.textContent = `${fields.peak_power_kw} кВт`;
         summaryAverageVoltage.textContent = formatValue(fields.average_voltage_v, ' В');
         summarySampleCount.textContent = String(fields.sample_count);
-        renderLiveSummary(payload);
     };
 
     const renderLiveSummary = (payload) => {
@@ -416,9 +418,11 @@ if (page) {
 
     if (initialPayload) {
         renderAggregateSummary(initialPayload);
+        renderLiveSummary(initialPayload);
         renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
     } else {
         loadPeriod(currentPeriod, currentStart, currentEnd);
+        loadLive();
     }
     window.addEventListener('resize', () => {
         chartInstance?.resize();

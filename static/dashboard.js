@@ -60,6 +60,13 @@ if (dashboardPage) {
         card.innerHTML = renderCardMarkup(device);
     };
 
+    const updateAggregateCard = (card, device) => {
+        const monthEnergyNode = card.querySelector('[data-device-month-energy]');
+        if (monthEnergyNode) {
+            monthEnergyNode.textContent = `${device.month_energy_kwh} кВт·ч`;
+        }
+    };
+
     const syncDevices = (devices) => {
         const existingCards = new Map(
             [...deviceGrid.querySelectorAll('[data-device-card]')].map((card) => [card.dataset.deviceId, card])
@@ -78,7 +85,7 @@ if (dashboardPage) {
             return;
         }
 
-        devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
+        devices.forEach((device) => updateAggregateCard(existingCards.get(device.device_id), device));
     };
 
     const applyLiveDevices = (devices) => {
@@ -112,10 +119,8 @@ if (dashboardPage) {
         try {
             const response = await fetch('/api/summary', { cache: 'no-store' });
             const payload = await response.json();
-            currentPower.textContent = `${payload.current_power_kw} кВт`;
             monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
             estimatedCost.textContent = `${payload.estimated_cost}`;
-            deviceCount.textContent = `${payload.device_count}`;
             syncDevices(payload.devices || []);
         } finally {
             isAggregateLoading = false;
