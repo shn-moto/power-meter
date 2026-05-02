@@ -294,7 +294,7 @@ p {
     display: flex;
     align-items: center;
     gap: 16px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     margin-bottom: 18px;
 }
 
@@ -303,10 +303,12 @@ p {
     display: flex;
     align-items: center;
     gap: 10px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 
 .period-switcher {
+    flex: 0 1 auto;
     margin: 0;
     padding: 6px;
     border: 1px solid rgba(125, 53, 22, 0.12);
@@ -328,8 +330,8 @@ p {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 86px;
-    padding: 10px 16px;
+    min-width: 68px;
+    padding: 9px 12px;
     border-radius: 999px;
     font-weight: 700;
     color: var(--muted);
@@ -346,7 +348,9 @@ p {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    padding: 6px 10px 6px 14px;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 5px 8px 5px 12px;
     border-radius: 999px;
     border: 1px solid rgba(125, 53, 22, 0.12);
     background: rgba(255, 251, 243, 0.7);
@@ -356,9 +360,15 @@ p {
 
 .date-field input {
     border: 0;
-    padding: 8px 12px;
-    min-width: 148px;
+    padding: 8px 10px;
+    min-width: 0;
+    width: 100%;
     background: transparent;
+}
+
+.custom-range-form {
+    flex: 1 1 0;
+    justify-content: flex-end;
 }
 
 button,
@@ -459,6 +469,10 @@ button:hover {
     display: grid;
     place-items: center;
     font-size: 1rem;
+}
+
+.chart-empty[hidden] {
+    display: none !important;
 }
 
 .device-functions {
@@ -628,11 +642,13 @@ button:hover {
     .chart-toolbar {
         flex-direction: column;
         align-items: stretch;
+        flex-wrap: wrap;
     }
 
     .period-switcher,
     .custom-range-form {
         width: 100%;
+        flex-wrap: wrap;
     }
 
     .period-switcher {
