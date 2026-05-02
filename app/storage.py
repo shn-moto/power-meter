@@ -879,6 +879,37 @@ def _calculate_energy_wh(config: AppConfig, slug: str, rows: list[dict[str, Any]
     return integrated_wh
 
 
+def _row_from_live_sample(sample: DeviceSample) -> dict[str, Any]:
+    return {
+        "captured_at": sample.captured_at,
+        "power_w": sample.power_w,
+        "voltage_v": sample.voltage_v,
+        "raw_dps": sample.raw_dps,
+    }
+
+
+def _merge_live_sample(rows: list[dict[str, Any]], live_sample: DeviceSample | None) -> list[dict[str, Any]]:
+    if not live_sample:
+        return rows
+
+    if not rows:
+        return [_row_from_live_sample(live_sample)]
+
+    latest_dt = _parse_dt(rows[-1]["captured_at"])
+    if live_sample.captured_at <= latest_dt:
+        return rows
+
+    return [*rows, _row_from_live_sample(live_sample)]
+
+
+def _is_sample_recent(config: AppConfig, captured_at: datetime | None, now: datetime) -> bool:
+    if captured_at is None:
+        return False
+
+    max_age_seconds = max(config.poll_interval_seconds * 3, config.sample_write_interval_seconds * 2, 3)
+    return (now - captured_at).total_seconds() <= max_age_seconds
+
+
 def _prepare_chart_series(
     config: AppConfig,
     slug: str,
@@ -941,21 +972,43 @@ def _prepare_chart_series(
     return filled_series, chart
 
 
-def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetime) -> dict[str, Any]:
+def get_dashboard_summary(
+    config: AppConfig,
+    month_start: datetime,
+    now: datetime,
+    live_samples: dict[str, DeviceSample] | None = None,
+) -> dict[str, Any]:
     devices = []
     total_energy_wh = 0.0
     total_power_w = 0.0
+    online_device_count = 0
+    live_samples = live_samples or {}
 
     for device in get_device_rows(config):
         if not device.get("is_energy_meter"):
             continue
+
+        live_sample = live_samples.get(device["slug"])
         latest = get_latest_sample(config, device["slug"])
-        samples = get_samples(config, device["slug"], month_start, now)
+        samples = _merge_live_sample(get_samples(config, device["slug"], month_start, now), live_sample)
         device_energy_wh = _calculate_energy_wh(config, device["slug"], samples)
         total_energy_wh += device_energy_wh
-        current_power_w = float(latest["power_w"]) if latest else 0.0
+
+        if live_sample:
+            current_power_w = float(live_sample.power_w)
+            last_seen = _format_display_datetime(config, live_sample.captured_at)
+            raw_dps = live_sample.raw_dps
+            effective_captured_at = live_sample.captured_at
+        else:
+            current_power_w = float(latest["power_w"]) if latest else 0.0
+            last_seen = _format_display_datetime(config, latest["captured_at"]) if latest else None
+            raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
+            effective_captured_at = _parse_dt(latest["captured_at"]) if latest else None
+
+        if _is_sample_recent(config, effective_captured_at, now):
+            online_device_count += 1
+
         total_power_w += current_power_w
-        raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
         devices.append(
             {
                 "slug": device["slug"],
@@ -964,7 +1017,7 @@ def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetim
                 "image_label": device["image_label"],
                 "current_power_kw": round(current_power_w / 1000.0, 3),
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
-                "last_seen": _format_display_datetime(config, latest["captured_at"]) if latest else None,
+                "last_seen": last_seen,
                 "raw_dps": raw_dps,
             }
         )
@@ -974,7 +1027,7 @@ def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetim
         "month_energy_kwh": round(total_energy_wh / 1000.0, 3),
         "current_power_kw": round(total_power_w / 1000.0, 3),
         "estimated_cost": round((total_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
-        "device_count": len(devices),
+        "device_count": online_device_count,
         "devices": devices,
     }
 

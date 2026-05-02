@@ -358,8 +358,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 async def dashboard(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
-    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now)
-    summary = _apply_live_summary(config, summary, request.app.state.live_samples)
+    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -412,8 +411,7 @@ async def healthcheck() -> JSONResponse:
 async def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
-    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now)
-    summary = _apply_live_summary(config, summary, request.app.state.live_samples)
+    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
     return JSONResponse(jsonable_encoder(summary))
 
 
