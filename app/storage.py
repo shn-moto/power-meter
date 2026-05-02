@@ -175,8 +175,14 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_slug) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
-                    ip_address = EXCLUDED.ip_address,
-                    version = EXCLUDED.version,
+                    ip_address = CASE
+                        WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.ip_address
+                        ELSE device_connections.ip_address
+                    END,
+                    version = CASE
+                        WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.version
+                        ELSE device_connections.version
+                    END,
                     power_dps_key = EXCLUDED.power_dps_key,
                     power_scale = EXCLUDED.power_scale,
                     voltage_dps_keys = EXCLUDED.voltage_dps_keys,
@@ -273,8 +279,14 @@ def upsert_managed_device(
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_slug) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
-                    ip_address = EXCLUDED.ip_address,
-                    version = EXCLUDED.version,
+                    ip_address = CASE
+                        WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.ip_address
+                        ELSE device_connections.ip_address
+                    END,
+                    version = CASE
+                        WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.version
+                        ELSE device_connections.version
+                    END,
                     power_dps_key = EXCLUDED.power_dps_key,
                     power_scale = EXCLUDED.power_scale,
                     voltage_dps_keys = EXCLUDED.voltage_dps_keys,

@@ -29,6 +29,7 @@ class AppConfig:
     host: str
     port: int
     poll_interval_seconds: int
+    sample_write_interval_seconds: int
     database_url: str
     timezone: str
     tariff_per_kwh: float
@@ -163,7 +164,8 @@ def load_app_config() -> AppConfig:
         home_name=_read_value(dotenv_values, "HOME_NAME", "Shunkov Power Hub"),
         host=_read_value(dotenv_values, "APP_HOST", "0.0.0.0"),
         port=int(_read_value(dotenv_values, "APP_PORT", "8484")),
-        poll_interval_seconds=int(_read_value(dotenv_values, "POLL_INTERVAL_SECONDS", "60")),
+        poll_interval_seconds=int(_read_value(dotenv_values, "POLL_INTERVAL_SECONDS", "1")),
+        sample_write_interval_seconds=int(_read_value(dotenv_values, "SAMPLE_WRITE_INTERVAL_SECONDS", "5")),
         database_url=_read_required_value(dotenv_values, "DATABASE_URL"),
         timezone=_read_value(dotenv_values, "APP_TIMEZONE", "Europe/Warsaw"),
         tariff_per_kwh=float(_read_value(dotenv_values, "ENERGY_TARIFF_PER_KWH", "0.0")),

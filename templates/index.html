@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="hero-panel">
+<section class="hero-panel" data-dashboard>
     <div>
         <p class="eyebrow">{{ month_label }}</p>
         <h1>Учет Электроэнергии</h1>
@@ -9,19 +9,19 @@
     <div class="hero-grid stats-grid">
         <article class="stat-card">
             <span class="stat-label">Текущая нагрузка дома</span>
-            <strong class="stat-value">{{ summary.current_power_kw }} кВт</strong>
+            <strong class="stat-value" data-summary-current-power>{{ summary.current_power_kw }} кВт</strong>
         </article>
         <article class="stat-card">
             <span class="stat-label">Энергия за месяц</span>
-            <strong class="stat-value">{{ summary.month_energy_kwh }} кВт·ч</strong>
+            <strong class="stat-value" data-summary-month-energy>{{ summary.month_energy_kwh }} кВт·ч</strong>
         </article>
         <article class="stat-card">
             <span class="stat-label">Оценка стоимости</span>
-            <strong class="stat-value">{{ summary.estimated_cost }}</strong>
+            <strong class="stat-value" data-summary-estimated-cost>{{ summary.estimated_cost }}</strong>
         </article>
         <article class="stat-card">
             <span class="stat-label">Устройств онлайн</span>
-            <strong class="stat-value">{{ summary.device_count }}</strong>
+            <strong class="stat-value" data-summary-device-count>{{ summary.device_count }}</strong>
         </article>
     </div>
 </section>
@@ -30,29 +30,29 @@
     <div class="section-heading">
         <h2>Устройства</h2>
     </div>
-    <div class="device-grid">
+    <div class="device-grid" data-device-grid>
         {% for device in summary.devices %}
-        <article class="device-card">
+        <article class="device-card" data-device-card data-device-slug="{{ device.slug }}">
             <a class="device-image" href="/devices/{{ device.slug }}" aria-label="Открыть детали устройства {{ device.name }}">
                 <span>{{ device.image_label }}</span>
             </a>
             <div class="device-card-body">
                 <div>
-                    <p class="device-room">{{ device.room }}</p>
-                    <h3>{{ device.name }}</h3>
+                    <p class="device-room" data-device-room>{{ device.room }}</p>
+                    <h3 data-device-name>{{ device.name }}</h3>
                 </div>
                 <dl class="device-metrics">
                     <div>
                         <dt>Текущая мощность</dt>
-                        <dd>{{ device.current_power_kw }} кВт</dd>
+                        <dd data-device-current-power>{{ device.current_power_kw }} кВт</dd>
                     </div>
                     <div>
                         <dt>Энергия за месяц</dt>
-                        <dd>{{ device.month_energy_kwh }} кВт·ч</dd>
+                        <dd data-device-month-energy>{{ device.month_energy_kwh }} кВт·ч</dd>
                     </div>
                     <div>
                         <dt>Последний замер</dt>
-                        <dd>{{ device.last_seen or 'Пока нет данных' }}</dd>
+                        <dd data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</dd>
                     </div>
                 </dl>
             </div>
@@ -60,4 +60,6 @@
         {% endfor %}
     </div>
 </section>
+
+<script src="/static/dashboard.js" defer></script>
 {% endblock %}

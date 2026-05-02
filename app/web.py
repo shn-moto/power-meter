@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -93,30 +94,66 @@ async def _poll_loop(app: FastAPI) -> None:
     config: AppConfig = app.state.app_config
 
     while True:
+        started_at = monotonic()
         devices = await asyncio.to_thread(get_polling_devices, config)
         for device in devices:
             try:
                 captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
-                await asyncio.to_thread(
-                    save_sample,
-                    config,
-                    DeviceSample(
-                        device_slug=device.slug,
-                        captured_at=captured_at,
-                        power_w=power_w,
-                        voltage_v=voltage_v,
-                        raw_dps=raw_dps,
-                    ),
+                sample = DeviceSample(
+                    device_slug=device.slug,
+                    captured_at=captured_at,
+                    power_w=power_w,
+                    voltage_v=voltage_v,
+                    raw_dps=raw_dps,
                 )
+                app.state.live_samples[device.slug] = sample
+
+                last_saved_at = app.state.last_saved_at.get(device.slug)
+                should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
+                if should_save:
+                    await asyncio.to_thread(save_sample, config, sample)
+                    app.state.last_saved_at[device.slug] = captured_at
             except Exception:
                 continue
 
-        await asyncio.sleep(config.poll_interval_seconds)
+        elapsed = monotonic() - started_at
+        await asyncio.sleep(max(config.poll_interval_seconds - elapsed, 0.0))
+
+
+def _format_live_timestamp(config: AppConfig, value: datetime) -> str:
+    return value.astimezone(_get_timezone(config)).strftime("%d.%m.%Y %H:%M:%S")
+
+
+def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str, DeviceSample]) -> dict:
+    total_power_w = 0.0
+    for device in summary.get("devices", []):
+        live_sample = live_samples.get(device["slug"])
+        if live_sample:
+            device["current_power_kw"] = round(live_sample.power_w / 1000.0, 3)
+            device["last_seen"] = _format_live_timestamp(config, live_sample.captured_at)
+            device["raw_dps"] = live_sample.raw_dps
+        total_power_w += float(device.get("current_power_kw") or 0.0) * 1000.0
+
+    summary["current_power_kw"] = round(total_power_w / 1000.0, 3)
+    return summary
+
+
+def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample | None) -> dict:
+    if not live_sample:
+        return stats
+
+    stats["summary"]["latest_sample"] = _format_live_timestamp(config, live_sample.captured_at)
+    stats["summary"]["latest_raw_dps"] = live_sample.raw_dps
+    if live_sample.voltage_v is not None:
+        stats["summary"]["average_voltage_v"] = round(live_sample.voltage_v, 1)
+    return stats
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.app_config = load_app_config()
+    app.state.live_samples = {}
+    app.state.last_saved_at = {}
     await asyncio.to_thread(init_db, app.state.app_config)
     await asyncio.to_thread(sync_devices, app.state.app_config, load_devices())
     app.state.poller = asyncio.create_task(_poll_loop(app))
@@ -135,6 +172,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
     summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now)
+    summary = _apply_live_summary(config, summary, request.app.state.live_samples)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -188,6 +226,7 @@ async def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
     summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now)
+    summary = _apply_live_summary(config, summary, request.app.state.live_samples)
     return JSONResponse(jsonable_encoder(summary))
 
 
@@ -217,6 +256,7 @@ async def device_stats_api(
     range_start, range_end = _resolve_period(config, period, start, end)
     bucket = pick_bucket(range_start, range_end)
     stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, bucket)
+    stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(slug))
     return JSONResponse(
         jsonable_encoder({
             "device": dict(device),

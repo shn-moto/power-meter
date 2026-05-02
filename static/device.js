@@ -10,6 +10,10 @@ if (page) {
     const chartGrid = page.querySelector('[data-chart-grid]');
     const chartLine = page.querySelector('[data-chart-line]');
     const chartEmpty = page.querySelector('[data-chart-empty]');
+    let currentPeriod = 'month';
+    let currentStart = null;
+    let currentEnd = null;
+    let isLoading = false;
 
     const formatValue = (value, suffix = '') => {
         if (value === null || value === undefined || Number.isNaN(value)) {
@@ -71,22 +75,33 @@ if (page) {
     };
 
     const loadPeriod = async (period, start, end) => {
+        if (isLoading) {
+            return;
+        }
+        isLoading = true;
         const query = new URLSearchParams({ period });
         if (start && end) {
             query.set('start', start);
             query.set('end', end);
         }
-        const response = await fetch(`/api/devices/${slug}/stats?${query.toString()}`);
-        const payload = await response.json();
-        renderSummary(payload);
-        renderChart(payload.series);
+        try {
+            const response = await fetch(`/api/devices/${slug}/stats?${query.toString()}`, { cache: 'no-store' });
+            const payload = await response.json();
+            renderSummary(payload);
+            renderChart(payload.series);
+        } finally {
+            isLoading = false;
+        }
     };
 
     buttons.forEach((button) => {
         button.addEventListener('click', () => {
             buttons.forEach((item) => item.classList.remove('is-active'));
             button.classList.add('is-active');
-            loadPeriod(button.dataset.period);
+            currentPeriod = button.dataset.period;
+            currentStart = null;
+            currentEnd = null;
+            loadPeriod(currentPeriod, currentStart, currentEnd);
         });
     });
 
@@ -94,8 +109,14 @@ if (page) {
         event.preventDefault();
         const formData = new FormData(customRangeForm);
         buttons.forEach((item) => item.classList.remove('is-active'));
-        loadPeriod('custom', formData.get('start'), formData.get('end'));
+        currentPeriod = 'custom';
+        currentStart = formData.get('start');
+        currentEnd = formData.get('end');
+        loadPeriod(currentPeriod, currentStart, currentEnd);
     });
 
-    loadPeriod('month');
+    loadPeriod(currentPeriod, currentStart, currentEnd);
+    setInterval(() => {
+        loadPeriod(currentPeriod, currentStart, currentEnd);
+    }, 1000);
 }

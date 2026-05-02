@@ -6,6 +6,14 @@ import tinytuya
 from config import TuyaDeviceConfig
 
 
+def _normalize_voltage(raw_value: Any) -> float:
+    voltage = float(raw_value)
+    # Some Tuya sockets report voltage in decivolts even when the schema scale is 0.
+    if abs(voltage) >= 1000:
+        return voltage / 10.0
+    return voltage
+
+
 def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device = tinytuya.Device(
         device_config.device_id,
@@ -24,7 +32,7 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
     power_raw = dps.get(device_config.power_dps_key, 0)
     power_w = float(power_raw) / device_config.power_scale if power_raw is not None else 0.0
     voltage_values = [
-        float(dps[key])
+        _normalize_voltage(dps[key])
         for key in device_config.voltage_dps_keys
         if key in dps and dps[key] is not None
     ]
