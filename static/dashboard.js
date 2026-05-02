@@ -1,12 +1,15 @@
 const dashboardPage = document.querySelector('[data-dashboard]');
 
 if (dashboardPage) {
+    const LIVE_REFRESH_INTERVAL_MS = 1000;
+    const SUMMARY_REFRESH_INTERVAL_MS = 5000;
     const currentPower = dashboardPage.querySelector('[data-summary-current-power]');
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
     const deviceGrid = document.querySelector('[data-device-grid]');
-    let isLoading = false;
+    let isAggregateLoading = false;
+    let isLiveLoading = false;
 
     const escapeHtml = (value) => String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -78,11 +81,34 @@ if (dashboardPage) {
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
+    const applyLiveDevices = (devices) => {
+        const existingCards = new Map(
+            [...deviceGrid.querySelectorAll('[data-device-card]')].map((card) => [card.dataset.deviceId, card])
+        );
+
+        devices.forEach((device) => {
+            const card = existingCards.get(device.device_id);
+            if (!card) {
+                return;
+            }
+
+            const currentPowerNode = card.querySelector('[data-device-current-power]');
+            const lastSeenNode = card.querySelector('[data-device-last-seen]');
+            if (currentPowerNode) {
+                currentPowerNode.textContent = `${device.current_power_kw} кВт`;
+            }
+            if (lastSeenNode) {
+                lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
+                applyReadingStatus(lastSeenNode, device.last_seen_status);
+            }
+        });
+    };
+
     const loadSummary = async () => {
-        if (isLoading) {
+        if (isAggregateLoading) {
             return;
         }
-        isLoading = true;
+        isAggregateLoading = true;
         try {
             const response = await fetch('/api/summary', { cache: 'no-store' });
             const payload = await response.json();
@@ -92,10 +118,37 @@ if (dashboardPage) {
             deviceCount.textContent = `${payload.device_count}`;
             syncDevices(payload.devices || []);
         } finally {
-            isLoading = false;
+            isAggregateLoading = false;
+        }
+    };
+
+    const loadLiveSummary = async () => {
+        if (isLiveLoading) {
+            return;
+        }
+        isLiveLoading = true;
+        try {
+            const response = await fetch('/api/live-summary', { cache: 'no-store' });
+            const payload = await response.json();
+            currentPower.textContent = `${payload.current_power_kw} кВт`;
+            deviceCount.textContent = `${payload.device_count}`;
+            applyLiveDevices(payload.devices || []);
+        } finally {
+            isLiveLoading = false;
         }
     };
 
     loadSummary();
-    setInterval(loadSummary, 1000);
+    setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+        loadLiveSummary();
+    }, LIVE_REFRESH_INTERVAL_MS);
+    setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+        loadSummary();
+    }, SUMMARY_REFRESH_INTERVAL_MS);
 }

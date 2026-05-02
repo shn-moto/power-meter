@@ -1,6 +1,8 @@
 const page = document.querySelector('[data-device-page]');
 
 if (page) {
+    const LIVE_REFRESH_INTERVAL_MS = 1000;
+    const AGGREGATE_REFRESH_INTERVAL_MS = 5000;
     const deviceId = page.dataset.deviceId;
     const initialPayloadNode = document.querySelector('[data-initial-device-stats]');
     const periodInputs = [...page.querySelectorAll('input[data-period]')];
@@ -15,10 +17,20 @@ if (page) {
     const timerCancel = document.querySelector('[data-timer-cancel]');
     const chartInstance = window.echarts ? window.echarts.init(chart) : null;
     const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
+    const summaryCurrentPower = summary.querySelector('[data-summary-current-power]');
+    const summaryCurrentCurrent = summary.querySelector('[data-summary-current-current]');
+    const summaryCurrentVoltage = summary.querySelector('[data-summary-current-voltage]');
+    const summaryEnergy = summary.querySelector('[data-summary-energy]');
+    const summaryAveragePower = summary.querySelector('[data-summary-average-power]');
+    const summaryPeakPower = summary.querySelector('[data-summary-peak-power]');
+    const summaryAverageVoltage = summary.querySelector('[data-summary-average-voltage]');
+    const summarySampleCount = summary.querySelector('[data-summary-sample-count]');
+    const summaryLatestSample = summary.querySelector('[data-device-latest-sample]');
     let currentPeriod = 'day';
     let currentStart = null;
     let currentEnd = null;
-    let isLoading = false;
+    let isAggregateLoading = false;
+    let isLiveLoading = false;
     let timerFunction = null;
 
     const formatValue = (value, suffix = '') => {
@@ -82,6 +94,38 @@ if (page) {
         });
     };
 
+    const syncFunctionStates = (items) => {
+        const cards = [...functionsContainer.querySelectorAll('[data-function-code]')];
+        const cardsByCode = new Map(cards.map((node) => [node.dataset.functionCode, node]));
+        if (cards.length !== items.length || items.some((item) => !cardsByCode.has(item.code))) {
+            renderFunctions(items);
+            return;
+        }
+
+        items.forEach((item) => {
+            const card = cardsByCode.get(item.code);
+            if (!card) {
+                return;
+            }
+
+            const state = card.querySelector('.device-function-state');
+            if (state) {
+                state.textContent = item.current_label;
+            }
+
+            if (item.control_type === 'toggle') {
+                const checkbox = card.querySelector('input[type="checkbox"]');
+                const caption = card.querySelector('.switch-caption');
+                if (checkbox && document.activeElement !== checkbox) {
+                    checkbox.checked = Boolean(item.current_value);
+                }
+                if (caption && checkbox) {
+                    caption.textContent = checkbox.checked ? 'Вкл' : 'Выкл';
+                }
+            }
+        });
+    };
+
     const runFunction = async (code, value) => {
         setFunctionButtonState(true);
         try {
@@ -112,6 +156,7 @@ if (page) {
         items.forEach((item) => {
             const card = document.createElement('section');
             card.className = 'device-function-item';
+            card.dataset.functionCode = item.code;
 
             const heading = document.createElement('div');
             heading.className = 'device-function-head';
@@ -173,27 +218,24 @@ if (page) {
         });
     };
 
-    const renderSummary = (payload) => {
+    const renderAggregateSummary = (payload) => {
         const fields = payload.summary;
-        const values = [
-            formatPower(fields.current_power_w),
-            formatCurrent(fields.current_current_ma),
-            formatValue(fields.current_voltage_v, ' В'),
-            `${fields.energy_kwh} кВт·ч`,
-            `${fields.average_power_kw} кВт`,
-            `${fields.peak_power_kw} кВт`,
-            formatValue(fields.average_voltage_v, ' В'),
-            String(fields.sample_count),
-            fields.latest_sample || '--',
-        ];
+        summaryEnergy.textContent = `${fields.energy_kwh} кВт·ч`;
+        summaryAveragePower.textContent = `${fields.average_power_kw} кВт`;
+        summaryPeakPower.textContent = `${fields.peak_power_kw} кВт`;
+        summaryAverageVoltage.textContent = formatValue(fields.average_voltage_v, ' В');
+        summarySampleCount.textContent = String(fields.sample_count);
+        renderLiveSummary(payload);
+    };
 
-        [...summary.querySelectorAll('dd')].forEach((node, index) => {
-            node.textContent = values[index];
-        });
-
-        applyReadingStatus(summary.querySelector('[data-device-latest-sample]'), fields.latest_sample_status);
-
-        renderFunctions(payload.device_functions || []);
+    const renderLiveSummary = (payload) => {
+        const fields = payload.summary;
+        summaryCurrentPower.textContent = formatPower(fields.current_power_w);
+        summaryCurrentCurrent.textContent = formatCurrent(fields.current_current_ma);
+        summaryCurrentVoltage.textContent = formatValue(fields.current_voltage_v, ' В');
+        summaryLatestSample.textContent = fields.latest_sample || '--';
+        applyReadingStatus(summaryLatestSample, fields.latest_sample_status);
+        syncFunctionStates(payload.device_functions || []);
     };
 
     const renderChart = (series, chartConfig) => {
@@ -290,10 +332,10 @@ if (page) {
     };
 
     const loadPeriod = async (period, start, end) => {
-        if (isLoading) {
+        if (isAggregateLoading) {
             return;
         }
-        isLoading = true;
+        isAggregateLoading = true;
         const query = new URLSearchParams({ period });
         if (start && end) {
             query.set('start', start);
@@ -302,10 +344,24 @@ if (page) {
         try {
             const response = await fetch(`/api/devices/${deviceId}/stats?${query.toString()}`, { cache: 'no-store' });
             const payload = await response.json();
-            renderSummary(payload);
+            renderAggregateSummary(payload);
             renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });
         } finally {
-            isLoading = false;
+            isAggregateLoading = false;
+        }
+    };
+
+    const loadLive = async () => {
+        if (isLiveLoading) {
+            return;
+        }
+        isLiveLoading = true;
+        try {
+            const response = await fetch(`/api/devices/${deviceId}/live`, { cache: 'no-store' });
+            const payload = await response.json();
+            renderLiveSummary(payload);
+        } finally {
+            isLiveLoading = false;
         }
     };
 
@@ -359,7 +415,7 @@ if (page) {
     }
 
     if (initialPayload) {
-        renderSummary(initialPayload);
+        renderAggregateSummary(initialPayload);
         renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
     } else {
         loadPeriod(currentPeriod, currentStart, currentEnd);
@@ -368,6 +424,15 @@ if (page) {
         chartInstance?.resize();
     });
     setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+        loadLive();
+    }, LIVE_REFRESH_INTERVAL_MS);
+    setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
         loadPeriod(currentPeriod, currentStart, currentEnd);
-    }, 1000);
+    }, AGGREGATE_REFRESH_INTERVAL_MS);
 }

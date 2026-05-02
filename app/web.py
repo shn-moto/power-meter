@@ -41,7 +41,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-15"
+templates.env.globals["static_asset_version"] = "20260502-17"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 
@@ -451,6 +451,81 @@ def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample 
     return stats
 
 
+def _get_cached_device_capabilities(request: Request, config: AppConfig, device_id: str) -> list[dict[str, Any]]:
+    cache: dict[str, list[dict[str, Any]]] = request.app.state.device_capabilities_cache
+    capabilities = cache.get(device_id)
+    if capabilities is None:
+        capabilities = get_device_capabilities(config, device_id)
+        cache[device_id] = capabilities
+    return capabilities
+
+
+def _build_device_live_payload(
+    config: AppConfig,
+    capabilities: list[dict[str, Any]],
+    live_sample: DeviceSample | None,
+) -> dict[str, Any]:
+    if live_sample:
+        summary = {
+            "latest_sample": _format_live_timestamp(config, live_sample.captured_at),
+            "latest_sample_age_seconds": get_sample_age_seconds(live_sample.captured_at, datetime.now(_get_timezone(config))),
+            "latest_sample_status": get_sample_status(live_sample.captured_at, datetime.now(_get_timezone(config))),
+            "latest_raw_dps": live_sample.raw_dps,
+            "latest_power_w": round(live_sample.power_w, 1),
+            "latest_voltage_v": round(live_sample.voltage_v, 1) if live_sample.voltage_v is not None else None,
+        }
+    else:
+        summary = {
+            "latest_sample": None,
+            "latest_sample_age_seconds": None,
+            "latest_sample_status": "error",
+            "latest_raw_dps": {},
+            "latest_power_w": None,
+            "latest_voltage_v": None,
+        }
+
+    _augment_current_summary(summary, capabilities)
+
+    return {
+        "summary": summary,
+        "device_functions": _attach_function_state(_build_device_functions(capabilities), summary["latest_raw_dps"]),
+    }
+
+
+def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[str, Any]:
+    live_samples: dict[str, DeviceSample] = request.app.state.live_samples
+    device_rows_by_id: dict[str, dict[str, Any]] = request.app.state.device_rows_by_id
+    now = datetime.now(_get_timezone(config))
+    devices: list[dict[str, Any]] = []
+    total_power_w = 0.0
+    online_device_count = 0
+
+    for device_id, sample in live_samples.items():
+        device = device_rows_by_id.get(device_id)
+        if not device or not device.get("is_energy_meter"):
+            continue
+
+        total_power_w += float(sample.power_w)
+        last_seen_status = get_sample_status(sample.captured_at, now)
+        if last_seen_status == "ok":
+            online_device_count += 1
+
+        devices.append(
+            {
+                "device_id": device_id,
+                "current_power_kw": round(float(sample.power_w) / 1000.0, 3),
+                "last_seen": _format_live_timestamp(config, sample.captured_at),
+                "last_seen_status": last_seen_status,
+            }
+        )
+
+    return {
+        "current_power_kw": round(total_power_w / 1000.0, 3),
+        "device_count": online_device_count,
+        "devices": devices,
+    }
+
+
 def _build_device_stats_payload(
     config: AppConfig,
     device_id: str,
@@ -484,11 +559,16 @@ async def lifespan(app: FastAPI):
     app.state.app_config = load_app_config()
     app.state.live_samples = {}
     app.state.last_saved_at = {}
+    app.state.device_capabilities_cache = {}
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
     await asyncio.to_thread(init_db, app.state.app_config)
     configured_devices = load_devices()
     await asyncio.to_thread(sync_devices, app.state.app_config, configured_devices)
     await asyncio.to_thread(sync_config_device_capabilities, app.state.app_config, configured_devices)
+    app.state.device_rows_by_id = {
+        str(device["device_id"]): device
+        for device in await asyncio.to_thread(get_device_rows, app.state.app_config)
+    }
     app.state.poller = asyncio.create_task(_poll_loop(app))
     yield
     app.state.poller.cancel()
@@ -502,10 +582,10 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request) -> HTMLResponse:
+def dashboard(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
-    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
+    summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return templates.TemplateResponse(
         request=request,
@@ -519,10 +599,9 @@ async def dashboard(request: Request) -> HTMLResponse:
 
 
 @app.get("/devices/{device_id}", response_class=HTMLResponse)
-async def device_details(request: Request, device_id: str) -> HTMLResponse:
+def device_details(request: Request, device_id: str) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    payload = await asyncio.to_thread(
-        _build_device_stats_payload,
+    payload = _build_device_stats_payload(
         config,
         device_id,
         "day",
@@ -546,9 +625,9 @@ async def device_details(request: Request, device_id: str) -> HTMLResponse:
 
 
 @app.get("/connect-device", response_class=HTMLResponse)
-async def connect_device_page(request: Request) -> HTMLResponse:
+def connect_device_page(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    devices = await asyncio.to_thread(get_device_rows, config)
+    devices = get_device_rows(config)
     return templates.TemplateResponse(
         request=request,
         name="connect_device.html",
@@ -566,34 +645,41 @@ async def healthcheck() -> JSONResponse:
 
 
 @app.get("/api/summary")
-async def summary_api(request: Request) -> JSONResponse:
+def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
-    summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
+    summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return JSONResponse(jsonable_encoder(summary))
 
 
+@app.get("/api/live-summary")
+def live_summary_api(request: Request) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    payload = _build_dashboard_live_payload(request, config)
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @app.post("/api/devices/connect")
-async def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONResponse:
+def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     try:
-        result = await asyncio.to_thread(connect_device, config, payload.device_id)
+        result = connect_device(config, payload.device_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return JSONResponse(jsonable_encoder(result))
 
 
 @app.post("/api/devices/{device_id}/functions/{function_code}")
-async def device_function_api(request: Request, device_id: str, function_code: str, payload: DeviceFunctionPayload) -> JSONResponse:
+def device_function_api(request: Request, device_id: str, function_code: str, payload: DeviceFunctionPayload) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_control_device, config, device_id)
+    device = get_control_device(config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
     if not device.ip_address:
         raise HTTPException(status_code=400, detail="Для устройства не найден локальный адрес")
 
-    capabilities = await asyncio.to_thread(get_device_capabilities, config, device_id)
+    capabilities = get_device_capabilities(config, device_id)
     functions = _build_device_functions(capabilities)
     function = next((item for item in functions if item["code"] == function_code), None)
     if not function:
@@ -613,9 +699,9 @@ async def device_function_api(request: Request, device_id: str, function_code: s
         tinytuya_device.set_version(device.version)
         tinytuya_device.set_socketTimeout(1.5)
         tinytuya_device.set_socketRetryLimit(1)
-        await asyncio.to_thread(_apply_device_command, tinytuya_device, function_code, function["dp_id"], value)
+        _apply_device_command(tinytuya_device, function_code, function["dp_id"], value)
 
-        captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
+        captured_at, power_w, voltage_v, raw_dps = build_sample(device)
         sample = DeviceSample(
             device_id=device.device_id,
             captured_at=captured_at,
@@ -624,7 +710,7 @@ async def device_function_api(request: Request, device_id: str, function_code: s
             raw_dps=raw_dps,
         )
         request.app.state.live_samples[device.device_id] = sample
-        await asyncio.to_thread(save_sample, config, sample)
+        save_sample(config, sample)
         request.app.state.last_saved_at[device.device_id] = captured_at
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -635,7 +721,7 @@ async def device_function_api(request: Request, device_id: str, function_code: s
 
 
 @app.get("/api/devices/{device_id}/stats")
-async def device_stats_api(
+def device_stats_api(
     request: Request,
     device_id: str,
     period: str = Query(default="day"),
@@ -643,8 +729,7 @@ async def device_stats_api(
     end: str | None = Query(default=None),
 ) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    payload = await asyncio.to_thread(
-        _build_device_stats_payload,
+    payload = _build_device_stats_payload(
         config,
         device_id,
         period,
@@ -654,4 +739,12 @@ async def device_stats_api(
     )
     if not payload:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@app.get("/api/devices/{device_id}/live")
+def device_live_api(request: Request, device_id: str) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    capabilities = _get_cached_device_capabilities(request, config, device_id)
+    payload = _build_device_live_payload(config, capabilities, request.app.state.live_samples.get(device_id))
     return JSONResponse(jsonable_encoder(payload))
