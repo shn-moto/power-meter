@@ -35,6 +35,7 @@ ENERGY_CODES = {
 LIGHT_CODES = {"bright_value", "temp_value", "colour_data", "colour_data_v2", "scene_data", "work_mode"}
 SENSOR_CODES = {"temp_current", "humidity_value", "pir", "smoke_sensor_state", "doorcontact_state", "va_battery"}
 PRIVATE_TUYA_PORTS = (6668, 6669, 7000)
+DEFAULT_ROOM_NAME = "Без комнаты"
 LOCAL_DISCOVERY_ERROR_MESSAGE = (
     "Не удалось найти устройство в локальной сети. Убедитесь, что сервер и устройство в одной сети, а само устройство включено."
 )
@@ -68,6 +69,40 @@ def _device_name(device_v1: dict[str, Any], device_v2: dict[str, Any]) -> str:
         or str(device_v1.get("product_name") or "").strip()
         or "Новое устройство"
     )
+
+
+def _resolve_room_name(
+    cloud: tinytuya.Cloud,
+    device_id: str,
+    device_v1: dict[str, Any],
+    device_v2: dict[str, Any],
+) -> str | None:
+    device_info = device_v1.get("result") or {}
+    device_info_v2 = device_v2.get("result") or {}
+    home_id = str(device_info_v2.get("bind_space_id") or device_info.get("owner_id") or "").strip()
+    if not home_id:
+        return None
+
+    rooms_payload = cloud.cloudrequest(f"/v1.0/homes/{home_id}/rooms")
+    if not isinstance(rooms_payload, dict) or not rooms_payload.get("success"):
+        return None
+
+    rooms = ((rooms_payload.get("result") or {}).get("rooms") or [])
+    for room in rooms:
+        room_id = room.get("room_id")
+        room_name = str(room.get("name") or "").strip()
+        if room_id is None or not room_name:
+            continue
+
+        room_devices_payload = cloud.cloudrequest(f"/v1.0/homes/{home_id}/rooms/{room_id}/devices")
+        if not isinstance(room_devices_payload, dict) or not room_devices_payload.get("success"):
+            continue
+
+        room_devices = room_devices_payload.get("result") or []
+        if any(str(item.get("id") or "").strip() == device_id for item in room_devices if isinstance(item, dict)):
+            return room_name
+
+    return None
 
 
 def _classify_device(category_code: str | None, dps_info: dict[str, Any]) -> tuple[str, bool]:
@@ -238,7 +273,11 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     name = _device_name(device_info, device_info_v2)
     existing = get_device_by_id(config, clean_device_id)
     slug = existing["slug"] if existing else f"{_slugify(name)}-{clean_device_id[-4:]}"
-    room = existing["room"] if existing else "Без комнаты"
+    resolved_room = _resolve_room_name(cloud, clean_device_id, device_v1, device_v2)
+    if existing and str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME:
+        room = existing["room"]
+    else:
+        room = resolved_room or DEFAULT_ROOM_NAME
     image_label = existing["image_label"] if existing else name
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)

@@ -137,7 +137,15 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
                     power_dps_key, power_scale, voltage_dps_keys
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
-                ON CONFLICT(slug) DO NOTHING
+                ON CONFLICT(slug) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    device_kind = EXCLUDED.device_kind,
+                    is_energy_meter = EXCLUDED.is_energy_meter,
+                    onboarding_source = EXCLUDED.onboarding_source,
+                    updated_at = NOW(),
+                    power_dps_key = EXCLUDED.power_dps_key,
+                    power_scale = EXCLUDED.power_scale,
+                    voltage_dps_keys = EXCLUDED.voltage_dps_keys
                 """,
                 [
                     (
@@ -165,7 +173,14 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                 INSERT INTO device_connections (
                     device_slug, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT(device_slug) DO NOTHING
+                ON CONFLICT(device_slug) DO UPDATE SET
+                    local_key = EXCLUDED.local_key,
+                    ip_address = EXCLUDED.ip_address,
+                    version = EXCLUDED.version,
+                    power_dps_key = EXCLUDED.power_dps_key,
+                    power_scale = EXCLUDED.power_scale,
+                    voltage_dps_keys = EXCLUDED.voltage_dps_keys,
+                    updated_at = NOW()
                 """,
                 [
                     (
@@ -216,6 +231,10 @@ def upsert_managed_device(
                     power_dps_key, power_scale, voltage_dps_keys
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
                 ON CONFLICT(slug) DO UPDATE SET
+                    room = CASE
+                        WHEN devices.room = '' OR devices.room = 'Без комнаты' THEN EXCLUDED.room
+                        ELSE devices.room
+                    END,
                     device_id = EXCLUDED.device_id,
                     category_code = EXCLUDED.category_code,
                     device_kind = EXCLUDED.device_kind,
