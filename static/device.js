@@ -10,9 +10,9 @@ if (page) {
     const chartGrid = page.querySelector('[data-chart-grid]');
     const chartLine = page.querySelector('[data-chart-line]');
     const chartEmpty = page.querySelector('[data-chart-empty]');
-    const timerDialog = page.querySelector('[data-timer-dialog]');
-    const timerForm = page.querySelector('[data-timer-form]');
-    const timerCancel = page.querySelector('[data-timer-cancel]');
+    const timerDialog = document.querySelector('[data-timer-dialog]');
+    const timerForm = document.querySelector('[data-timer-form]');
+    const timerCancel = document.querySelector('[data-timer-cancel]');
     let currentPeriod = 'month';
     let currentStart = null;
     let currentEnd = null;

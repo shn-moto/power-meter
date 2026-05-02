@@ -35,7 +35,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-4"
+templates.env.globals["static_asset_version"] = "20260502-5"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
