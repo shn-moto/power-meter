@@ -119,21 +119,31 @@ def _format_month_label(value: datetime) -> str:
 
 
 def _resolve_device_image_url(image_id: str | None) -> str | None:
-    if not image_id:
+    return _resolve_device_image_url_by_key(image_id, "device-images")
+
+
+def _resolve_device_image_url_by_key(image_key: str | None, directory_name: str) -> str | None:
+    if not image_key:
         return None
 
-    safe_image_id = Path(image_id).name
-    image_directory = BASE_DIR / "static" / "device-images"
+    safe_key = Path(image_key).name
+    image_directory = BASE_DIR / "static" / directory_name
     for extension in DEVICE_IMAGE_EXTENSIONS:
-        candidate = image_directory / f"{safe_image_id}{extension}"
+        candidate = image_directory / f"{safe_key}{extension}"
         if candidate.exists():
-            return f"/static/device-images/{safe_image_id}{extension}"
+            return f"/static/{directory_name}/{safe_key}{extension}"
     return None
 
 
 def _decorate_device_media(device: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(device)
-    enriched["image_url"] = _resolve_device_image_url(str(enriched.get("image_id") or "").strip() or None)
+    image_id = str(enriched.get("image_id") or "").strip() or None
+    device_id = str(enriched.get("device_id") or "").strip() or None
+    enriched["image_url"] = (
+        _resolve_device_image_url_by_key(device_id, "images")
+        or _resolve_device_image_url(image_id)
+        or _resolve_device_image_url_by_key(device_id, "device-images")
+    )
     return enriched
 
 

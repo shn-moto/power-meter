@@ -486,7 +486,7 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
             cursor.execute(
                 """
                 SELECT d.slug, d.name, d.room, d.image_label, d.device_kind, d.is_energy_meter,
-                      d.product_name, d.category_code, d.image_id,
+                      d.product_name, d.category_code, d.image_id, d.device_id,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -502,7 +502,7 @@ def get_device_row(config: AppConfig, slug: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                  SELECT slug, name, room, image_label, image_id, device_kind, is_energy_meter,
+                  SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
                        product_name, category_code, product_id, icon
                 FROM devices WHERE slug = %s
                 """,
@@ -1036,6 +1036,7 @@ def get_dashboard_summary(
                 "room": device["room"],
                 "image_label": device["image_label"],
                 "image_id": device.get("image_id"),
+                "device_id": device.get("device_id"),
                 "current_power_kw": round(current_power_w / 1000.0, 3),
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
                 "last_seen": last_seen,
