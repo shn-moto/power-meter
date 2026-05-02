@@ -46,7 +46,7 @@ RUSSIAN_MONTH_LABELS_FULL = {
 
 @dataclass(slots=True)
 class DeviceSample:
-    device_slug: str
+    device_id: str
     captured_at: datetime
     power_w: float
     voltage_v: float | None
@@ -87,7 +87,7 @@ def init_db(config: AppConfig) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_id_unique ON devices(device_id)",
         """
         CREATE TABLE IF NOT EXISTS device_connections (
-            device_slug TEXT PRIMARY KEY REFERENCES devices(slug) ON DELETE CASCADE,
+            device_id TEXT PRIMARY KEY REFERENCES devices(device_id) ON DELETE CASCADE,
             local_key TEXT NOT NULL,
             ip_address TEXT NOT NULL,
             version DOUBLE PRECISION NOT NULL DEFAULT 3.5,
@@ -100,59 +100,243 @@ def init_db(config: AppConfig) -> None:
         """
         CREATE TABLE IF NOT EXISTS device_capabilities (
             id BIGSERIAL PRIMARY KEY,
-            device_slug TEXT NOT NULL REFERENCES devices(slug) ON DELETE CASCADE,
+            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
             capability_source TEXT NOT NULL,
             capability_code TEXT NOT NULL,
             capability_name TEXT,
             value_type TEXT,
             dp_id INTEGER,
             values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (device_slug, capability_source, capability_code)
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS samples (
             id BIGSERIAL PRIMARY KEY,
-            device_slug TEXT NOT NULL REFERENCES devices(slug) ON DELETE CASCADE,
+            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
             captured_at TIMESTAMPTZ NOT NULL,
             power_w DOUBLE PRECISION NOT NULL,
             voltage_v DOUBLE PRECISION,
             raw_dps JSONB NOT NULL,
             source TEXT NOT NULL DEFAULT 'live',
             source_event_id TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (device_slug, captured_at, source)
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS device_events (
             id BIGSERIAL PRIMARY KEY,
-            device_slug TEXT NOT NULL REFERENCES devices(slug) ON DELETE CASCADE,
+            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
             event_at TIMESTAMPTZ NOT NULL,
             event_type TEXT,
             event_code TEXT,
             source_event_id TEXT,
             payload JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (device_slug, source_event_id)
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS device_cloud_artifacts (
             id BIGSERIAL PRIMARY KEY,
-            device_slug TEXT NOT NULL REFERENCES devices(slug) ON DELETE CASCADE,
+            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
             artifact_type TEXT NOT NULL,
             payload JSONB NOT NULL,
-            fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (device_slug, artifact_type)
+            fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_device_connections_ip ON device_connections(ip_address)",
-        "CREATE INDEX IF NOT EXISTS idx_device_capabilities_device ON device_capabilities(device_slug)",
-        "CREATE INDEX IF NOT EXISTS idx_samples_device_time ON samples(device_slug, captured_at)",
-        "CREATE INDEX IF NOT EXISTS idx_device_events_device_time ON device_events(device_slug, event_at)",
-        "CREATE INDEX IF NOT EXISTS idx_device_cloud_artifacts_type ON device_cloud_artifacts(device_slug, artifact_type)",
+        "ALTER TABLE device_connections ADD COLUMN IF NOT EXISTS device_id TEXT",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'device_connections' AND column_name = 'device_slug'
+            ) THEN
+                UPDATE device_connections AS dc
+                SET device_id = d.device_id
+                FROM devices AS d
+                WHERE dc.device_id IS NULL AND dc.device_slug = d.slug;
+
+                ALTER TABLE device_connections DROP COLUMN device_slug CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE device_connections ALTER COLUMN device_id SET NOT NULL",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'device_connections_device_id_fkey'
+            ) THEN
+                ALTER TABLE device_connections
+                ADD CONSTRAINT device_connections_device_id_fkey
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'device_connections_pkey'
+            ) THEN
+                ALTER TABLE device_connections
+                ADD CONSTRAINT device_connections_pkey PRIMARY KEY (device_id);
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE device_capabilities ADD COLUMN IF NOT EXISTS device_id TEXT",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'device_capabilities' AND column_name = 'device_slug'
+            ) THEN
+                UPDATE device_capabilities AS dc
+                SET device_id = d.device_id
+                FROM devices AS d
+                WHERE dc.device_id IS NULL AND dc.device_slug = d.slug;
+
+                ALTER TABLE device_capabilities DROP COLUMN device_slug CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE device_capabilities ALTER COLUMN device_id SET NOT NULL",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'device_capabilities_device_id_fkey'
+            ) THEN
+                ALTER TABLE device_capabilities
+                ADD CONSTRAINT device_capabilities_device_id_fkey
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_capabilities_unique ON device_capabilities(device_id, capability_source, capability_code)",
+        "CREATE INDEX IF NOT EXISTS idx_device_capabilities_device ON device_capabilities(device_id)",
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS device_id TEXT",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'samples' AND column_name = 'device_slug'
+            ) THEN
+                UPDATE samples AS s
+                SET device_id = d.device_id
+                FROM devices AS d
+                WHERE s.device_id IS NULL AND s.device_slug = d.slug;
+
+                ALTER TABLE samples DROP COLUMN device_slug CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE samples ALTER COLUMN device_id SET NOT NULL",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'samples_device_id_fkey'
+            ) THEN
+                ALTER TABLE samples
+                ADD CONSTRAINT samples_device_id_fkey
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_device_time_source ON samples(device_id, captured_at, source)",
+        "CREATE INDEX IF NOT EXISTS idx_samples_device_time ON samples(device_id, captured_at)",
+        "ALTER TABLE device_events ADD COLUMN IF NOT EXISTS device_id TEXT",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'device_events' AND column_name = 'device_slug'
+            ) THEN
+                UPDATE device_events AS de
+                SET device_id = d.device_id
+                FROM devices AS d
+                WHERE de.device_id IS NULL AND de.device_slug = d.slug;
+
+                ALTER TABLE device_events DROP COLUMN device_slug CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE device_events ALTER COLUMN device_id SET NOT NULL",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'device_events_device_id_fkey'
+            ) THEN
+                ALTER TABLE device_events
+                ADD CONSTRAINT device_events_device_id_fkey
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_events_unique ON device_events(device_id, source_event_id)",
+        "CREATE INDEX IF NOT EXISTS idx_device_events_device_time ON device_events(device_id, event_at)",
+        "ALTER TABLE device_cloud_artifacts ADD COLUMN IF NOT EXISTS device_id TEXT",
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'device_cloud_artifacts' AND column_name = 'device_slug'
+            ) THEN
+                UPDATE device_cloud_artifacts AS dca
+                SET device_id = d.device_id
+                FROM devices AS d
+                WHERE dca.device_id IS NULL AND dca.device_slug = d.slug;
+
+                ALTER TABLE device_cloud_artifacts DROP COLUMN device_slug CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "ALTER TABLE device_cloud_artifacts ALTER COLUMN device_id SET NOT NULL",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'device_cloud_artifacts_device_id_fkey'
+            ) THEN
+                ALTER TABLE device_cloud_artifacts
+                ADD CONSTRAINT device_cloud_artifacts_device_id_fkey
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
+            END IF;
+        END
+        $$
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_cloud_artifacts_unique ON device_cloud_artifacts(device_id, artifact_type)",
+        "CREATE INDEX IF NOT EXISTS idx_device_cloud_artifacts_type ON device_cloud_artifacts(device_id, artifact_type)",
     ]
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -207,9 +391,9 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
             cursor.executemany(
                 """
                 INSERT INTO device_connections (
-                    device_slug, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
+                    device_id, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT(device_slug) DO UPDATE SET
+                ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
                         WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.ip_address
@@ -226,7 +410,7 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                 """,
                 [
                     (
-                        device.slug,
+                        device.device_id,
                         device.local_key,
                         device.ip_address,
                         device.version,
@@ -314,9 +498,9 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_slug, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
+                    device_id, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT(device_slug) DO UPDATE SET
+                ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
                         WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.ip_address
@@ -332,7 +516,7 @@ def upsert_managed_device(
                     updated_at = NOW()
                 """,
                 (
-                    slug,
+                    device_id,
                     local_key,
                     ip_address,
                     version,
@@ -341,18 +525,18 @@ def upsert_managed_device(
                     Jsonb(list(voltage_dps_keys)),
                 ),
             )
-            cursor.execute("DELETE FROM device_capabilities WHERE device_slug = %s", (slug,))
+            cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
             if capabilities:
                 cursor.executemany(
                     """
                     INSERT INTO device_capabilities (
-                        device_slug, capability_source, capability_code, capability_name,
+                        device_id, capability_source, capability_code, capability_name,
                         value_type, dp_id, values_json
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     [
                         (
-                            slug,
+                            device_id,
                             capability.get("capability_source") or "status",
                             capability.get("capability_code") or "unknown",
                             capability.get("capability_name"),
@@ -371,16 +555,16 @@ def save_sample(config: AppConfig, sample: DeviceSample) -> None:
         with connection.cursor() as cursor:
             cursor.execute(
             """
-            INSERT INTO samples (device_slug, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
+            INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (device_slug, captured_at, source) DO UPDATE SET
+            ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
                 power_w = EXCLUDED.power_w,
                 voltage_v = EXCLUDED.voltage_v,
                 raw_dps = EXCLUDED.raw_dps,
                 source_event_id = EXCLUDED.source_event_id
             """,
             (
-                sample.device_slug,
+                sample.device_id,
                 sample.captured_at,
                 sample.power_w,
                 sample.voltage_v,
@@ -395,7 +579,7 @@ def save_sample(config: AppConfig, sample: DeviceSample) -> None:
 def save_device_event(
     config: AppConfig,
     *,
-    device_slug: str,
+    device_id: str,
     event_at: datetime,
     event_type: str | None,
     event_code: str | None,
@@ -406,16 +590,16 @@ def save_device_event(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO device_events (device_slug, event_at, event_type, event_code, source_event_id, payload)
+                INSERT INTO device_events (device_id, event_at, event_type, event_code, source_event_id, payload)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (device_slug, source_event_id) DO UPDATE SET
+                ON CONFLICT (device_id, source_event_id) DO UPDATE SET
                     event_at = EXCLUDED.event_at,
                     event_type = EXCLUDED.event_type,
                     event_code = EXCLUDED.event_code,
                     payload = EXCLUDED.payload
                 """,
                 (
-                    device_slug,
+                    device_id,
                     event_at,
                     event_type,
                     event_code,
@@ -429,7 +613,7 @@ def save_device_event(
 def save_cloud_artifact(
     config: AppConfig,
     *,
-    device_slug: str,
+    device_id: str,
     artifact_type: str,
     payload: dict[str, Any],
 ) -> None:
@@ -437,14 +621,14 @@ def save_cloud_artifact(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO device_cloud_artifacts (device_slug, artifact_type, payload, fetched_at)
+                INSERT INTO device_cloud_artifacts (device_id, artifact_type, payload, fetched_at)
                 VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (device_slug, artifact_type) DO UPDATE SET
+                ON CONFLICT (device_id, artifact_type) DO UPDATE SET
                     payload = EXCLUDED.payload,
                     fetched_at = NOW()
                 """,
                 (
-                    device_slug,
+                    device_id,
                     artifact_type,
                     Jsonb(payload),
                 ),
@@ -466,6 +650,12 @@ def _normalize_json_field(value: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     return {}
+
+
+def _normalize_sample_power_w(power_w: float, voltage_v: float | None) -> float:
+    if power_w > 5000 and voltage_v is not None and 180 <= voltage_v <= 260:
+        return power_w / 10.0
+    return power_w
 
 
 def _format_display_datetime(config: AppConfig, value: datetime | str | None) -> str | None:
@@ -490,57 +680,57 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
-                LEFT JOIN device_connections c ON c.device_slug = d.slug
+                LEFT JOIN device_connections c ON c.device_id = d.device_id
                 ORDER BY name
                 """
             )
             return cursor.fetchall()
 
 
-def get_device_row(config: AppConfig, slug: str) -> dict[str, Any] | None:
+def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
                   SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
                        product_name, category_code, product_id, icon
-                FROM devices WHERE slug = %s
+                FROM devices WHERE device_id = %s
                 """,
-                (slug,),
+                (device_id,),
             )
             return cursor.fetchone()
 
 
-def get_device_capabilities(config: AppConfig, slug: str) -> list[dict[str, Any]]:
+def get_device_capabilities(config: AppConfig, device_id: str) -> list[dict[str, Any]]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT capability_source, capability_code, capability_name, value_type, dp_id, values_json
                 FROM device_capabilities
-                WHERE device_slug = %s
+                WHERE device_id = %s
                 ORDER BY dp_id ASC NULLS LAST, capability_source DESC, capability_code ASC
                 """,
-                (slug,),
+                (device_id,),
             )
             return cursor.fetchall()
 
 
-def replace_device_capabilities(config: AppConfig, slug: str, capabilities: list[dict[str, Any]]) -> None:
+def replace_device_capabilities(config: AppConfig, device_id: str, capabilities: list[dict[str, Any]]) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM device_capabilities WHERE device_slug = %s", (slug,))
+            cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
             if capabilities:
                 cursor.executemany(
                     """
                     INSERT INTO device_capabilities (
-                        device_slug, capability_source, capability_code, capability_name,
+                        device_id, capability_source, capability_code, capability_name,
                         value_type, dp_id, values_json
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
                     [
                         (
-                            slug,
+                            device_id,
                             capability.get("capability_source") or "status",
                             capability.get("capability_code") or "unknown",
                             capability.get("capability_name"),
@@ -554,7 +744,7 @@ def replace_device_capabilities(config: AppConfig, slug: str, capabilities: list
         connection.commit()
 
 
-def get_control_device(config: AppConfig, slug: str) -> TuyaDeviceConfig | None:
+def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -563,10 +753,10 @@ def get_control_device(config: AppConfig, slug: str) -> TuyaDeviceConfig | None:
                        c.local_key, c.ip_address, c.version, c.power_dps_key,
                        c.power_scale, c.voltage_dps_keys
                 FROM devices d
-                JOIN device_connections c ON c.device_slug = d.slug
-                WHERE d.slug = %s
+                JOIN device_connections c ON c.device_id = d.device_id
+                WHERE d.device_id = %s
                 """,
-                (slug,),
+                (device_id,),
             )
             row = cursor.fetchone()
 
@@ -608,7 +798,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                        c.local_key, c.ip_address, c.version, c.power_dps_key,
                        c.power_scale, c.voltage_dps_keys
                 FROM devices d
-                JOIN device_connections c ON c.device_slug = d.slug
+                JOIN device_connections c ON c.device_id = d.device_id
                 WHERE c.local_key <> '' AND c.ip_address <> ''
                 ORDER BY d.name
                 """
@@ -645,33 +835,33 @@ def get_known_local_ips(config: AppConfig) -> list[str]:
             return [row["ip_address"] for row in cursor.fetchall()]
 
 
-def get_samples(config: AppConfig, slug: str, start: datetime, end: datetime) -> list[dict[str, Any]]:
+def get_samples(config: AppConfig, device_id: str, start: datetime, end: datetime) -> list[dict[str, Any]]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
             """
             SELECT captured_at, power_w, voltage_v, raw_dps
             FROM samples
-            WHERE device_slug = %s AND captured_at >= %s AND captured_at <= %s
+            WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
             ORDER BY captured_at ASC
             """,
-            (slug, start, end),
+            (device_id, start, end),
         )
             return cursor.fetchall()
 
 
-def get_latest_sample(config: AppConfig, slug: str) -> dict[str, Any] | None:
+def get_latest_sample(config: AppConfig, device_id: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
             """
             SELECT captured_at, power_w, voltage_v, raw_dps
             FROM samples
-            WHERE device_slug = %s
+            WHERE device_id = %s
             ORDER BY captured_at DESC
             LIMIT 1
             """,
-            (slug,),
+            (device_id,),
         )
             return cursor.fetchone()
 
@@ -685,7 +875,7 @@ def _integrate_energy_wh(rows: list[dict[str, Any]]) -> float:
         current_dt = _parse_dt(current["captured_at"])
         next_dt = _parse_dt(following["captured_at"])
         hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
-        total_wh += float(current["power_w"]) * hours
+        total_wh += _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v")) * hours
     return total_wh
 
 
@@ -780,7 +970,7 @@ def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
         next_dt = _parse_dt(following["captured_at"])
         hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
         group = grouped[_bucket_start(current_dt, bucket)]
-        power_w = float(current["power_w"])
+        power_w = _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"))
         group["energy_wh"] += power_w * hours
         group["power_sum"] += power_w
         group["count"] += 1
@@ -828,8 +1018,8 @@ def _integrate_energy_counter_kwh(rows: list[dict[str, Any]], dp_key: str, scale
     return total_kwh
 
 
-def _get_energy_counter_meta(config: AppConfig, slug: str) -> tuple[str, int] | None:
-    for capability in get_device_capabilities(config, slug):
+def _get_energy_counter_meta(config: AppConfig, device_id: str) -> tuple[str, int] | None:
+    for capability in get_device_capabilities(config, device_id):
         code = str(capability.get("capability_code") or "")
         if code not in {"total_forward_energy", "add_ele"}:
             continue
@@ -872,9 +1062,9 @@ def _build_series_from_energy_counter(
     ]
 
 
-def _calculate_energy_wh(config: AppConfig, slug: str, rows: list[dict[str, Any]]) -> float:
+def _calculate_energy_wh(config: AppConfig, device_id: str, rows: list[dict[str, Any]]) -> float:
     integrated_wh = _integrate_energy_wh(rows)
-    energy_counter_meta = _get_energy_counter_meta(config, slug)
+    energy_counter_meta = _get_energy_counter_meta(config, device_id)
     if not energy_counter_meta:
         return integrated_wh
 
@@ -930,7 +1120,7 @@ def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
 
 def _prepare_chart_series(
     config: AppConfig,
-    slug: str,
+    device_id: str,
     rows: list[dict[str, Any]],
     start: datetime,
     end: datetime,
@@ -948,7 +1138,7 @@ def _prepare_chart_series(
     }
 
     max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
-    energy_counter_meta = _get_energy_counter_meta(config, slug)
+    energy_counter_meta = _get_energy_counter_meta(config, device_id)
     if energy_counter_meta:
         fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
         fallback_max = max((float(item.get("energy_kwh") or 0.0) for item in fallback_series), default=0.0)
@@ -1006,19 +1196,20 @@ def get_dashboard_summary(
         if not device.get("is_energy_meter"):
             continue
 
-        live_sample = live_samples.get(device["slug"])
-        latest = get_latest_sample(config, device["slug"])
-        samples = _merge_live_sample(get_samples(config, device["slug"], month_start, now), live_sample)
-        device_energy_wh = _calculate_energy_wh(config, device["slug"], samples)
+        device_id = str(device.get("device_id") or "")
+        live_sample = live_samples.get(device_id)
+        latest = get_latest_sample(config, device_id)
+        samples = _merge_live_sample(get_samples(config, device_id, month_start, now), live_sample)
+        device_energy_wh = _calculate_energy_wh(config, device_id, samples)
         total_energy_wh += device_energy_wh
 
         if live_sample:
-            current_power_w = float(live_sample.power_w)
+            current_power_w = _normalize_sample_power_w(float(live_sample.power_w), live_sample.voltage_v)
             last_seen = _format_display_datetime(config, live_sample.captured_at)
             raw_dps = live_sample.raw_dps
             effective_captured_at = live_sample.captured_at
         else:
-            current_power_w = float(latest["power_w"]) if latest else 0.0
+            current_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v")) if latest else 0.0
             last_seen = _format_display_datetime(config, latest["captured_at"]) if latest else None
             raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
             effective_captured_at = _parse_dt(latest["captured_at"]) if latest else None
@@ -1058,19 +1249,20 @@ def get_dashboard_summary(
 
 def get_device_stats(
     config: AppConfig,
-    slug: str,
+    device_id: str,
     start: datetime,
     end: datetime,
     period: str,
     bucket: str,
 ) -> dict[str, Any]:
-    rows = get_samples(config, slug, start, end)
-    latest = get_latest_sample(config, slug)
+    rows = get_samples(config, device_id, start, end)
+    latest = get_latest_sample(config, device_id)
     series = _build_series(rows, bucket)
-    chart_series, chart = _prepare_chart_series(config, slug, rows, start, end, period, bucket, series)
-    total_energy_wh = _calculate_energy_wh(config, slug, rows)
-    average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
-    peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)
+    chart_series, chart = _prepare_chart_series(config, device_id, rows, start, end, period, bucket, series)
+    total_energy_wh = _calculate_energy_wh(config, device_id, rows)
+    normalized_powers = [_normalize_sample_power_w(float(row["power_w"]), row.get("voltage_v")) for row in rows]
+    average_power_w = sum(normalized_powers) / max(len(normalized_powers), 1) if normalized_powers else 0.0
+    peak_power_w = max(normalized_powers, default=0.0)
     voltages = [float(row["voltage_v"]) for row in rows if row["voltage_v"] is not None]
     latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
 

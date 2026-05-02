@@ -32,8 +32,8 @@
     </div>
     <div class="device-grid" data-device-grid>
         {% for device in summary.devices %}
-        <article class="device-card" data-device-card data-device-slug="{{ device.slug }}">
-            <a class="device-image" href="/devices/{{ device.slug }}" aria-label="Открыть детали устройства {{ device.name }}">
+        <article class="device-card" data-device-card data-device-id="{{ device.device_id }}">
+            <a class="device-image" href="/devices/{{ device.device_id }}" aria-label="Открыть детали устройства {{ device.name }}">
                 {% if device.image_url %}
                 <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
                 {% else %}

@@ -37,7 +37,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-13"
+templates.env.globals["static_asset_version"] = "20260502-14"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 
@@ -322,19 +322,19 @@ async def _poll_loop(app: FastAPI) -> None:
             try:
                 captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
                 sample = DeviceSample(
-                    device_slug=device.slug,
+                    device_id=device.device_id,
                     captured_at=captured_at,
                     power_w=power_w,
                     voltage_v=voltage_v,
                     raw_dps=raw_dps,
                 )
-                app.state.live_samples[device.slug] = sample
+                app.state.live_samples[device.device_id] = sample
 
-                last_saved_at = app.state.last_saved_at.get(device.slug)
+                last_saved_at = app.state.last_saved_at.get(device.device_id)
                 should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
                 if should_save:
                     await asyncio.to_thread(save_sample, config, sample)
-                    app.state.last_saved_at[device.slug] = captured_at
+                    app.state.last_saved_at[device.device_id] = captured_at
             except Exception:
                 continue
 
@@ -349,7 +349,7 @@ def _format_live_timestamp(config: AppConfig, value: datetime) -> str:
 def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str, DeviceSample]) -> dict:
     total_power_w = 0.0
     for device in summary.get("devices", []):
-        live_sample = live_samples.get(device["slug"])
+        live_sample = live_samples.get(device["device_id"])
         if live_sample:
             device["current_power_kw"] = round(live_sample.power_w / 1000.0, 3)
             device["last_seen"] = _format_live_timestamp(config, live_sample.captured_at)
@@ -411,10 +411,10 @@ async def dashboard(request: Request) -> HTMLResponse:
     )
 
 
-@app.get("/devices/{slug}", response_class=HTMLResponse)
-async def device_details(request: Request, slug: str) -> HTMLResponse:
+@app.get("/devices/{device_id}", response_class=HTMLResponse)
+async def device_details(request: Request, device_id: str) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_device_row, config, slug)
+    device = await asyncio.to_thread(get_device_row, config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
 
@@ -467,16 +467,16 @@ async def connect_device_api(request: Request, payload: ConnectDevicePayload) ->
     return JSONResponse(jsonable_encoder(result))
 
 
-@app.post("/api/devices/{slug}/functions/{function_code}")
-async def device_function_api(request: Request, slug: str, function_code: str, payload: DeviceFunctionPayload) -> JSONResponse:
+@app.post("/api/devices/{device_id}/functions/{function_code}")
+async def device_function_api(request: Request, device_id: str, function_code: str, payload: DeviceFunctionPayload) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_control_device, config, slug)
+    device = await asyncio.to_thread(get_control_device, config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
     if not device.ip_address:
         raise HTTPException(status_code=400, detail="Для устройства не найден локальный адрес")
 
-    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
+    capabilities = await asyncio.to_thread(get_device_capabilities, config, device_id)
     functions = _build_device_functions(capabilities)
     function = next((item for item in functions if item["code"] == function_code), None)
     if not function:
@@ -500,15 +500,15 @@ async def device_function_api(request: Request, slug: str, function_code: str, p
 
         captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
         sample = DeviceSample(
-            device_slug=device.slug,
+            device_id=device.device_id,
             captured_at=captured_at,
             power_w=power_w,
             voltage_v=voltage_v,
             raw_dps=raw_dps,
         )
-        request.app.state.live_samples[device.slug] = sample
+        request.app.state.live_samples[device.device_id] = sample
         await asyncio.to_thread(save_sample, config, sample)
-        request.app.state.last_saved_at[device.slug] = captured_at
+        request.app.state.last_saved_at[device.device_id] = captured_at
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -517,24 +517,24 @@ async def device_function_api(request: Request, slug: str, function_code: str, p
     return JSONResponse({"status": "ok"})
 
 
-@app.get("/api/devices/{slug}/stats")
+@app.get("/api/devices/{device_id}/stats")
 async def device_stats_api(
     request: Request,
-    slug: str,
+    device_id: str,
     period: str = Query(default="month"),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
 ) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    device = await asyncio.to_thread(get_device_row, config, slug)
+    device = await asyncio.to_thread(get_device_row, config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
 
     range_start, range_end = _resolve_period(config, period, start, end)
     bucket = pick_bucket(range_start, range_end, period)
-    stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, period, bucket)
-    stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(slug))
-    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
+    stats = await asyncio.to_thread(get_device_stats, config, device_id, range_start, range_end, period, bucket)
+    stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(device_id))
+    capabilities = await asyncio.to_thread(get_device_capabilities, config, device_id)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
     return JSONResponse(
         jsonable_encoder({

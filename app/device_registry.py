@@ -322,12 +322,12 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         capabilities=capabilities,
     )
 
-    save_cloud_artifact(config, device_slug=slug, artifact_type="onboard_device_v1", payload=device_v1)
+    save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
     if isinstance(device_v2, dict):
-        save_cloud_artifact(config, device_slug=slug, artifact_type="onboard_device_v2", payload=device_v2)
-    save_cloud_artifact(config, device_slug=slug, artifact_type="onboard_dps", payload=dps_info)
+        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
+    save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
 
-    stored = get_device_row(config, slug)
+    stored = get_device_row(config, clean_device_id)
     return {
         "slug": slug,
         "name": name,
@@ -362,4 +362,4 @@ def sync_config_device_capabilities(config: AppConfig, devices: list[TuyaDeviceC
         if not isinstance(dps_info, dict) or not dps_info.get("success"):
             continue
         capabilities = _build_capabilities(dps_info.get("result") or {})
-        replace_device_capabilities(config, device.slug, capabilities)
+        replace_device_capabilities(config, device.device_id, capabilities)

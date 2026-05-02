@@ -1,7 +1,7 @@
 const page = document.querySelector('[data-device-page]');
 
 if (page) {
-    const slug = page.dataset.deviceSlug;
+    const deviceId = page.dataset.deviceId;
     const periodInputs = [...page.querySelectorAll('input[data-period]')];
     const customRangeForm = page.querySelector('[data-custom-range]');
     const summary = page.querySelector('[data-device-summary]');
@@ -63,7 +63,7 @@ if (page) {
     const runFunction = async (code, value) => {
         setFunctionButtonState(true);
         try {
-            const response = await fetch(`/api/devices/${slug}/functions/${code}`, {
+            const response = await fetch(`/api/devices/${deviceId}/functions/${code}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ value }),
@@ -275,7 +275,7 @@ if (page) {
             query.set('end', end);
         }
         try {
-            const response = await fetch(`/api/devices/${slug}/stats?${query.toString()}`, { cache: 'no-store' });
+            const response = await fetch(`/api/devices/${deviceId}/stats?${query.toString()}`, { cache: 'no-store' });
             const payload = await response.json();
             renderSummary(payload);
             renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });

@@ -14,6 +14,13 @@ def _normalize_voltage(raw_value: Any) -> float:
     return voltage
 
 
+def _normalize_power(power_w: float, voltage_v: float | None) -> float:
+    # Some Tuya socket firmwares occasionally report cur_power 10x too high.
+    if power_w > 5000 and voltage_v is not None and 180 <= voltage_v <= 260:
+        return power_w / 10.0
+    return power_w
+
+
 def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device = tinytuya.Device(
         device_config.device_id,
@@ -37,6 +44,7 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
         if key in dps and dps[key] is not None
     ]
     voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+    power_w = _normalize_power(power_w, voltage_v)
     return power_w, voltage_v, dps
 
 

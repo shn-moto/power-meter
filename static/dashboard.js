@@ -28,7 +28,7 @@ if (dashboardPage) {
     };
 
     const renderCardMarkup = (device) => `
-        <a class="device-image" href="/devices/${encodeURIComponent(device.slug)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
+        <a class="device-image" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
             ${renderDeviceMedia(device)}
         </a>
         <div class="device-card-body">
@@ -59,23 +59,23 @@ if (dashboardPage) {
 
     const syncDevices = (devices) => {
         const existingCards = new Map(
-            [...deviceGrid.querySelectorAll('[data-device-card]')].map((card) => [card.dataset.deviceSlug, card])
+            [...deviceGrid.querySelectorAll('[data-device-card]')].map((card) => [card.dataset.deviceId, card])
         );
 
-        if (existingCards.size !== devices.length || devices.some((device) => !existingCards.has(device.slug))) {
+        if (existingCards.size !== devices.length || devices.some((device) => !existingCards.has(device.device_id))) {
             deviceGrid.innerHTML = '';
             devices.forEach((device) => {
                 const card = document.createElement('article');
                 card.className = 'device-card';
                 card.dataset.deviceCard = '';
-                card.dataset.deviceSlug = device.slug;
+                card.dataset.deviceId = device.device_id;
                 card.innerHTML = renderCardMarkup(device);
                 deviceGrid.appendChild(card);
             });
             return;
         }
 
-        devices.forEach((device) => updateCard(existingCards.get(device.slug), device));
+        devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
     const loadSummary = async () => {

@@ -76,7 +76,7 @@ def _make_source_event_id(device: TuyaDeviceConfig, event: dict[str, Any], index
     digest = hashlib.sha1(
         json.dumps(raw_value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:12]
-    return f"{device.slug}:{event_code}:{event_time}:{index}:{digest}"
+    return f"{device.device_id}:{event_code}:{event_time}:{index}:{digest}"
 
 
 def _select_devices(devices: list[TuyaDeviceConfig], requested_device_id: str | None) -> list[TuyaDeviceConfig]:
@@ -102,7 +102,7 @@ def _save_cloud_snapshots(app_config, cloud, device: TuyaDeviceConfig) -> dict[s
         if isinstance(payload, dict):
             save_cloud_artifact(
                 app_config,
-                device_slug=device.slug,
+                device_id=device.device_id,
                 artifact_type=artifact_type,
                 payload=payload,
             )
@@ -148,7 +148,7 @@ def main() -> int:
         if isinstance(daily_stats_result, dict):
             save_cloud_artifact(
                 app_config,
-                device_slug=device.slug,
+                device_id=device.device_id,
                 artifact_type="statistics_days_probe",
                 payload=daily_stats_result,
             )
@@ -171,7 +171,7 @@ def main() -> int:
         if isinstance(result, dict):
             save_cloud_artifact(
                 app_config,
-                device_slug=device.slug,
+                device_id=device.device_id,
                 artifact_type="device_logs_summary",
                 payload={
                     "success": result.get("success"),
@@ -198,7 +198,7 @@ def main() -> int:
 
             save_device_event(
                 app_config,
-                device_slug=device.slug,
+                device_id=device.device_id,
                 event_at=_event_time(event),
                 event_type=str(event.get("type") or event.get("event_type") or ""),
                 event_code=event_code,
