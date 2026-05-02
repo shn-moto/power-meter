@@ -15,7 +15,7 @@ from app.storage import (
     save_cloud_artifact,
     upsert_managed_device,
 )
-from config import AppConfig, ConfigError, load_cloud_config, load_devices
+from config import AppConfig, ConfigError, TuyaDeviceConfig, load_cloud_config, load_devices
 
 
 DEVICE_KIND_LABELS = {
