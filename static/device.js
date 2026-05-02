@@ -143,7 +143,9 @@ if (page) {
 
     const renderChart = (series) => {
         chartGrid.innerHTML = '';
-        if (!series.length) {
+        const values = series.map((item) => Number(item.chart_value ?? 0));
+        const maxValue = Math.max(...values, 0);
+        if (!series.length || maxValue <= 0) {
             chartEmpty.hidden = false;
             chartLine.setAttribute('points', '');
             return;
@@ -155,7 +157,7 @@ if (page) {
         const padding = { top: 24, right: 24, bottom: 30, left: 32 };
         const plotWidth = width - padding.left - padding.right;
         const plotHeight = height - padding.top - padding.bottom;
-        const maxValue = Math.max(...series.map((item) => item.energy_kwh), 0.1);
+        const yMax = maxValue * 1.1;
 
         for (let step = 0; step <= 4; step += 1) {
             const y = padding.top + (plotHeight / 4) * step;
@@ -169,7 +171,8 @@ if (page) {
 
         const points = series.map((item, index) => {
             const x = padding.left + (plotWidth * index) / Math.max(series.length - 1, 1);
-            const y = padding.top + plotHeight - (item.energy_kwh / maxValue) * plotHeight;
+            const value = Number(item.chart_value ?? 0);
+            const y = padding.top + plotHeight - (value / yMax) * plotHeight;
             return `${x},${y}`;
         });
         chartLine.setAttribute('points', points.join(' '));

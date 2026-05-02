@@ -656,6 +656,14 @@ def _bucket_start(dt: datetime, bucket: str) -> datetime:
     return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
 
 
+def _bucket_duration_hours(bucket: str) -> float:
+    if bucket == "hour":
+        return 1.0
+    if bucket == "day":
+        return 24.0
+    return 0.25
+
+
 def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
     if len(rows) < 2:
         return []
@@ -679,6 +687,98 @@ def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any
         }
         for bucket_start, values in sorted(grouped.items())
     ]
+
+
+def _read_energy_counter_kwh(raw_dps: dict[str, Any], dp_key: str, scale: int) -> float | None:
+    raw_value = raw_dps.get(dp_key)
+    if raw_value is None:
+        return None
+
+    try:
+        return float(raw_value) / (10 ** scale)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_energy_counter_meta(config: AppConfig, slug: str) -> tuple[str, int] | None:
+    for capability in get_device_capabilities(config, slug):
+        code = str(capability.get("capability_code") or "")
+        if code not in {"total_forward_energy", "add_ele"}:
+            continue
+        dp_id = capability.get("dp_id")
+        if dp_id is None:
+            continue
+        values_json = capability.get("values_json") or {}
+        return str(dp_id), int(values_json.get("scale", 0) or 0)
+    return None
+
+
+def _build_series_from_energy_counter(
+    rows: list[dict[str, Any]],
+    bucket: str,
+    dp_key: str,
+    scale: int,
+) -> list[dict[str, Any]]:
+    if len(rows) < 2:
+        return []
+
+    grouped: dict[datetime, dict[str, float]] = defaultdict(lambda: {"energy_kwh": 0.0})
+    bucket_hours = _bucket_duration_hours(bucket)
+
+    for current, following in zip(rows, rows[1:]):
+        current_dt = _parse_dt(current["captured_at"])
+        group = grouped[_bucket_start(current_dt, bucket)]
+
+        current_raw_dps = _normalize_json_field(current["raw_dps"])
+        following_raw_dps = _normalize_json_field(following["raw_dps"])
+        current_kwh = _read_energy_counter_kwh(current_raw_dps, dp_key, scale)
+        following_kwh = _read_energy_counter_kwh(following_raw_dps, dp_key, scale)
+        if current_kwh is None or following_kwh is None:
+            continue
+
+        delta_kwh = max(following_kwh - current_kwh, 0.0)
+        group["energy_kwh"] += delta_kwh
+
+    return [
+        {
+            "timestamp": bucket_start.isoformat(),
+            "energy_kwh": round(values["energy_kwh"], 4),
+            "avg_power_kw": round(values["energy_kwh"] / bucket_hours, 4),
+        }
+        for bucket_start, values in sorted(grouped.items())
+    ]
+
+
+def _prepare_chart_series(
+    config: AppConfig,
+    slug: str,
+    rows: list[dict[str, Any]],
+    bucket: str,
+    series: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    chart_metric = "avg_power_kw" if bucket in {"15m", "hour"} else "energy_kwh"
+    chart = {
+        "metric": chart_metric,
+        "unit": "кВт" if chart_metric == "avg_power_kw" else "кВт·ч",
+        "label": "Средняя мощность" if chart_metric == "avg_power_kw" else "Энергия",
+    }
+
+    max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
+    if chart_metric == "avg_power_kw" and max_chart_value <= 0.01:
+        energy_counter_meta = _get_energy_counter_meta(config, slug)
+        if energy_counter_meta:
+            fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
+            fallback_max = max((float(item.get("avg_power_kw") or 0.0) for item in fallback_series), default=0.0)
+            if fallback_max > max_chart_value:
+                series = fallback_series
+
+    return [
+        {
+            **item,
+            "chart_value": round(float(item.get(chart_metric) or 0.0), 4),
+        }
+        for item in series
+    ], chart
 
 
 def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetime) -> dict[str, Any]:
@@ -728,6 +828,8 @@ def get_device_stats(
 ) -> dict[str, Any]:
     rows = get_samples(config, slug, start, end)
     latest = get_latest_sample(config, slug)
+    series = _build_series(rows, bucket)
+    chart_series, chart = _prepare_chart_series(config, slug, rows, bucket, series)
     total_energy_wh = _integrate_energy_wh(rows)
     average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
     peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)
@@ -743,7 +845,8 @@ def get_device_stats(
             "latest_sample": _format_display_datetime(config, latest["captured_at"]) if latest else None,
             "latest_raw_dps": _normalize_json_field(latest["raw_dps"]) if latest else {},
         },
-        "series": _build_series(rows, bucket),
+        "series": chart_series,
+        "chart": chart,
     }
 
 
