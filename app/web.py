@@ -16,6 +16,7 @@ from app.device_registry import DEVICE_KIND_LABELS, connect_device
 from config import AppConfig, load_app_config, load_devices
 from app.storage import (
     DeviceSample,
+    get_device_capabilities,
     get_dashboard_summary,
     get_device_row,
     get_device_rows,
@@ -31,7 +32,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-2"
+templates.env.globals["static_asset_version"] = "20260502-3"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -46,6 +47,37 @@ RUSSIAN_MONTHS = {
     10: "Октябрь",
     11: "Ноябрь",
     12: "Декабрь",
+}
+
+DPS_LABELS = {
+    "switch": "Питание",
+    "countdown_1": "Таймер отключения",
+    "cur_current": "Ток",
+    "cur_power": "Мощность",
+    "cur_voltage": "Напряжение",
+    "add_ele": "Энергия",
+    "total_forward_energy": "Потребление",
+    "total_reverse_energy": "Возврат энергии",
+}
+
+UNIT_LABELS = {
+    "V": "В",
+    "W": "Вт",
+    "mA": "мА",
+    "A": "А",
+    "s": "с",
+    "秒": "с",
+}
+
+FUNCTION_LABELS = {
+    "switch": ("Питание", "Включение и выключение устройства"),
+    "countdown_1": ("Таймер", "Отложенное отключение по таймеру"),
+    "bright_value": ("Яркость", "Регулировка яркости"),
+    "temp_value": ("Цветовая температура", "Настройка теплоты света"),
+    "colour_data": ("Цвет", "Выбор цвета освещения"),
+    "colour_data_v2": ("Цвет", "Выбор цвета освещения"),
+    "scene_data": ("Сцены", "Переключение световых сцен"),
+    "work_mode": ("Режим", "Переключение режимов работы"),
 }
 
 
@@ -68,6 +100,127 @@ def _month_window(config: AppConfig) -> tuple[datetime, datetime]:
 
 def _format_month_label(value: datetime) -> str:
     return f"{RUSSIAN_MONTHS[value.month]} {value.year}"
+
+
+def _format_decimal(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.1f}".rstrip("0").rstrip(".")
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "0 с"
+
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours} ч")
+    if minutes:
+        parts.append(f"{minutes} мин")
+    if secs and not hours:
+        parts.append(f"{secs} с")
+    return " ".join(parts) or "0 с"
+
+
+def _format_dps_value(capability: dict[str, Any] | None, raw_value: Any) -> str:
+    if raw_value is None:
+        return "Нет данных"
+
+    capability_code = str((capability or {}).get("capability_code") or "")
+    value_type = str((capability or {}).get("value_type") or "")
+    values_json = (capability or {}).get("values_json") or {}
+    unit = UNIT_LABELS.get(str(values_json.get("unit") or "").strip(), str(values_json.get("unit") or "").strip())
+
+    if isinstance(raw_value, bool) or value_type == "Boolean":
+        return "Включено" if bool(raw_value) else "Выключено"
+
+    if capability_code.startswith("countdown"):
+        try:
+            return _format_duration(int(raw_value))
+        except (TypeError, ValueError):
+            return str(raw_value)
+
+    if isinstance(raw_value, (int, float)) and value_type in {"Integer", "value", ""}:
+        number = float(raw_value)
+        scale = int(values_json.get("scale", 0) or 0)
+        if scale > 0:
+            number /= 10 ** scale
+        elif capability_code == "cur_voltage" and abs(number) >= 1000:
+            number /= 10.0
+
+        rendered = _format_decimal(number)
+        return f"{rendered} {unit}".strip()
+
+    return str(raw_value)
+
+
+def _build_interpreted_dps(raw_dps: dict[str, Any], capabilities: list[dict[str, Any]]) -> list[dict[str, str]]:
+    capability_map: dict[str, dict[str, Any]] = {}
+    for capability in capabilities:
+        dp_id = capability.get("dp_id")
+        if dp_id is None:
+            continue
+        key = str(dp_id)
+        current = capability_map.get(key)
+        if current is None or capability.get("capability_source") == "status":
+            capability_map[key] = capability
+
+    def sort_key(item: tuple[str, Any]) -> tuple[int, str]:
+        key = str(item[0])
+        return (0, f"{int(key):08d}") if key.isdigit() else (1, key)
+
+    interpreted: list[dict[str, str]] = []
+    for dp_key, raw_value in sorted(raw_dps.items(), key=sort_key):
+        capability = capability_map.get(str(dp_key))
+        capability_code = str((capability or {}).get("capability_code") or "")
+        label = DPS_LABELS.get(capability_code) or str((capability or {}).get("capability_name") or "").strip() or f"DP {dp_key}"
+        interpreted.append(
+            {
+                "label": label,
+                "value": _format_dps_value(capability, raw_value),
+            }
+        )
+
+    return interpreted
+
+
+def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str, str]]:
+    functions: list[dict[str, str]] = []
+    seen_codes: set[str] = set()
+
+    for capability in capabilities:
+        if capability.get("capability_source") != "functions":
+            continue
+
+        code = str(capability.get("capability_code") or "").strip()
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        label, description = FUNCTION_LABELS.get(code, ("", ""))
+        if not label:
+            label = str(capability.get("capability_name") or code).replace("_", " ").strip().capitalize()
+        if not description:
+            value_type = str(capability.get("value_type") or "").strip()
+            if value_type == "Boolean":
+                description = "Переключение состояния"
+            elif value_type == "Integer":
+                description = "Настраиваемый числовой параметр"
+            elif value_type == "Enum":
+                description = "Выбор режима из списка"
+            elif value_type == "String":
+                description = "Передача текстового значения"
+            else:
+                description = "Доступная функция устройства"
+
+        functions.append({
+            "label": label,
+            "description": description,
+        })
+
+    return functions
 
 
 def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_raw: str | None) -> tuple[datetime, datetime]:
@@ -191,12 +344,14 @@ async def device_details(request: Request, slug: str) -> HTMLResponse:
     device = await asyncio.to_thread(get_device_row, config, slug)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
+    capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
 
     return templates.TemplateResponse(
         request=request,
         name="device.html",
         context={
             "device": dict(device),
+            "device_functions": _build_device_functions(capabilities),
             "page_title": f"{device['name']} - детали",
         },
     )

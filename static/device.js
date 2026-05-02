@@ -5,7 +5,6 @@ if (page) {
     const buttons = [...page.querySelectorAll('[data-period]')];
     const customRangeForm = page.querySelector('[data-custom-range]');
     const summary = page.querySelector('[data-device-summary]');
-    const rawDps = page.querySelector('[data-raw-dps]');
     const chart = page.querySelector('[data-chart]');
     const chartGrid = page.querySelector('[data-chart-grid]');
     const chartLine = page.querySelector('[data-chart-line]');
@@ -36,8 +35,6 @@ if (page) {
         [...summary.querySelectorAll('dd')].forEach((node, index) => {
             node.textContent = values[index];
         });
-
-        rawDps.textContent = JSON.stringify(payload.summary.latest_raw_dps, null, 2);
     };
 
     const renderChart = (series) => {

@@ -5,7 +5,7 @@
     <div>
         <p class="eyebrow">{{ device.room }}</p>
         <h1>{{ device.name }}</h1>
-        <p class="hero-copy">График потребления, сводка и сырые данные DPS.</p>
+        <p class="hero-copy">График потребления, сводка и доступные функции устройства.</p>
     </div>
     <a class="back-link" href="/">Назад к панели</a>
 </section>
@@ -48,8 +48,22 @@
             </dl>
         </article>
         <article class="detail-card">
-            <h2>Сырые данные DPS</h2>
-            <pre class="raw-dps" data-raw-dps>{}</pre>
+            <h2>Функции</h2>
+            <dl class="device-functions">
+                {% if device_functions %}
+                {% for item in device_functions %}
+                <div>
+                    <dt>{{ item.label }}</dt>
+                    <dd>{{ item.description }}</dd>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div>
+                    <dt>Нет данных</dt>
+                    <dd>Для этого устройства функции пока не определены.</dd>
+                </div>
+                {% endif %}
+                </dl>
         </article>
     </aside>
 </section>

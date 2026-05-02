@@ -472,6 +472,21 @@ def get_device_row(config: AppConfig, slug: str) -> dict[str, Any] | None:
             return cursor.fetchone()
 
 
+def get_device_capabilities(config: AppConfig, slug: str) -> list[dict[str, Any]]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT capability_source, capability_code, capability_name, value_type, dp_id, values_json
+                FROM device_capabilities
+                WHERE device_slug = %s
+                ORDER BY dp_id ASC NULLS LAST, capability_source DESC, capability_code ASC
+                """,
+                (slug,),
+            )
+            return cursor.fetchall()
+
+
 def get_device_by_id(config: AppConfig, device_id: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:

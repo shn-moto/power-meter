@@ -354,11 +354,32 @@ button:hover {
     font-size: 1rem;
 }
 
-.raw-dps {
+.device-functions {
+    display: grid;
+    gap: 12px;
+}
+
+.device-functions div {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+}
+
+.device-functions dt,
+.device-functions dd {
     margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 0.92rem;
+}
+
+.device-functions dt {
+    font-weight: 700;
+}
+
+.device-functions dd {
+    color: var(--muted);
+    text-align: right;
+    max-width: 18ch;
 }
 
 @media (max-width: 900px) {
