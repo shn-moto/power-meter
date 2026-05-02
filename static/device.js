@@ -40,6 +40,8 @@ if (page) {
     let selectedMonthKey = null;
     let isAggregateLoading = false;
     let isLiveLoading = false;
+    let pendingAggregateRequest = null;
+    let latestAggregateRequestKey = null;
     let timerFunction = null;
 
     const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -137,6 +139,8 @@ if (page) {
         }
         return { period: currentPeriod, start: null, end: null };
     };
+
+    const getAggregateRequestKey = (period, start, end) => `${period}|${start || ''}|${end || ''}`;
 
     const shouldRefreshAggregate = () => {
         const todayKey = getTodayKey();
@@ -463,10 +467,14 @@ if (page) {
     };
 
     const loadPeriod = async (period, start, end) => {
+        const requestKey = getAggregateRequestKey(period, start, end);
+        latestAggregateRequestKey = requestKey;
         if (isAggregateLoading) {
+            pendingAggregateRequest = { period, start, end, key: requestKey };
             return;
         }
         isAggregateLoading = true;
+        pendingAggregateRequest = null;
         updateDayNav();
         const query = new URLSearchParams({ period });
         if (start && end) {
@@ -476,11 +484,19 @@ if (page) {
         try {
             const response = await fetch(`/api/devices/${deviceId}/stats?${query.toString()}`, { cache: 'no-store' });
             const payload = await response.json();
+            if (requestKey !== latestAggregateRequestKey) {
+                return;
+            }
             renderAggregateSummary(payload);
             renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });
         } finally {
             isAggregateLoading = false;
             updateDayNav();
+            if (pendingAggregateRequest && pendingAggregateRequest.key !== requestKey) {
+                const nextRequest = pendingAggregateRequest;
+                pendingAggregateRequest = null;
+                loadPeriod(nextRequest.period, nextRequest.start, nextRequest.end);
+            }
         }
     };
 
