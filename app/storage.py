@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -55,7 +56,40 @@ class DeviceSample:
     source_event_id: str | None = None
 
 
-def _connect(database_url: str) -> psycopg.Connection:
+_connection_pool: ConnectionPool | None = None
+_connection_pool_url: str | None = None
+
+
+def init_connection_pool(database_url: str, *, min_size: int = 1, max_size: int = 10) -> None:
+    global _connection_pool, _connection_pool_url
+
+    if _connection_pool is not None and _connection_pool_url == database_url:
+        return
+
+    close_connection_pool()
+    _connection_pool = ConnectionPool(
+        conninfo=database_url,
+        kwargs={"row_factory": dict_row},
+        min_size=min_size,
+        max_size=max_size,
+        open=False,
+    )
+    _connection_pool.open(wait=True)
+    _connection_pool_url = database_url
+
+
+def close_connection_pool() -> None:
+    global _connection_pool, _connection_pool_url
+
+    if _connection_pool is not None:
+        _connection_pool.close()
+    _connection_pool = None
+    _connection_pool_url = None
+
+
+def _connect(database_url: str):
+    if _connection_pool is not None and _connection_pool_url == database_url:
+        return _connection_pool.connection()
     return psycopg.connect(database_url, row_factory=dict_row)
 
 

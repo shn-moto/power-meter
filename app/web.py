@@ -19,6 +19,7 @@ from app.device_registry import DEVICE_KIND_LABELS, connect_device, sync_config_
 from config import AppConfig, load_app_config, load_devices
 from app.storage import (
     DeviceSample,
+    close_connection_pool,
     get_control_device,
     get_device_capabilities,
     get_device_context_and_stats,
@@ -29,6 +30,7 @@ from app.storage import (
     get_sample_age_seconds,
     get_sample_status,
     get_polling_devices,
+    init_connection_pool,
     init_db,
     pick_bucket,
     save_sample,
@@ -482,6 +484,7 @@ async def lifespan(app: FastAPI):
     app.state.app_config = load_app_config()
     app.state.live_samples = {}
     app.state.last_saved_at = {}
+    await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
     await asyncio.to_thread(init_db, app.state.app_config)
     configured_devices = load_devices()
     await asyncio.to_thread(sync_devices, app.state.app_config, configured_devices)
@@ -491,6 +494,7 @@ async def lifespan(app: FastAPI):
     app.state.poller.cancel()
     with suppress(asyncio.CancelledError):
         await app.state.poller
+    await asyncio.to_thread(close_connection_pool)
 
 
 app = FastAPI(title="Учет электроэнергии", lifespan=lifespan)
