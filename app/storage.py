@@ -797,6 +797,28 @@ def _read_energy_counter_kwh(raw_dps: dict[str, Any], dp_key: str, scale: int) -
         return None
 
 
+def _integrate_energy_counter_kwh(rows: list[dict[str, Any]], dp_key: str, scale: int) -> float | None:
+    if len(rows) < 2:
+        return None
+
+    total_kwh = 0.0
+    has_counter_pairs = False
+    for current, following in zip(rows, rows[1:]):
+        current_raw_dps = _normalize_json_field(current["raw_dps"])
+        following_raw_dps = _normalize_json_field(following["raw_dps"])
+        current_kwh = _read_energy_counter_kwh(current_raw_dps, dp_key, scale)
+        following_kwh = _read_energy_counter_kwh(following_raw_dps, dp_key, scale)
+        if current_kwh is None or following_kwh is None:
+            continue
+
+        has_counter_pairs = True
+        total_kwh += max(following_kwh - current_kwh, 0.0)
+
+    if not has_counter_pairs:
+        return None
+    return total_kwh
+
+
 def _get_energy_counter_meta(config: AppConfig, slug: str) -> tuple[str, int] | None:
     for capability in get_device_capabilities(config, slug):
         code = str(capability.get("capability_code") or "")
@@ -826,14 +848,9 @@ def _build_series_from_energy_counter(
         current_dt = _parse_dt(current["captured_at"])
         group = grouped[_bucket_start(current_dt, bucket)]
 
-        current_raw_dps = _normalize_json_field(current["raw_dps"])
-        following_raw_dps = _normalize_json_field(following["raw_dps"])
-        current_kwh = _read_energy_counter_kwh(current_raw_dps, dp_key, scale)
-        following_kwh = _read_energy_counter_kwh(following_raw_dps, dp_key, scale)
-        if current_kwh is None or following_kwh is None:
+        delta_kwh = _integrate_energy_counter_kwh([current, following], dp_key, scale)
+        if delta_kwh is None:
             continue
-
-        delta_kwh = max(following_kwh - current_kwh, 0.0)
         group["energy_kwh"] += delta_kwh
 
     return [
@@ -844,6 +861,22 @@ def _build_series_from_energy_counter(
         }
         for bucket_start, values in sorted(grouped.items())
     ]
+
+
+def _calculate_energy_wh(config: AppConfig, slug: str, rows: list[dict[str, Any]]) -> float:
+    integrated_wh = _integrate_energy_wh(rows)
+    energy_counter_meta = _get_energy_counter_meta(config, slug)
+    if not energy_counter_meta:
+        return integrated_wh
+
+    counter_kwh = _integrate_energy_counter_kwh(rows, *energy_counter_meta)
+    if counter_kwh is None:
+        return integrated_wh
+
+    counter_wh = counter_kwh * 1000.0
+    if counter_wh > max(integrated_wh * 5, 10.0):
+        return counter_wh
+    return integrated_wh
 
 
 def _prepare_chart_series(
@@ -918,7 +951,7 @@ def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetim
             continue
         latest = get_latest_sample(config, device["slug"])
         samples = get_samples(config, device["slug"], month_start, now)
-        device_energy_wh = _integrate_energy_wh(samples)
+        device_energy_wh = _calculate_energy_wh(config, device["slug"], samples)
         total_energy_wh += device_energy_wh
         current_power_w = float(latest["power_w"]) if latest else 0.0
         total_power_w += current_power_w
@@ -958,7 +991,7 @@ def get_device_stats(
     latest = get_latest_sample(config, slug)
     series = _build_series(rows, bucket)
     chart_series, chart = _prepare_chart_series(config, slug, rows, start, end, period, bucket, series)
-    total_energy_wh = _integrate_energy_wh(rows)
+    total_energy_wh = _calculate_energy_wh(config, slug, rows)
     average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
     peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)
     voltages = [float(row["voltage_v"]) for row in rows if row["voltage_v"] is not None]
