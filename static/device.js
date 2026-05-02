@@ -202,8 +202,8 @@ if (page) {
                 backgroundColor: 'rgba(31, 32, 34, 0.92)',
                 borderWidth: 0,
                 textStyle: {
-                    color: '#fff',
-                    fontFamily: 'Trebuchet MS, Segoe UI, sans-serif',
+                    color: '#d7ecff',
+                    fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
                 },
                 formatter: (params) => {
                     const payload = Array.isArray(params) ? params[0] : params;
@@ -216,11 +216,12 @@ if (page) {
                 data: series.map((item) => item.axis_label),
                 boundaryGap: true,
                 axisTick: { alignWithLabel: true },
-                axisLine: { lineStyle: { color: 'rgba(31, 32, 34, 0.18)' } },
+                    axisLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.4)' } },
                 axisLabel: {
                     interval: 0,
-                    color: '#585552',
+                        color: '#94cfff',
                     fontSize: 12,
+                        fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
                 },
             },
             yAxis: {
@@ -228,29 +229,30 @@ if (page) {
                 min: 0,
                 splitNumber: 4,
                 axisLabel: {
-                    color: '#585552',
+                        color: '#7cbcff',
+                        fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
                     formatter: (value) => `${formatNumber(Number(value))} ${chartConfig.unit}`,
                 },
                 splitLine: {
                     lineStyle: {
-                        color: 'rgba(31, 32, 34, 0.1)',
+                            color: 'rgba(112, 183, 255, 0.12)',
                     },
                 },
             },
             series: [
                 {
                     type: 'bar',
-                    barWidth: '58%',
+                        barWidth: '42%',
                     itemStyle: {
                         color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: '#ba5b2e' },
-                            { offset: 1, color: '#7d3516' },
+                                { offset: 0, color: '#7fd0ff' },
+                                { offset: 1, color: '#2d78b5' },
                         ]),
-                        borderRadius: [10, 10, 0, 0],
+                            borderRadius: [0, 0, 0, 0],
                     },
                     emphasis: {
                         itemStyle: {
-                            color: '#7d3516',
+                                color: '#a1deff',
                         },
                     },
                     data: series.map((item) => ({

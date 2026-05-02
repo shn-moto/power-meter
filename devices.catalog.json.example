@@ -4,6 +4,7 @@
     "name": "Breaker",
     "room": "Electrical room",
     "image_label": "Main breaker",
+    "image_id": "main-breaker",
     "device_id": "bf47402ca7399b6eef6bw7",
     "local_key": "or.?zwbg/=-mwik@",
     "ip_address": "192.168.1.59",

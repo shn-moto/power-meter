@@ -7,19 +7,19 @@
         <h1>Учет Электроэнергии</h1>
     </div>
     <div class="hero-grid stats-grid">
-        <article class="stat-card">
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Текущая нагрузка дома</span>
             <strong class="stat-value" data-summary-current-power>{{ summary.current_power_kw }} кВт</strong>
         </article>
-        <article class="stat-card">
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Энергия за месяц</span>
             <strong class="stat-value" data-summary-month-energy>{{ summary.month_energy_kwh }} кВт·ч</strong>
         </article>
-        <article class="stat-card">
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Оценка стоимости</span>
             <strong class="stat-value" data-summary-estimated-cost>{{ summary.estimated_cost }}</strong>
         </article>
-        <article class="stat-card">
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Устройств онлайн</span>
             <strong class="stat-value" data-summary-device-count>{{ summary.device_count }}</strong>
         </article>
@@ -34,7 +34,11 @@
         {% for device in summary.devices %}
         <article class="device-card" data-device-card data-device-slug="{{ device.slug }}">
             <a class="device-image" href="/devices/{{ device.slug }}" aria-label="Открыть детали устройства {{ device.name }}">
-                <span>{{ device.image_label }}</span>
+                {% if device.image_url %}
+                <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
+                {% else %}
+                <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
+                {% endif %}
             </a>
             <div class="device-card-body">
                 <div>

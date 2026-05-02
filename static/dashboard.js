@@ -20,9 +20,16 @@ if (dashboardPage) {
         node.classList.add('reading-status', `is-${status || 'error'}`);
     };
 
+    const renderDeviceMedia = (device) => {
+        if (device.image_url) {
+            return `<img class="device-photo" src="${escapeHtml(device.image_url)}" alt="${escapeHtml(device.name)}">`;
+        }
+        return `<div class="device-placeholder device-placeholder-${escapeHtml(device.device_kind || 'switch')}" aria-hidden="true"></div>`;
+    };
+
     const renderCardMarkup = (device) => `
         <a class="device-image" href="/devices/${encodeURIComponent(device.slug)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
-            <span>${escapeHtml(device.image_label)}</span>
+            ${renderDeviceMedia(device)}
         </a>
         <div class="device-card-body">
             <div>
@@ -47,16 +54,7 @@ if (dashboardPage) {
     `;
 
     const updateCard = (card, device) => {
-        card.querySelector('.device-image').setAttribute('href', `/devices/${encodeURIComponent(device.slug)}`);
-        card.querySelector('.device-image').setAttribute('aria-label', `Открыть детали устройства ${device.name}`);
-        card.querySelector('.device-image span').textContent = device.image_label;
-        card.querySelector('[data-device-room]').textContent = device.room;
-        card.querySelector('[data-device-name]').textContent = device.name;
-        card.querySelector('[data-device-current-power]').textContent = `${device.current_power_kw} кВт`;
-        card.querySelector('[data-device-month-energy]').textContent = `${device.month_energy_kwh} кВт·ч`;
-        const lastSeen = card.querySelector('[data-device-last-seen]');
-        lastSeen.textContent = device.last_seen || 'Пока нет данных';
-        applyReadingStatus(lastSeen, device.last_seen_status);
+        card.innerHTML = renderCardMarkup(device);
     };
 
     const syncDevices = (devices) => {

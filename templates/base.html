@@ -9,10 +9,13 @@
 <body>
     <div class="page-shell">
         <header class="topbar">
-            <a class="topbar-brand" href="/">Панель умного дома</a>
+            <span class="topbar-brand">HOME POWER METER</span>
             <nav class="topbar-nav">
-                <a class="topbar-link" href="/">Учет энергии</a>
+                {% if request.url.path == '/' %}
                 <a class="topbar-button" href="/connect-device">Подключить устройство</a>
+                {% else %}
+                <a class="topbar-link" href="/">На главный экран</a>
+                {% endif %}
             </nav>
         </header>
         <main>

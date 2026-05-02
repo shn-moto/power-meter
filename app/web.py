@@ -37,7 +37,9 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-12"
+templates.env.globals["static_asset_version"] = "20260502-13"
+
+DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -114,6 +116,29 @@ def _month_window(config: AppConfig) -> tuple[datetime, datetime]:
 
 def _format_month_label(value: datetime) -> str:
     return f"{RUSSIAN_MONTHS[value.month]} {value.year}"
+
+
+def _resolve_device_image_url(image_id: str | None) -> str | None:
+    if not image_id:
+        return None
+
+    safe_image_id = Path(image_id).name
+    image_directory = BASE_DIR / "static" / "device-images"
+    for extension in DEVICE_IMAGE_EXTENSIONS:
+        candidate = image_directory / f"{safe_image_id}{extension}"
+        if candidate.exists():
+            return f"/static/device-images/{safe_image_id}{extension}"
+    return None
+
+
+def _decorate_device_media(device: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(device)
+    enriched["image_url"] = _resolve_device_image_url(str(enriched.get("image_id") or "").strip() or None)
+    return enriched
+
+
+def _decorate_devices_media(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_decorate_device_media(device) for device in devices]
 
 
 def _format_decimal(value: float) -> str:
@@ -364,6 +389,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
     summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
+    summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -386,7 +412,7 @@ async def device_details(request: Request, slug: str) -> HTMLResponse:
         request=request,
         name="device.html",
         context={
-            "device": dict(device),
+            "device": _decorate_device_media(dict(device)),
             "page_title": f"{device['name']} - детали",
         },
     )
@@ -417,6 +443,7 @@ async def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     month_start, now = _month_window(config)
     summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now, dict(request.app.state.live_samples))
+    summary["devices"] = _decorate_devices_media(summary.get("devices", []))
     return JSONResponse(jsonable_encoder(summary))
 
 

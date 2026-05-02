@@ -21,6 +21,7 @@ class TuyaDeviceConfig:
     power_dps_key: str
     power_scale: float
     voltage_dps_keys: tuple[str, ...]
+    image_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -113,6 +114,7 @@ def _parse_device_record(
     slug = str(record.get("slug") or _slugify(name)).strip() or _slugify(name)
     room = str(record.get("room") or fallback_room).strip() or fallback_room
     image_label = str(record.get("image_label") or fallback_label).strip() or fallback_label
+    image_id = str(record.get("image_id") or "").strip() or None
     device_id = str(record.get("device_id") or record.get("id") or "").strip()
     local_key = str(record.get("local_key") or record.get("key") or "").strip()
     ip_address = str(record.get("ip_address") or record.get("ip") or "").strip()
@@ -143,6 +145,7 @@ def _parse_device_record(
         power_dps_key=power_dps_key,
         power_scale=power_scale,
         voltage_dps_keys=voltage_dps_keys,
+        image_id=image_id,
     )
 
 

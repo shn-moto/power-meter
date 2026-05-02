@@ -280,6 +280,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     else:
         room = resolved_room or DEFAULT_ROOM_NAME
     image_label = existing["image_label"] if existing else name
+    image_id = str(existing.get("image_id") or "").strip() or None if existing else None
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
     power_dps_key, power_scale, voltage_dps_keys = _extract_power_profile(dps_result)
@@ -303,6 +304,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         name=name,
         room=room,
         image_label=image_label,
+        image_id=image_id,
         device_id=clean_device_id,
         category_code=str(device_info.get("category") or device_info_v2.get("category") or "") or None,
         device_kind=kind,
