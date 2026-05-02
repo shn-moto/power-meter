@@ -415,8 +415,12 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT slug, name, room, image_label, device_kind, is_energy_meter, product_name, category_code
-                FROM devices
+                SELECT d.slug, d.name, d.room, d.image_label, d.device_kind, d.is_energy_meter,
+                       d.product_name, d.category_code,
+                       COALESCE(c.ip_address, '') AS ip_address,
+                       (COALESCE(c.ip_address, '') <> '') AS connection_ready
+                FROM devices d
+                LEFT JOIN device_connections c ON c.device_slug = d.slug
                 ORDER BY name
                 """
             )

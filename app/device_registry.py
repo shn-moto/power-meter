@@ -35,6 +35,9 @@ ENERGY_CODES = {
 LIGHT_CODES = {"bright_value", "temp_value", "colour_data", "colour_data_v2", "scene_data", "work_mode"}
 SENSOR_CODES = {"temp_current", "humidity_value", "pir", "smoke_sensor_state", "doorcontact_state", "va_battery"}
 PRIVATE_TUYA_PORTS = (6668, 6669, 7000)
+LOCAL_DISCOVERY_ERROR_MESSAGE = (
+    "Не удалось найти устройство в локальной сети. Убедитесь, что сервер и устройство в одной сети, а само устройство включено."
+)
 
 
 def _slugify(value: str) -> str:
@@ -199,9 +202,7 @@ def _discover_local_endpoint(config: AppConfig, device_id: str, local_key: str) 
         if version is not None:
             return ip_address, version
 
-    raise ConfigError(
-        "Не удалось найти устройство в локальной сети. Убедитесь, что сервер и устройство в одной сети, а само устройство включено."
-    )
+    raise ConfigError(LOCAL_DISCOVERY_ERROR_MESSAGE)
 
 
 def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
@@ -242,7 +243,18 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
     power_dps_key, power_scale, voltage_dps_keys = _extract_power_profile(dps_result)
-    ip_address, version = _discover_local_endpoint(config, clean_device_id, local_key)
+    ip_address = ""
+    version = 3.5
+    connection_ready = False
+    connection_message = ""
+    try:
+        ip_address, version = _discover_local_endpoint(config, clean_device_id, local_key)
+        connection_ready = True
+    except ConfigError as error:
+        if str(error) != LOCAL_DISCOVERY_ERROR_MESSAGE:
+            raise
+        connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
+
     capabilities = _build_capabilities(dps_result)
 
     upsert_managed_device(
@@ -281,9 +293,11 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         "device_kind": kind,
         "device_kind_label": DEVICE_KIND_LABELS.get(kind, kind),
         "is_energy_meter": is_energy_meter,
-        "ip_address": ip_address,
+        "ip_address": ip_address or None,
         "version": version,
         "product_name": stored.get("product_name") if stored else None,
         "category_code": stored.get("category_code") if stored else None,
         "capability_count": len(capabilities),
+        "connection_ready": connection_ready,
+        "connection_message": connection_message,
     }

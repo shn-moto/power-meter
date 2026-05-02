@@ -32,16 +32,22 @@ if (connectForm) {
                 throw new Error(payload.detail || 'Не удалось подключить устройство.');
             }
 
-            setFeedback(
-                `
+            const message = payload.connection_ready
+                ? `
                 <strong>${payload.name}</strong> подключено.<br>
                 Тип: ${payload.device_kind_label}.<br>
                 Локальный IP: ${payload.ip_address}.<br>
                 Версия протокола: ${payload.version}.<br>
                 Определено возможностей: ${payload.capability_count}.
-                `,
-                'success'
-            );
+                `
+                : `
+                <strong>${payload.name}</strong> добавлено в систему.<br>
+                Тип: ${payload.device_kind_label}.<br>
+                Определено возможностей: ${payload.capability_count}.<br>
+                ${payload.connection_message || 'Локальное обнаружение пока не завершено.'}
+                `;
+
+            setFeedback(message, payload.connection_ready ? 'success' : 'pending');
             setTimeout(() => window.location.reload(), 1200);
         } catch (error) {
             setFeedback(error.message, 'error');

@@ -41,6 +41,11 @@
                 <div class="registry-meta">
                     <span>{{ device.room }}</span>
                     <span>{{ device.category_code or 'Без категории' }}</span>
+                    {% if device.connection_ready %}
+                    <span>LAN: {{ device.ip_address }}</span>
+                    {% else %}
+                    <span>Ожидает локального обнаружения</span>
+                    {% endif %}
                 </div>
             </article>
             {% endfor %}
