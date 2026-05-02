@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="connect-layout">
+    <article class="connect-card">
+        <div class="section-heading section-heading-stack">
+            <div>
+                <p class="eyebrow">Tuya Cloud + Local Key</p>
+                <h1>Подключить устройство</h1>
+                <p class="hero-copy">Введите только device ID. Приложение само получит local key, категорию, функции и попробует найти устройство в локальной сети.</p>
+            </div>
+        </div>
+
+        <form class="connect-form" data-connect-form>
+            <label>
+                Идентификатор устройства
+                <input type="text" name="device_id" placeholder="Например, 33741346d8f15bcb2282" required>
+            </label>
+            <button type="submit">Подключить устройство</button>
+        </form>
+
+        <div class="connect-feedback" data-connect-feedback hidden></div>
+    </article>
+
+    <article class="connect-card">
+        <div class="section-heading section-heading-stack">
+            <div>
+                <h2>Устройства в системе</h2>
+                <p>На главной странице показываются только устройства со счетчиком энергии.</p>
+            </div>
+        </div>
+
+        {% if devices %}
+        <div class="registry-grid">
+            {% for device in devices %}
+            <article class="registry-item">
+                <div>
+                    <h3>{{ device.name }}</h3>
+                    <p class="device-room">{{ kind_labels.get(device.device_kind, device.device_kind) }}{% if device.is_energy_meter %} · С энергомониторингом{% endif %}</p>
+                </div>
+                <div class="registry-meta">
+                    <span>{{ device.room }}</span>
+                    <span>{{ device.category_code or 'Без категории' }}</span>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="hero-copy">Пока нет подключенных устройств.</p>
+        {% endif %}
+    </article>
+</section>
+
+<script src="/static/connect-device.js" defer></script>
+{% endblock %}

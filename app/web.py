@@ -9,9 +9,22 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
-from config import AppConfig, TuyaDeviceConfig, load_app_config, load_devices
-from app.storage import DeviceSample, get_dashboard_summary, get_device_row, get_device_stats, init_db, pick_bucket, save_sample, sync_devices
+from app.device_registry import DEVICE_KIND_LABELS, connect_device
+from config import AppConfig, load_app_config, load_devices
+from app.storage import (
+    DeviceSample,
+    get_dashboard_summary,
+    get_device_row,
+    get_device_rows,
+    get_device_stats,
+    get_polling_devices,
+    init_db,
+    pick_bucket,
+    save_sample,
+    sync_devices,
+)
 from app.tuya_service import build_sample
 
 
@@ -32,6 +45,10 @@ RUSSIAN_MONTHS = {
     11: "Ноябрь",
     12: "Декабрь",
 }
+
+
+class ConnectDevicePayload(BaseModel):
+    device_id: str
 
 
 def _get_timezone(config: AppConfig) -> ZoneInfo:
@@ -74,9 +91,9 @@ def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_r
 
 async def _poll_loop(app: FastAPI) -> None:
     config: AppConfig = app.state.app_config
-    devices: list[TuyaDeviceConfig] = app.state.devices
 
     while True:
+        devices = await asyncio.to_thread(get_polling_devices, config)
         for device in devices:
             try:
                 captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
@@ -100,9 +117,8 @@ async def _poll_loop(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.app_config = load_app_config()
-    app.state.devices = load_devices()
     await asyncio.to_thread(init_db, app.state.app_config)
-    await asyncio.to_thread(sync_devices, app.state.app_config, app.state.devices)
+    await asyncio.to_thread(sync_devices, app.state.app_config, load_devices())
     app.state.poller = asyncio.create_task(_poll_loop(app))
     yield
     app.state.poller.cancel()
@@ -147,6 +163,21 @@ async def device_details(request: Request, slug: str) -> HTMLResponse:
     )
 
 
+@app.get("/connect-device", response_class=HTMLResponse)
+async def connect_device_page(request: Request) -> HTMLResponse:
+    config: AppConfig = request.app.state.app_config
+    devices = await asyncio.to_thread(get_device_rows, config)
+    return templates.TemplateResponse(
+        request=request,
+        name="connect_device.html",
+        context={
+            "devices": devices,
+            "kind_labels": DEVICE_KIND_LABELS,
+            "page_title": "Подключить устройство",
+        },
+    )
+
+
 @app.get("/health")
 async def healthcheck() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -158,6 +189,16 @@ async def summary_api(request: Request) -> JSONResponse:
     month_start, now = _month_window(config)
     summary = await asyncio.to_thread(get_dashboard_summary, config, month_start, now)
     return JSONResponse(jsonable_encoder(summary))
+
+
+@app.post("/api/devices/connect")
+async def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    try:
+        result = await asyncio.to_thread(connect_device, config, payload.device_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return JSONResponse(jsonable_encoder(result))
 
 
 @app.get("/api/devices/{slug}/stats")

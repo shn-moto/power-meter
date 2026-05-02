@@ -2,10 +2,11 @@
 
 ## Repository-based deployment
 
-Clone the repository on the Linux server and keep the production `.env` only on the server.
+Connect to the server as the dedicated `powermeter` user and keep the production `.env` only on the server.
 
 ```bash
-git clone git@github.com:shn-moto/power-meter.git
+ssh powermeter@your-server
+git clone https://github.com/shn-moto/power-meter.git
 cd power-meter
 cp .env.example .env
 python create_database.py
@@ -43,14 +44,16 @@ The sync stores all fetched cloud events in `device_events` and also writes norm
 
 ## Cloudflare tunnel
 
-On the Linux host install `cloudflared`, then run the service install using the tunnel token as an environment variable instead of hardcoding it into the repository.
+Run the tunnel as a Docker container under the same `powermeter` account. This keeps deployment fully inside the project user and avoids a separate root-managed `cloudflared` service.
 
 ```bash
+ssh powermeter@your-server
+cd ~/power-meter
 export CLOUDFLARE_TUNNEL_TOKEN='paste-your-token-here'
 ./deploy/install-cloudflared-service.sh
 ```
 
-If your existing tunnel is already configured in Cloudflare to route `power.shunkov.org` to `http://localhost:8484`, no extra ingress file is required.
+If your existing tunnel is already configured in Cloudflare to route `power.shunkov.org` to `http://localhost:8484`, no extra ingress file is required. The script starts `cloudflare/cloudflared` with `--network host`, so `localhost:8484` resolves to the app container bound on the server.
 
 ## Environment
 

@@ -42,6 +42,41 @@ def init_db(config: AppConfig) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS category_code TEXT",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_kind TEXT NOT NULL DEFAULT 'switch'",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_energy_meter BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS product_id TEXT",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS product_name TEXT",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS icon TEXT",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS onboarding_source TEXT NOT NULL DEFAULT 'config'",
+        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_id_unique ON devices(device_id)",
+        """
+        CREATE TABLE IF NOT EXISTS device_connections (
+            device_slug TEXT PRIMARY KEY REFERENCES devices(slug) ON DELETE CASCADE,
+            local_key TEXT NOT NULL,
+            ip_address TEXT NOT NULL,
+            version DOUBLE PRECISION NOT NULL DEFAULT 3.5,
+            power_dps_key TEXT,
+            power_scale DOUBLE PRECISION NOT NULL DEFAULT 1,
+            voltage_dps_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS device_capabilities (
+            id BIGSERIAL PRIMARY KEY,
+            device_slug TEXT NOT NULL REFERENCES devices(slug) ON DELETE CASCADE,
+            capability_source TEXT NOT NULL,
+            capability_code TEXT NOT NULL,
+            capability_name TEXT,
+            value_type TEXT,
+            dp_id INTEGER,
+            values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (device_slug, capability_source, capability_code)
+        )
+        """,
         """
         CREATE TABLE IF NOT EXISTS samples (
             id BIGSERIAL PRIMARY KEY,
@@ -79,6 +114,8 @@ def init_db(config: AppConfig) -> None:
             UNIQUE (device_slug, artifact_type)
         )
         """,
+        "CREATE INDEX IF NOT EXISTS idx_device_connections_ip ON device_connections(ip_address)",
+        "CREATE INDEX IF NOT EXISTS idx_device_capabilities_device ON device_capabilities(device_slug)",
         "CREATE INDEX IF NOT EXISTS idx_samples_device_time ON samples(device_slug, captured_at)",
         "CREATE INDEX IF NOT EXISTS idx_device_events_device_time ON device_events(device_slug, event_at)",
         "CREATE INDEX IF NOT EXISTS idx_device_cloud_artifacts_type ON device_cloud_artifacts(device_slug, artifact_type)",
@@ -94,26 +131,168 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
-            """
-            INSERT INTO devices (
-                slug, name, room, image_label, device_id, power_dps_key, power_scale, voltage_dps_keys
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(slug) DO NOTHING
-            """,
-            [
+                """
+                INSERT INTO devices (
+                    slug, name, room, image_label, device_id, category_code, device_kind,
+                    is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
+                    power_dps_key, power_scale, voltage_dps_keys
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                ON CONFLICT(slug) DO NOTHING
+                """,
+                [
+                    (
+                        device.slug,
+                        device.name,
+                        device.room,
+                        device.image_label,
+                        device.device_id,
+                        None,
+                        "meter",
+                        True,
+                        None,
+                        None,
+                        None,
+                        "config",
+                        device.power_dps_key,
+                        device.power_scale,
+                        Jsonb(list(device.voltage_dps_keys)),
+                    )
+                    for device in devices
+                ],
+            )
+            cursor.executemany(
+                """
+                INSERT INTO device_connections (
+                    device_slug, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(device_slug) DO NOTHING
+                """,
+                [
+                    (
+                        device.slug,
+                        device.local_key,
+                        device.ip_address,
+                        device.version,
+                        device.power_dps_key,
+                        device.power_scale,
+                        Jsonb(list(device.voltage_dps_keys)),
+                    )
+                    for device in devices
+                ],
+            )
+        connection.commit()
+
+
+def upsert_managed_device(
+    config: AppConfig,
+    *,
+    slug: str,
+    name: str,
+    room: str,
+    image_label: str,
+    device_id: str,
+    category_code: str | None,
+    device_kind: str,
+    is_energy_meter: bool,
+    product_id: str | None,
+    product_name: str | None,
+    icon: str | None,
+    onboarding_source: str,
+    local_key: str,
+    ip_address: str,
+    version: float,
+    power_dps_key: str | None,
+    power_scale: float,
+    voltage_dps_keys: list[str] | tuple[str, ...],
+    capabilities: list[dict[str, Any]],
+) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO devices (
+                    slug, name, room, image_label, device_id, category_code, device_kind,
+                    is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
+                    power_dps_key, power_scale, voltage_dps_keys
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                ON CONFLICT(slug) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    category_code = EXCLUDED.category_code,
+                    device_kind = EXCLUDED.device_kind,
+                    is_energy_meter = EXCLUDED.is_energy_meter,
+                    product_id = EXCLUDED.product_id,
+                    product_name = EXCLUDED.product_name,
+                    icon = EXCLUDED.icon,
+                    onboarding_source = EXCLUDED.onboarding_source,
+                    updated_at = NOW(),
+                    power_dps_key = EXCLUDED.power_dps_key,
+                    power_scale = EXCLUDED.power_scale,
+                    voltage_dps_keys = EXCLUDED.voltage_dps_keys
+                """,
                 (
-                    device.slug,
-                    device.name,
-                    device.room,
-                    device.image_label,
-                    device.device_id,
-                    device.power_dps_key,
-                    device.power_scale,
-                    Jsonb(list(device.voltage_dps_keys)),
+                    slug,
+                    name,
+                    room,
+                    image_label,
+                    device_id,
+                    category_code,
+                    device_kind,
+                    is_energy_meter,
+                    product_id,
+                    product_name,
+                    icon,
+                    onboarding_source,
+                    power_dps_key,
+                    power_scale,
+                    Jsonb(list(voltage_dps_keys)),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO device_connections (
+                    device_slug, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(device_slug) DO UPDATE SET
+                    local_key = EXCLUDED.local_key,
+                    ip_address = EXCLUDED.ip_address,
+                    version = EXCLUDED.version,
+                    power_dps_key = EXCLUDED.power_dps_key,
+                    power_scale = EXCLUDED.power_scale,
+                    voltage_dps_keys = EXCLUDED.voltage_dps_keys,
+                    updated_at = NOW()
+                """,
+                (
+                    slug,
+                    local_key,
+                    ip_address,
+                    version,
+                    power_dps_key,
+                    power_scale,
+                    Jsonb(list(voltage_dps_keys)),
+                ),
+            )
+            cursor.execute("DELETE FROM device_capabilities WHERE device_slug = %s", (slug,))
+            if capabilities:
+                cursor.executemany(
+                    """
+                    INSERT INTO device_capabilities (
+                        device_slug, capability_source, capability_code, capability_name,
+                        value_type, dp_id, values_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            slug,
+                            capability.get("capability_source") or "status",
+                            capability.get("capability_code") or "unknown",
+                            capability.get("capability_name"),
+                            capability.get("value_type"),
+                            capability.get("dp_id"),
+                            Jsonb(capability.get("values_json") or {}),
+                        )
+                        for capability in capabilities
+                    ],
                 )
-                for device in devices
-            ],
-        )
         connection.commit()
 
 
@@ -234,7 +413,13 @@ def _format_display_datetime(config: AppConfig, value: datetime | str | None) ->
 def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT slug, name, room, image_label FROM devices ORDER BY name")
+            cursor.execute(
+                """
+                SELECT slug, name, room, image_label, device_kind, is_energy_meter, product_name, category_code
+                FROM devices
+                ORDER BY name
+                """
+            )
             return cursor.fetchall()
 
 
@@ -242,10 +427,69 @@ def get_device_row(config: AppConfig, slug: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT slug, name, room, image_label FROM devices WHERE slug = %s",
+                """
+                SELECT slug, name, room, image_label, device_kind, is_energy_meter,
+                       product_name, category_code, product_id, icon
+                FROM devices WHERE slug = %s
+                """,
                 (slug,),
             )
             return cursor.fetchone()
+
+
+def get_device_by_id(config: AppConfig, device_id: str) -> dict[str, Any] | None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT slug, name, room, image_label, device_id FROM devices WHERE device_id = %s",
+                (device_id,),
+            )
+            return cursor.fetchone()
+
+
+def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.slug, d.name, d.room, d.image_label, d.device_id,
+                       c.local_key, c.ip_address, c.version, c.power_dps_key,
+                       c.power_scale, c.voltage_dps_keys
+                FROM devices d
+                JOIN device_connections c ON c.device_slug = d.slug
+                WHERE c.local_key <> '' AND c.ip_address <> ''
+                ORDER BY d.name
+                """
+            )
+            rows = cursor.fetchall()
+
+    devices: list[TuyaDeviceConfig] = []
+    for row in rows:
+        devices.append(
+            TuyaDeviceConfig(
+                slug=row["slug"],
+                name=row["name"],
+                room=row["room"],
+                image_label=row["image_label"],
+                device_id=row["device_id"],
+                local_key=row["local_key"],
+                ip_address=row["ip_address"],
+                version=float(row["version"]),
+                power_dps_key=str(row["power_dps_key"] or ""),
+                power_scale=float(row["power_scale"] or 1),
+                voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
+            )
+        )
+    return devices
+
+
+def get_known_local_ips(config: AppConfig) -> list[str]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT ip_address FROM device_connections WHERE ip_address <> '' ORDER BY ip_address"
+            )
+            return [row["ip_address"] for row in cursor.fetchall()]
 
 
 def get_samples(config: AppConfig, slug: str, start: datetime, end: datetime) -> list[dict[str, Any]]:
@@ -331,6 +575,8 @@ def get_dashboard_summary(config: AppConfig, month_start: datetime, now: datetim
     total_power_w = 0.0
 
     for device in get_device_rows(config):
+        if not device.get("is_energy_meter"):
+            continue
         latest = get_latest_sample(config, device["slug"])
         samples = get_samples(config, device["slug"], month_start, now)
         device_energy_wh = _integrate_energy_wh(samples)
