@@ -43,12 +43,7 @@
             </form>
         </div>
         <div class="chart-meta" data-chart-meta>Потребление по дням</div>
-        <div class="chart-frame">
-            <svg viewBox="0 0 960 320" class="chart-svg" data-chart>
-                <g data-chart-grid></g>
-                <g data-chart-y-axis></g>
-                <g data-chart-bars></g>
-                <g data-chart-x-axis></g>
+                <div class="chart-canvas" data-chart></div>
             </svg>
             <div class="chart-tooltip" data-chart-tooltip hidden></div>
             <div class="chart-empty" data-chart-empty hidden>За этот период данные пока не собраны.</div>
@@ -91,5 +86,6 @@
     </form>
 </dialog>
 
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js" defer></script>
 <script src="/static/device.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

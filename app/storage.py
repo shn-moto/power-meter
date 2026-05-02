@@ -1,3 +1,4 @@
+import calendar
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -10,6 +11,37 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from config import AppConfig, TuyaDeviceConfig
+
+
+RUSSIAN_MONTH_LABELS_SHORT = {
+    1: "янв",
+    2: "фев",
+    3: "мар",
+    4: "апр",
+    5: "май",
+    6: "июн",
+    7: "июл",
+    8: "авг",
+    9: "сен",
+    10: "окт",
+    11: "ноя",
+    12: "дек",
+}
+
+RUSSIAN_MONTH_LABELS_FULL = {
+    1: "Январь",
+    2: "Февраль",
+    3: "Март",
+    4: "Апрель",
+    5: "Май",
+    6: "Июнь",
+    7: "Июль",
+    8: "Август",
+    9: "Сентябрь",
+    10: "Октябрь",
+    11: "Ноябрь",
+    12: "Декабрь",
+}
 
 
 @dataclass(slots=True)
@@ -680,6 +712,55 @@ def _next_bucket_start(dt: datetime, bucket: str) -> datetime:
     return dt + timedelta(minutes=15)
 
 
+def _build_fixed_bucket_sequence(start: datetime, period: str, bucket: str) -> list[datetime]:
+    if period == "day":
+        day_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        return [day_start + timedelta(hours=hour) for hour in range(24)]
+
+    if period == "week":
+        week_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        return [week_start + timedelta(days=day_index) for day_index in range(7)]
+
+    if period == "month":
+        month_start = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        days_in_month = calendar.monthrange(month_start.year, month_start.month)[1]
+        return [month_start + timedelta(days=day_index) for day_index in range(days_in_month)]
+
+    if period == "year":
+        year_start = start.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return [year_start.replace(month=month) for month in range(1, 13)]
+
+    return []
+
+
+def _build_custom_bucket_sequence(start: datetime, end: datetime, bucket: str) -> list[datetime]:
+    sequence: list[datetime] = []
+    current = _bucket_start(start, bucket)
+    last = _bucket_start(end, bucket)
+    while current <= last:
+        sequence.append(current)
+        current = _next_bucket_start(current, bucket)
+    return sequence
+
+
+def _format_axis_label(dt: datetime, bucket: str, period: str) -> str:
+    if bucket == "hour":
+        return dt.strftime("%H")
+    if bucket == "day":
+        if period == "week":
+            return dt.strftime("%d.%m")
+        return str(dt.day)
+    return RUSSIAN_MONTH_LABELS_SHORT[dt.month]
+
+
+def _format_tooltip_label(dt: datetime, bucket: str, period: str) -> str:
+    if bucket == "hour":
+        return dt.strftime("%d.%m.%Y %H:00")
+    if bucket == "day":
+        return dt.strftime("%d.%m.%Y")
+    return f"{RUSSIAN_MONTH_LABELS_FULL[dt.month]} {dt.year}"
+
+
 def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
     if len(rows) < 2:
         return []
@@ -771,6 +852,7 @@ def _prepare_chart_series(
     rows: list[dict[str, Any]],
     start: datetime,
     end: datetime,
+    period: str,
     bucket: str,
     series: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -780,6 +862,7 @@ def _prepare_chart_series(
         "unit": "кВт·ч",
         "label": "Потребление",
         "bucket": bucket,
+        "period": period,
     }
 
     max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
@@ -798,10 +881,13 @@ def _prepare_chart_series(
         for item in series
     }
 
+    if period in {"day", "week", "month", "year"}:
+        bucket_sequence = _build_fixed_bucket_sequence(start, period, bucket)
+    else:
+        bucket_sequence = _build_custom_bucket_sequence(start, end, bucket)
+
     filled_series: list[dict[str, Any]] = []
-    current = _bucket_start(start, bucket)
-    last = _bucket_start(end, bucket)
-    while current <= last:
+    for current in bucket_sequence:
         filled_series.append(
             chart_series_by_bucket.get(
                 current,
@@ -813,7 +899,11 @@ def _prepare_chart_series(
                 },
             )
         )
-        current = _next_bucket_start(current, bucket)
+
+    for item in filled_series:
+        bucket_dt = _parse_dt(item["timestamp"])
+        item["axis_label"] = _format_axis_label(bucket_dt, bucket, period)
+        item["tooltip_label"] = _format_tooltip_label(bucket_dt, bucket, period)
 
     return filled_series, chart
 
@@ -861,12 +951,13 @@ def get_device_stats(
     slug: str,
     start: datetime,
     end: datetime,
+    period: str,
     bucket: str,
 ) -> dict[str, Any]:
     rows = get_samples(config, slug, start, end)
     latest = get_latest_sample(config, slug)
     series = _build_series(rows, bucket)
-    chart_series, chart = _prepare_chart_series(config, slug, rows, start, end, bucket, series)
+    chart_series, chart = _prepare_chart_series(config, slug, rows, start, end, period, bucket, series)
     total_energy_wh = _integrate_energy_wh(rows)
     average_power_w = sum(float(row["power_w"]) for row in rows) / max(len(rows), 1) if rows else 0.0
     peak_power_w = max((float(row["power_w"]) for row in rows), default=0.0)

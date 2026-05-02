@@ -35,7 +35,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260502-8"
+templates.env.globals["static_asset_version"] = "20260502-9"
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -492,7 +492,7 @@ async def device_stats_api(
 
     range_start, range_end = _resolve_period(config, period, start, end)
     bucket = pick_bucket(range_start, range_end, period)
-    stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, bucket)
+    stats = await asyncio.to_thread(get_device_stats, config, slug, range_start, range_end, period, bucket)
     stats = _apply_live_stats(config, stats, request.app.state.live_samples.get(slug))
     capabilities = await asyncio.to_thread(get_device_capabilities, config, slug)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
