@@ -168,7 +168,7 @@ def load_app_config() -> AppConfig:
         sample_write_interval_seconds=int(_read_value(dotenv_values, "SAMPLE_WRITE_INTERVAL_SECONDS", "5")),
         database_url=_read_required_value(dotenv_values, "DATABASE_URL"),
         timezone=_read_value(dotenv_values, "APP_TIMEZONE", "Europe/Warsaw"),
-        tariff_per_kwh=float(_read_value(dotenv_values, "ENERGY_TARIFF_PER_KWH", "0.0")),
+        tariff_per_kwh=float(_read_value(dotenv_values, "ENERGY_TARIFF_PER_KWH", "1.12")),
     )
 
 
