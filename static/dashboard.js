@@ -3,6 +3,7 @@ const dashboardPage = document.querySelector('[data-dashboard]');
 if (dashboardPage) {
     const LIVE_REFRESH_INTERVAL_MS = 1000;
     const SUMMARY_REFRESH_INTERVAL_MS = 5000;
+    const SENSOR_REFRESH_INTERVAL_MS = 60000;
     const currentPower = dashboardPage.querySelector('[data-summary-current-power]');
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
@@ -216,9 +217,18 @@ if (dashboardPage) {
             monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
             estimatedCost.textContent = `${payload.estimated_cost}`;
             syncDevices(payload.devices || []);
-            syncSensorDevices(payload.sensor_devices || []);
         } finally {
             isAggregateLoading = false;
+        }
+    };
+
+    const loadSensorSummary = async () => {
+        try {
+            const response = await fetch('/api/sensors/summary', { cache: 'no-store' });
+            const payload = await response.json();
+            syncSensorDevices(payload.sensor_devices || []);
+        } catch {
+            // Preserve the last rendered sensor state if a cloud refresh fails.
         }
     };
 
@@ -240,6 +250,7 @@ if (dashboardPage) {
     };
 
     loadSummary();
+    loadSensorSummary();
     setInterval(() => {
         if (document.hidden) {
             return;
@@ -252,4 +263,10 @@ if (dashboardPage) {
         }
         loadSummary();
     }, SUMMARY_REFRESH_INTERVAL_MS);
+    setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+        loadSensorSummary();
+    }, SENSOR_REFRESH_INTERVAL_MS);
 }

@@ -8,7 +8,7 @@
     </div>
 </section>
 
-<section class="sensor-layout">
+<section class="sensor-layout" data-sensor-page data-device-id="{{ device.device_id }}">
     <article class="detail-card sensor-device-card">
         <div class="sensor-device-visual">
             {% if device.image_url %}
@@ -21,35 +21,28 @@
             <h2>Состояние</h2>
             <dl class="summary-grid">
                 <div><dt>Тип</dt><dd>{{ device.product_name or device.device_kind }}</dd></div>
-                <div><dt>Источник показаний</dt><dd>{{ sensor.state_source }}</dd></div>
-                <div><dt>Последнее обновление</dt><dd class="reading-status is-{{ sensor.last_update_status }}">{{ sensor.last_update or 'Нет данных' }}</dd></div>
-                <div><dt>Локальное подключение</dt><dd>{% if sensor.connection_ready and sensor.ip_address %}LAN: {{ sensor.ip_address }}{% else %}Не обнаружено{% endif %}</dd></div>
+                <div><dt>Источник показаний</dt><dd data-sensor-source>{{ sensor.state_source }}</dd></div>
+                <div><dt>Последнее обновление</dt><dd class="reading-status is-{{ sensor.last_update_status }}" data-sensor-last-update>{{ sensor.last_update or 'Нет данных' }}</dd></div>
+                <div><dt>Локальное подключение</dt><dd data-sensor-connection>{% if sensor.connection_ready and sensor.ip_address %}LAN: {{ sensor.ip_address }}{% else %}Не обнаружено{% endif %}</dd></div>
             </dl>
         </div>
     </article>
 
     <article class="detail-card lcd-panel sensor-metrics-panel">
         <h2>Показания датчика</h2>
-        {% if sensor.metrics %}
-        <div class="sensor-metric-grid">
+        <div class="sensor-metric-grid" data-sensor-metrics {% if not sensor.metrics %}hidden{% endif %}>
+            {% if sensor.metrics %}
             {% for metric in sensor.metrics %}
-            <section class="sensor-metric-card">
+            <section class="sensor-metric-card" data-sensor-metric data-sensor-code="{{ metric.code }}">
                 <span class="stat-label">{{ metric.label }}</span>
                 <strong class="stat-value">{{ metric.value }}</strong>
             </section>
             {% endfor %}
+            {% endif %}
         </div>
-        {% else %}
-        <p class="chart-empty">Показания датчика пока недоступны.</p>
-        {% endif %}
-    </article>
-
-    <article class="detail-card sensor-notes-card">
-        <h2>Примечание</h2>
-        <p class="hero-copy">
-            Для датчиков не показывается сводка по потреблению энергии. Если локальное подключение недоступно,
-            страница использует данные из Tuya Cloud.
-        </p>
+        <p class="chart-empty" data-sensor-empty {% if sensor.metrics %}hidden{% endif %}>Показания датчика пока недоступны.</p>
     </article>
 </section>
+<script type="application/json" data-initial-sensor>{{ initial_sensor_json | safe }}</script>
+<script src="/static/sensor.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

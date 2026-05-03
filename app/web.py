@@ -43,11 +43,13 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260503-09"
+templates.env.globals["static_asset_version"] = "20260503-10"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
 SENSOR_CLOUD_STATUS_CACHE_SECONDS = 60.0
+SENSOR_CLOUD_OK_SECONDS = 90.0
+SENSOR_CLOUD_WARNING_SECONDS = 300.0
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -440,6 +442,18 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _get_sensor_cloud_status_style(fetched_at: datetime | None) -> str:
+    if fetched_at is None:
+        return "error"
+
+    age_seconds = max((datetime.now(timezone.utc) - fetched_at.astimezone(timezone.utc)).total_seconds(), 0.0)
+    if age_seconds <= SENSOR_CLOUD_OK_SECONDS:
+        return "ok"
+    if age_seconds <= SENSOR_CLOUD_WARNING_SECONDS:
+        return "warning"
+    return "error"
+
+
 def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str, DeviceSample]) -> dict:
     total_power_w = 0.0
     for device in summary.get("devices", []):
@@ -633,8 +647,13 @@ def _build_sensor_dashboard_entry(
 
     primary_metric = preview_metrics[0] if preview_metrics else None
     secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
-    last_update = device.get("last_seen") or (_format_live_timestamp(config, cloud_fetched_at) if cloud_fetched_at else None)
-    last_update_status = device.get("last_seen_status") or ("ok" if cloud_status_items else "error")
+
+    if device.get("connection_ready") and device.get("last_seen"):
+        last_update = device.get("last_seen")
+        last_update_status = device.get("last_seen_status") or "error"
+    else:
+        last_update = _format_live_timestamp(config, cloud_fetched_at) if cloud_fetched_at else None
+        last_update_status = _get_sensor_cloud_status_style(cloud_fetched_at) if cloud_status_items else "error"
 
     if device.get("connection_ready") and device.get("ip_address"):
         connection_label = f"LAN: {device['ip_address']}"
@@ -658,6 +677,22 @@ def _decorate_sensor_dashboard_entries(request: Request, config: AppConfig, devi
         _build_sensor_dashboard_entry(request, config, device)
         for device in devices
     ]
+
+
+def _get_dashboard_sensor_payload(request: Request, config: AppConfig) -> dict[str, Any]:
+    summary_cache_key = _get_aggregate_cache_key("summary", "sensors")
+    summary = _get_cached_aggregate_payload(request, summary_cache_key)
+    if summary is None:
+        month_start, now = _month_window(config)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
+
+    sensor_devices = _decorate_sensor_dashboard_entries(
+        request,
+        config,
+        _decorate_devices_media(summary.get("sensor_devices", [])),
+    )
+    return {"sensor_devices": sensor_devices}
 
 
 def _build_sensor_metrics(
@@ -724,12 +759,17 @@ def _build_sensor_page_payload(
     cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, str(device.get("device_id") or ""))
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
     last_update = local_captured_at or cloud_fetched_at
+    last_update_status = (
+        get_sample_status(last_update, datetime.now(_get_timezone(config)))
+        if local_captured_at
+        else _get_sensor_cloud_status_style(cloud_fetched_at) if cloud_status_items else "error"
+    )
 
     return {
         "metrics": metrics,
         "state_source": "Локальное устройство" if local_raw_dps else (cloud_source or "Нет данных"),
         "last_update": _format_live_timestamp(config, last_update) if last_update else None,
-        "last_update_status": get_sample_status(last_update, datetime.now(_get_timezone(config))) if local_captured_at else ("ok" if cloud_status_items else "error"),
+        "last_update_status": last_update_status,
         "connection_ready": bool(device.get("connection_ready")),
         "ip_address": str(device.get("ip_address") or "").strip() or None,
     }
@@ -873,6 +913,7 @@ def device_details(request: Request, device_id: str) -> HTMLResponse:
             context={
                 "device": decorated_device,
                 "sensor": sensor_payload,
+                "initial_sensor_json": json.dumps(jsonable_encoder(sensor_payload), ensure_ascii=False),
                 "page_title": f"{device['name']} - датчик",
             },
         )
@@ -943,6 +984,13 @@ def summary_api(request: Request) -> JSONResponse:
     return JSONResponse(jsonable_encoder(summary))
 
 
+@app.get("/api/sensors/summary")
+def sensor_summary_api(request: Request) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    payload = _get_dashboard_sensor_payload(request, config)
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @app.get("/api/live-summary")
 def live_summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
@@ -963,6 +1011,25 @@ def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONR
         request.app.state.device_rows_by_id[result["device_id"]] = device_row
     _invalidate_aggregate_cache(request, device_id=result["device_id"])
     return JSONResponse(jsonable_encoder(result))
+
+
+@app.get("/api/devices/{device_id}/sensor")
+def sensor_device_api(request: Request, device_id: str) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    if device.get("is_energy_meter"):
+        raise HTTPException(status_code=400, detail="Маршрут доступен только для датчиков")
+
+    capabilities = get_device_capabilities(config, device_id)
+    payload = _build_sensor_page_payload(
+        config,
+        _decorate_device_media(dict(device)),
+        capabilities,
+        request.app.state.live_samples.get(device_id),
+    )
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @app.post("/api/devices/{device_id}/functions/{function_code}")
