@@ -10,17 +10,32 @@
     </div>
     <div class="registry-grid" data-sensor-grid>
         {% for device in summary.sensor_devices %}
-        <article class="registry-item" data-sensor-card data-device-id="{{ device.device_id }}">
-            <div>
-                <p class="device-room">{{ device.room }}</p>
-                <h3><a class="sensor-link" href="/devices/{{ device.device_id }}">{{ device.name }}</a></h3>
-            </div>
-            <div class="registry-meta">
-                {% if device.connection_ready and device.ip_address %}
-                <span data-sensor-connection>LAN: {{ device.ip_address }}</span>
+        <article class="registry-item sensor-summary-card" data-sensor-card data-device-id="{{ device.device_id }}">
+            <a class="sensor-summary-media" href="/devices/{{ device.device_id }}" aria-label="Открыть страницу датчика {{ device.name }}">
+                {% if device.image_url %}
+                <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
                 {% else %}
-                <span data-sensor-connection>Ожидает локального обнаружения</span>
+                <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
                 {% endif %}
+            </a>
+            <div class="sensor-summary-body">
+                <div>
+                    <p class="device-room">{{ device.room }}</p>
+                    <h3><a class="sensor-link" href="/devices/{{ device.device_id }}">{{ device.name }}</a></h3>
+                </div>
+                <dl class="sensor-summary-metrics">
+                    <div>
+                        <dt>{{ device.primary_metric.label if device.primary_metric else 'Состояние' }}</dt>
+                        <dd data-sensor-primary>{{ device.primary_metric.value if device.primary_metric else 'Нет данных' }}</dd>
+                    </div>
+                    <div>
+                        <dt>{{ device.secondary_metric.label if device.secondary_metric else 'Источник' }}</dt>
+                        <dd data-sensor-secondary>{{ device.secondary_metric.value if device.secondary_metric else device.connection_label }}</dd>
+                    </div>
+                </dl>
+            </div>
+            <div class="registry-meta sensor-summary-meta">
+                <span data-sensor-connection>{{ device.connection_label }}</span>
                 <span class="reading-status is-{{ device.last_seen_status }}" data-sensor-last-seen>{{ device.last_seen or 'Пока нет данных' }}</span>
             </div>
         </article>

@@ -302,6 +302,54 @@ p {
     text-align: right;
 }
 
+.sensor-summary-card {
+    display: grid;
+    grid-template-columns: minmax(140px, 180px) minmax(0, 1fr) auto;
+    align-items: stretch;
+}
+
+.sensor-summary-media {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 132px;
+    padding: 12px;
+    text-decoration: none;
+    color: var(--text);
+    background:
+        linear-gradient(180deg, rgba(19, 28, 39, 0.62), rgba(7, 12, 18, 0.96)),
+        repeating-linear-gradient(0deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 18px),
+        repeating-linear-gradient(90deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 18px);
+    border: 1px solid var(--line);
+}
+
+.sensor-summary-body {
+    display: grid;
+    gap: 12px;
+}
+
+.sensor-summary-metrics {
+    display: grid;
+    gap: 10px;
+}
+
+.sensor-summary-metrics div {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+}
+
+.sensor-summary-metrics dt,
+.sensor-summary-metrics dd {
+    margin: 0;
+}
+
+.sensor-summary-meta {
+    min-width: 160px;
+}
+
 .sensor-link {
     color: var(--text);
     text-decoration: none;
@@ -778,6 +826,16 @@ button:hover {
 
     .sensor-device-card {
         grid-template-columns: 1fr;
+    }
+
+    .sensor-summary-card {
+        grid-template-columns: 1fr;
+    }
+
+    .sensor-summary-meta {
+        min-width: 0;
+        justify-items: start;
+        text-align: left;
     }
 
     .stats-grid {

@@ -59,12 +59,27 @@ if (dashboardPage) {
     `;
 
     const renderSensorMarkup = (device) => `
-        <div>
-            <p class="device-room">${escapeHtml(device.room)}</p>
-            <h3><a class="sensor-link" href="/devices/${encodeURIComponent(device.device_id)}">${escapeHtml(device.name)}</a></h3>
+        <a class="sensor-summary-media" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть страницу датчика ${escapeHtml(device.name)}">
+            ${renderDeviceMedia(device)}
+        </a>
+        <div class="sensor-summary-body">
+            <div>
+                <p class="device-room">${escapeHtml(device.room)}</p>
+                <h3><a class="sensor-link" href="/devices/${encodeURIComponent(device.device_id)}">${escapeHtml(device.name)}</a></h3>
+            </div>
+            <dl class="sensor-summary-metrics">
+                <div>
+                    <dt>${escapeHtml(device.primary_metric?.label || 'Состояние')}</dt>
+                    <dd data-sensor-primary>${escapeHtml(device.primary_metric?.value || 'Нет данных')}</dd>
+                </div>
+                <div>
+                    <dt>${escapeHtml(device.secondary_metric?.label || 'Источник')}</dt>
+                    <dd data-sensor-secondary>${escapeHtml(device.secondary_metric?.value || device.connection_label || 'Нет данных')}</dd>
+                </div>
+            </dl>
         </div>
-        <div class="registry-meta">
-            <span data-sensor-connection>${device.connection_ready && device.ip_address ? `LAN: ${escapeHtml(device.ip_address)}` : 'Ожидает локального обнаружения'}</span>
+        <div class="registry-meta sensor-summary-meta">
+            <span data-sensor-connection>${escapeHtml(device.connection_label || 'Ожидает локального обнаружения')}</span>
             <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</span>
         </div>
     `;
@@ -94,7 +109,7 @@ if (dashboardPage) {
             sensorGrid.innerHTML = '';
             devices.forEach((device) => {
                 const card = document.createElement('article');
-                card.className = 'registry-item';
+                card.className = 'registry-item sensor-summary-card';
                 card.dataset.sensorCard = '';
                 card.dataset.deviceId = device.device_id;
                 card.innerHTML = renderSensorMarkup(device);
@@ -172,12 +187,20 @@ if (dashboardPage) {
 
             const lastSeenNode = card.querySelector('[data-sensor-last-seen]');
             const connectionNode = card.querySelector('[data-sensor-connection]');
+            const primaryNode = card.querySelector('[data-sensor-primary]');
+            const secondaryNode = card.querySelector('[data-sensor-secondary]');
             if (lastSeenNode) {
                 lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
                 applyReadingStatus(lastSeenNode, device.last_seen_status);
             }
-            if (connectionNode && device.connection_ready) {
-                connectionNode.textContent = 'LAN подключение активно';
+            if (connectionNode) {
+                connectionNode.textContent = device.connection_label || 'Ожидает локального обнаружения';
+            }
+            if (primaryNode) {
+                primaryNode.textContent = device.primary_metric?.value || 'Нет данных';
+            }
+            if (secondaryNode) {
+                secondaryNode.textContent = device.secondary_metric?.value || device.connection_label || 'Нет данных';
             }
         });
     };

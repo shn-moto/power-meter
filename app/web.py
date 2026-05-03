@@ -47,6 +47,7 @@ templates.env.globals["static_asset_version"] = "20260503-08"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
+SENSOR_CLOUD_STATUS_CACHE_SECONDS = 60.0
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -428,6 +429,17 @@ def _format_live_timestamp(config: AppConfig, value: datetime) -> str:
     return value.astimezone(_get_timezone(config)).strftime("%d.%m.%Y %H:%M:%S")
 
 
+def _coerce_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str, DeviceSample]) -> dict:
     total_power_w = 0.0
     for device in summary.get("devices", []):
@@ -557,6 +569,15 @@ def _extract_cloud_status_result(payload: dict[str, Any] | None) -> list[dict[st
 
 
 def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[dict[str, Any]], datetime | None, str | None]:
+    cached_live_artifact = get_cloud_artifact(config, device_id, "cloud_status_live")
+    if cached_live_artifact:
+        fetched_at = cached_live_artifact.get("fetched_at")
+        fetched_at_dt = _coerce_datetime(fetched_at)
+        if fetched_at_dt and (datetime.now(timezone.utc) - fetched_at_dt).total_seconds() <= SENSOR_CLOUD_STATUS_CACHE_SECONDS:
+            status_items = _extract_cloud_status_result(cached_live_artifact.get("payload"))
+            if status_items:
+                return status_items, fetched_at_dt, "Tuya Cloud"
+
     cloud_config = load_cloud_config(required=False)
     if cloud_config:
         try:
@@ -586,9 +607,57 @@ def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[
         status_items = _extract_cloud_status_result(artifact.get("payload"))
         if status_items:
             fetched_at = artifact.get("fetched_at")
-            return status_items, _parse_dt(fetched_at) if fetched_at else None, source_name
+            return status_items, _coerce_datetime(fetched_at), source_name
 
     return [], None, None
+
+
+def _build_sensor_dashboard_entry(
+    request: Request,
+    config: AppConfig,
+    device: dict[str, Any],
+) -> dict[str, Any]:
+    device_id = str(device.get("device_id") or "")
+    capabilities = _get_cached_device_capabilities(request, config, device_id)
+    raw_dps = device.get("raw_dps")
+    local_raw_dps = raw_dps if isinstance(raw_dps, dict) else {}
+    cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, device_id)
+    metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
+
+    preview_metrics = [
+        metric for metric in metrics
+        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_battery"}
+    ]
+    if not preview_metrics:
+        preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
+
+    primary_metric = preview_metrics[0] if preview_metrics else None
+    secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
+    last_update = device.get("last_seen") or (_format_live_timestamp(config, cloud_fetched_at) if cloud_fetched_at else None)
+    last_update_status = device.get("last_seen_status") or ("ok" if cloud_status_items else "error")
+
+    if device.get("connection_ready") and device.get("ip_address"):
+        connection_label = f"LAN: {device['ip_address']}"
+    elif cloud_status_items:
+        connection_label = cloud_source or "Tuya Cloud"
+    else:
+        connection_label = "Ожидает локального обнаружения"
+
+    return {
+        **device,
+        "primary_metric": primary_metric,
+        "secondary_metric": secondary_metric,
+        "connection_label": connection_label,
+        "last_seen": last_update,
+        "last_seen_status": last_update_status,
+    }
+
+
+def _decorate_sensor_dashboard_entries(request: Request, config: AppConfig, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _build_sensor_dashboard_entry(request, config, device)
+        for device in devices
+    ]
 
 
 def _build_sensor_metrics(
@@ -766,7 +835,11 @@ def dashboard(request: Request) -> HTMLResponse:
         summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
-    summary["sensor_devices"] = _decorate_devices_media(summary.get("sensor_devices", []))
+    summary["sensor_devices"] = _decorate_sensor_dashboard_entries(
+        request,
+        config,
+        _decorate_devices_media(summary.get("sensor_devices", [])),
+    )
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -862,7 +935,11 @@ def summary_api(request: Request) -> JSONResponse:
         summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
-    summary["sensor_devices"] = _decorate_devices_media(summary.get("sensor_devices", []))
+    summary["sensor_devices"] = _decorate_sensor_dashboard_entries(
+        request,
+        config,
+        _decorate_devices_media(summary.get("sensor_devices", [])),
+    )
     return JSONResponse(jsonable_encoder(summary))
 
 
