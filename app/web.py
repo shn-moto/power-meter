@@ -40,7 +40,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260503-05"
+templates.env.globals["static_asset_version"] = "20260503-07"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -488,32 +488,43 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
     device_rows_by_id: dict[str, dict[str, Any]] = request.app.state.device_rows_by_id
     now = datetime.now(_get_timezone(config))
     devices: list[dict[str, Any]] = []
+    sensor_devices: list[dict[str, Any]] = []
     total_power_w = 0.0
     online_device_count = 0
 
     for device_id, sample in live_samples.items():
         device = device_rows_by_id.get(device_id)
-        if not device or not device.get("is_energy_meter"):
+        if not device:
             continue
 
-        total_power_w += float(sample.power_w)
         last_seen_status = get_sample_status(sample.captured_at, now)
         if last_seen_status == "ok":
             online_device_count += 1
 
-        devices.append(
-            {
-                "device_id": device_id,
-                "current_power_kw": round(float(sample.power_w) / 1000.0, 3),
-                "last_seen": _format_live_timestamp(config, sample.captured_at),
-                "last_seen_status": last_seen_status,
-            }
-        )
+        entry = {
+            "device_id": device_id,
+            "last_seen": _format_live_timestamp(config, sample.captured_at),
+            "last_seen_status": last_seen_status,
+            "connection_ready": True,
+        }
+
+        if device.get("is_energy_meter"):
+            total_power_w += float(sample.power_w)
+            devices.append(
+                {
+                    **entry,
+                    "current_power_kw": round(float(sample.power_w) / 1000.0, 3),
+                }
+            )
+            continue
+
+        sensor_devices.append(entry)
 
     return {
         "current_power_kw": round(total_power_w / 1000.0, 3),
         "device_count": online_device_count,
         "devices": devices,
+        "sensor_devices": sensor_devices,
     }
 
 
@@ -617,6 +628,7 @@ def dashboard(request: Request) -> HTMLResponse:
         summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
+    summary["sensor_devices"] = _decorate_devices_media(summary.get("sensor_devices", []))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -689,6 +701,7 @@ def summary_api(request: Request) -> JSONResponse:
         summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
+    summary["sensor_devices"] = _decorate_devices_media(summary.get("sensor_devices", []))
     return JSONResponse(jsonable_encoder(summary))
 
 
@@ -706,6 +719,11 @@ def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONR
         result = connect_device(config, payload.device_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+    device_row = get_device_row(config, result["device_id"])
+    if device_row:
+        request.app.state.device_rows_by_id[result["device_id"]] = device_row
+    _invalidate_aggregate_cache(request, device_id=result["device_id"])
     return JSONResponse(jsonable_encoder(result))
 
 

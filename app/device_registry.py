@@ -381,6 +381,27 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     capabilities = _build_capabilities(dps_result)
 
     if existing:
+        control_device = get_control_device(config, clean_device_id)
+        local_key = str(
+            device_info.get("local_key")
+            or device_info_v2.get("local_key")
+            or (control_device.local_key if control_device else "")
+            or ""
+        ).strip()
+        ip_address = control_device.ip_address if control_device and control_device.ip_address else ""
+        version = control_device.version if control_device else 3.5
+        connection_ready = bool(ip_address)
+        connection_message = ""
+
+        if not connection_ready and local_key:
+            try:
+                ip_address, version = _discover_local_endpoint(config, clean_device_id, local_key)
+                connection_ready = True
+            except ConfigError as error:
+                if str(error) != LOCAL_DISCOVERY_ERROR_MESSAGE:
+                    raise
+                connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
+
         power_dps_key, power_scale, voltage_dps_keys = _complete_existing_power_profile(
             config,
             clean_device_id,
@@ -388,8 +409,10 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             power_scale,
             voltage_dps_keys,
         )
-        refresh_managed_device_cloud_data(
+
+        upsert_managed_device(
             config,
+            slug=slug,
             device_id=clean_device_id,
             name=name,
             room=room,
@@ -402,6 +425,9 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             product_name=str(device_info.get("product_name") or device_info_v2.get("product_name") or device_info_v2.get("name") or "") or None,
             icon=str(device_info.get("icon") or device_info_v2.get("icon") or "") or None,
             onboarding_source="cloud",
+            local_key=local_key,
+            ip_address=ip_address,
+            version=version,
             power_dps_key=power_dps_key,
             power_scale=power_scale,
             voltage_dps_keys=voltage_dps_keys,
@@ -413,8 +439,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
 
         stored = get_device_row(config, clean_device_id)
-        control_device = get_control_device(config, clean_device_id)
-        connection_ready = bool(control_device and control_device.ip_address)
         return {
             "slug": slug,
             "name": stored.get("name") if stored else name,
@@ -422,13 +446,13 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             "device_kind": kind,
             "device_kind_label": DEVICE_KIND_LABELS.get(kind, kind),
             "is_energy_meter": is_energy_meter,
-            "ip_address": control_device.ip_address if control_device and control_device.ip_address else None,
-            "version": control_device.version if control_device else None,
+            "ip_address": ip_address or None,
+            "version": version if connection_ready else None,
             "product_name": stored.get("product_name") if stored else None,
             "category_code": stored.get("category_code") if stored else None,
             "capability_count": len(capabilities),
             "connection_ready": connection_ready,
-            "connection_message": "",
+            "connection_message": connection_message,
         }
 
     local_key = str(device_info.get("local_key") or device_info_v2.get("local_key") or "").strip()

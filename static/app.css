@@ -172,6 +172,11 @@ p {
     margin-top: 16px;
 }
 
+.sensor-panel {
+    margin-bottom: 24px;
+    padding: 20px;
+}
+
 .connect-layout {
     display: grid;
     grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr);
@@ -246,6 +251,16 @@ p {
     justify-items: end;
     color: var(--muted);
     text-align: right;
+}
+
+.sensor-link {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.sensor-link:hover,
+.sensor-link:focus-visible {
+    color: var(--accent);
 }
 
 .section-heading {

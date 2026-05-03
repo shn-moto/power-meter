@@ -1,6 +1,33 @@
 {% extends "base.html" %}
 
 {% block content %}
+<section class="detail-card sensor-panel" data-sensor-panel {% if not summary.sensor_devices %}hidden{% endif %}>
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Мониторинг среды</p>
+            <h2>Датчики</h2>
+        </div>
+    </div>
+    <div class="registry-grid" data-sensor-grid>
+        {% for device in summary.sensor_devices %}
+        <article class="registry-item" data-sensor-card data-device-id="{{ device.device_id }}">
+            <div>
+                <p class="device-room">{{ device.room }}</p>
+                <h3><a class="sensor-link" href="/devices/{{ device.device_id }}">{{ device.name }}</a></h3>
+            </div>
+            <div class="registry-meta">
+                {% if device.connection_ready and device.ip_address %}
+                <span data-sensor-connection>LAN: {{ device.ip_address }}</span>
+                {% else %}
+                <span data-sensor-connection>Ожидает локального обнаружения</span>
+                {% endif %}
+                <span class="reading-status is-{{ device.last_seen_status }}" data-sensor-last-seen>{{ device.last_seen or 'Пока нет данных' }}</span>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+
 <section class="hero-panel" data-dashboard>
     <div>
         <p class="eyebrow">{{ month_label }}</p>

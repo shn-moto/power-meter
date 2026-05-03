@@ -8,6 +8,8 @@ if (dashboardPage) {
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
     const deviceGrid = document.querySelector('[data-device-grid]');
+    const sensorPanel = document.querySelector('[data-sensor-panel]');
+    const sensorGrid = document.querySelector('[data-sensor-grid]');
     let isAggregateLoading = false;
     let isLiveLoading = false;
 
@@ -56,6 +58,17 @@ if (dashboardPage) {
         </div>
     `;
 
+    const renderSensorMarkup = (device) => `
+        <div>
+            <p class="device-room">${escapeHtml(device.room)}</p>
+            <h3><a class="sensor-link" href="/devices/${encodeURIComponent(device.device_id)}">${escapeHtml(device.name)}</a></h3>
+        </div>
+        <div class="registry-meta">
+            <span data-sensor-connection>${device.connection_ready && device.ip_address ? `LAN: ${escapeHtml(device.ip_address)}` : 'Ожидает локального обнаружения'}</span>
+            <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</span>
+        </div>
+    `;
+
     const updateCard = (card, device) => {
         card.innerHTML = renderCardMarkup(device);
     };
@@ -65,6 +78,37 @@ if (dashboardPage) {
         if (monthEnergyNode) {
             monthEnergyNode.textContent = `${device.month_energy_kwh} кВт·ч`;
         }
+    };
+
+    const syncSensorDevices = (devices) => {
+        if (!sensorPanel || !sensorGrid) {
+            return;
+        }
+
+        sensorPanel.hidden = devices.length === 0;
+        const existingCards = new Map(
+            [...sensorGrid.querySelectorAll('[data-sensor-card]')].map((card) => [card.dataset.deviceId, card])
+        );
+
+        if (existingCards.size !== devices.length || devices.some((device) => !existingCards.has(device.device_id))) {
+            sensorGrid.innerHTML = '';
+            devices.forEach((device) => {
+                const card = document.createElement('article');
+                card.className = 'registry-item';
+                card.dataset.sensorCard = '';
+                card.dataset.deviceId = device.device_id;
+                card.innerHTML = renderSensorMarkup(device);
+                sensorGrid.appendChild(card);
+            });
+            return;
+        }
+
+        devices.forEach((device) => {
+            const card = existingCards.get(device.device_id);
+            if (card) {
+                card.innerHTML = renderSensorMarkup(device);
+            }
+        });
     };
 
     const syncDevices = (devices) => {
@@ -111,6 +155,33 @@ if (dashboardPage) {
         });
     };
 
+    const applyLiveSensorDevices = (devices) => {
+        if (!sensorGrid) {
+            return;
+        }
+
+        const existingCards = new Map(
+            [...sensorGrid.querySelectorAll('[data-sensor-card]')].map((card) => [card.dataset.deviceId, card])
+        );
+
+        devices.forEach((device) => {
+            const card = existingCards.get(device.device_id);
+            if (!card) {
+                return;
+            }
+
+            const lastSeenNode = card.querySelector('[data-sensor-last-seen]');
+            const connectionNode = card.querySelector('[data-sensor-connection]');
+            if (lastSeenNode) {
+                lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
+                applyReadingStatus(lastSeenNode, device.last_seen_status);
+            }
+            if (connectionNode && device.connection_ready) {
+                connectionNode.textContent = 'LAN подключение активно';
+            }
+        });
+    };
+
     const loadSummary = async () => {
         if (isAggregateLoading) {
             return;
@@ -122,6 +193,7 @@ if (dashboardPage) {
             monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
             estimatedCost.textContent = `${payload.estimated_cost}`;
             syncDevices(payload.devices || []);
+            syncSensorDevices(payload.sensor_devices || []);
         } finally {
             isAggregateLoading = false;
         }
@@ -138,6 +210,7 @@ if (dashboardPage) {
             currentPower.textContent = `${payload.current_power_kw} кВт`;
             deviceCount.textContent = `${payload.device_count}`;
             applyLiveDevices(payload.devices || []);
+            applyLiveSensorDevices(payload.sensor_devices || []);
         } finally {
             isLiveLoading = false;
         }

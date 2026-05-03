@@ -1200,21 +1200,15 @@ def _get_dashboard_summary_context(
                 ORDER BY name
                 """
             )
-            device_rows = [row for row in cursor.fetchall() if row.get("is_energy_meter")]
+            device_rows = cursor.fetchall()
             device_ids = [str(row.get("device_id") or "") for row in device_rows if row.get("device_id")]
+            energy_device_ids = [
+                str(row.get("device_id") or "")
+                for row in device_rows
+                if row.get("device_id") and row.get("is_energy_meter")
+            ]
             if not device_ids:
-                return device_rows, {}, {}, {}
-
-            cursor.execute(
-                """
-                SELECT device_id, capability_code, dp_id, values_json
-                FROM device_capabilities
-                WHERE device_id = ANY(%s) AND capability_code IN ('total_forward_energy', 'add_ele')
-                ORDER BY device_id ASC, dp_id ASC NULLS LAST, capability_code ASC
-                """,
-                (device_ids,),
-            )
-            energy_counter_rows = cursor.fetchall()
+                return [], {}, {}, {}
 
             cursor.execute(
                 """
@@ -1227,6 +1221,20 @@ def _get_dashboard_summary_context(
             )
             latest_rows = cursor.fetchall()
 
+            if not energy_device_ids:
+                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}
+
+            cursor.execute(
+                """
+                SELECT device_id, capability_code, dp_id, values_json
+                FROM device_capabilities
+                WHERE device_id = ANY(%s) AND capability_code IN ('total_forward_energy', 'add_ele')
+                ORDER BY device_id ASC, dp_id ASC NULLS LAST, capability_code ASC
+                """,
+                (energy_device_ids,),
+            )
+            energy_counter_rows = cursor.fetchall()
+
             cursor.execute(
                 """
                 SELECT device_id, bucket,
@@ -1238,7 +1246,7 @@ def _get_dashboard_summary_context(
                 WHERE device_id = ANY(%s) AND bucket >= %s AND bucket <= %s
                 ORDER BY device_id ASC, bucket ASC
                 """,
-                (device_ids, month_start, now),
+                (energy_device_ids, month_start, now),
             )
             daily_rows = cursor.fetchall()
 
@@ -1257,6 +1265,7 @@ def get_dashboard_summary(
     live_samples: dict[str, DeviceSample] | None = None,
 ) -> dict[str, Any]:
     devices = []
+    sensor_devices = []
     total_energy_wh = 0.0
     total_power_w = 0.0
     online_device_count = 0
@@ -1270,14 +1279,6 @@ def get_dashboard_summary(
         device_id = str(device.get("device_id") or "")
         live_sample = live_samples.get(device_id)
         latest = latest_by_device.get(device_id)
-
-        bucket_rows = daily_rows_by_device.get(device_id, [])
-        device_energy_wh = _aggregate_energy_wh(
-            bucket_rows,
-            "day",
-            energy_counter_meta_by_device.get(device_id),
-        )
-        total_energy_wh += device_energy_wh
 
         if live_sample:
             current_power_w = _normalize_sample_power_w(float(live_sample.power_w), live_sample.voltage_v, live_sample.raw_dps)
@@ -1294,24 +1295,43 @@ def get_dashboard_summary(
         if last_seen_status == "ok":
             online_device_count += 1
 
-        total_power_w += current_power_w
         last_seen_age_seconds = get_sample_age_seconds(effective_captured_at, now)
-        devices.append(
-            {
-                "slug": device["slug"],
-                "name": device["name"],
-                "room": device["room"],
-                "image_label": device["image_label"],
-                "image_id": device.get("image_id"),
-                "device_id": device.get("device_id"),
-                "current_power_kw": round(current_power_w / 1000.0, 3),
-                "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
-                "last_seen": last_seen,
-                "last_seen_age_seconds": last_seen_age_seconds,
-                "last_seen_status": last_seen_status,
-                "raw_dps": raw_dps,
-            }
-        )
+
+        base_entry = {
+            "slug": device["slug"],
+            "name": device["name"],
+            "room": device["room"],
+            "image_label": device["image_label"],
+            "image_id": device.get("image_id"),
+            "device_id": device.get("device_id"),
+            "device_kind": device.get("device_kind"),
+            "connection_ready": bool(device.get("connection_ready")),
+            "ip_address": str(device.get("ip_address") or "").strip() or None,
+            "last_seen": last_seen,
+            "last_seen_age_seconds": last_seen_age_seconds,
+            "last_seen_status": last_seen_status,
+            "raw_dps": raw_dps,
+        }
+
+        if device.get("is_energy_meter"):
+            bucket_rows = daily_rows_by_device.get(device_id, [])
+            device_energy_wh = _aggregate_energy_wh(
+                bucket_rows,
+                "day",
+                energy_counter_meta_by_device.get(device_id),
+            )
+            total_energy_wh += device_energy_wh
+            total_power_w += current_power_w
+            devices.append(
+                {
+                    **base_entry,
+                    "current_power_kw": round(current_power_w / 1000.0, 3),
+                    "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
+                }
+            )
+            continue
+
+        sensor_devices.append(base_entry)
 
     return {
         "home_name": config.home_name,
@@ -1320,6 +1340,7 @@ def get_dashboard_summary(
         "estimated_cost": round((total_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
         "device_count": online_device_count,
         "devices": devices,
+        "sensor_devices": sensor_devices,
     }
 
 
