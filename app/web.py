@@ -274,11 +274,51 @@ def _read_measurement_from_capabilities(
     return value
 
 
+def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    try:
+        power_w = float(raw_dps.get("102")) if raw_dps.get("102") is not None else None
+    except (TypeError, ValueError):
+        power_w = None
+
+    voltage_values = [
+        float(raw_dps.get(key)) / 10.0 if float(raw_dps.get(key)) >= 1000 else float(raw_dps.get(key))
+        for key in ("107", "108", "109")
+        if raw_dps.get(key) is not None
+    ]
+    voltage_values = [value for value in voltage_values if value is not None and value > 0]
+    voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+
+    try:
+        current_raw = float(raw_dps.get("103")) if raw_dps.get("103") is not None else None
+    except (TypeError, ValueError):
+        current_raw = None
+    current_ma = None
+    if current_raw is not None and current_raw > 0:
+        candidate_scales = (1.0, 10.0, 100.0, 1000.0)
+        if power_w is not None and voltage_v is not None and power_w > 0 and voltage_v > 0:
+            current_ma = min(
+                (current_raw * scale for scale in candidate_scales),
+                key=lambda candidate: abs(((candidate / 1000.0) * voltage_v) - power_w),
+            )
+        else:
+            current_ma = current_raw * 10.0
+
+    return current_ma, power_w, voltage_v
+
+
 def _augment_current_summary(summary: dict[str, Any], capabilities: list[dict[str, Any]]) -> None:
     raw_dps = summary.get("latest_raw_dps") or {}
     current_ma = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_current")
     power_w = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_power")
     voltage_v = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_voltage")
+
+    breaker_current_ma, breaker_power_w, breaker_voltage_v = _read_breaker_fallback_measurements(raw_dps)
+    if current_ma is None:
+        current_ma = breaker_current_ma
+    if power_w is None:
+        power_w = breaker_power_w
+    if voltage_v is None:
+        voltage_v = breaker_voltage_v
 
     if power_w is None:
         power_w = summary.get("latest_power_w")
