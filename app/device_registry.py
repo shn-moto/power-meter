@@ -45,13 +45,6 @@ LOCAL_DISCOVERY_ERROR_MESSAGE = (
 )
 
 
-def _slugify(value: str) -> str:
-    normalized = "".join(char.lower() if char.isalnum() else "-" for char in value)
-    while "--" in normalized:
-        normalized = normalized.replace("--", "-")
-    return normalized.strip("-") or "device"
-
-
 def _parse_values(raw_values: Any) -> dict[str, Any]:
     if isinstance(raw_values, dict):
         return raw_values
@@ -365,7 +358,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     name = _device_name(device_info, device_info_v2)
     existing = get_device_by_id(config, clean_device_id)
-    slug = existing["slug"] if existing else f"{_slugify(name)}-{clean_device_id[-4:]}"
     resolved_room = None
     if not existing or not (str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME):
         resolved_room = _resolve_room_name(cloud, clean_device_id, device_v1, device_v2)
@@ -410,7 +402,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
         upsert_managed_device(
             config,
-            slug=slug,
             device_id=clean_device_id,
             name=name,
             room=room,
@@ -436,7 +427,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
         stored = get_device_row(config, clean_device_id)
         return {
-            "slug": slug,
             "name": stored.get("name") if stored else name,
             "device_id": clean_device_id,
             "device_kind": kind,
@@ -469,7 +459,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     if connection_ready:
         provisional_device = TuyaDeviceConfig(
-            slug=slug,
             name=name,
             room=room,
             device_id=clean_device_id,
@@ -493,7 +482,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     upsert_managed_device(
         config,
-        slug=slug,
         name=name,
         room=room,
         device_id=clean_device_id,
@@ -520,7 +508,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     stored = get_device_row(config, clean_device_id)
     return {
-        "slug": slug,
         "name": name,
         "device_id": clean_device_id,
         "device_kind": kind,

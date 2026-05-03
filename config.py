@@ -9,7 +9,6 @@ class ConfigError(ValueError):
 
 @dataclass(slots=True)
 class TuyaDeviceConfig:
-    slug: str
     name: str
     room: str
     device_id: str

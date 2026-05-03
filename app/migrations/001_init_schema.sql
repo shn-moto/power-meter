@@ -1,8 +1,8 @@
 CREATE TABLE devices (
-    slug TEXT PRIMARY KEY,
+    slug TEXT,
     name TEXT NOT NULL,
     room TEXT NOT NULL,
-    device_id TEXT NOT NULL,
+    device_id TEXT PRIMARY KEY,
     category_code TEXT,
     device_kind TEXT NOT NULL DEFAULT 'switch',
     is_energy_meter BOOLEAN NOT NULL DEFAULT FALSE,
@@ -17,7 +17,7 @@ CREATE TABLE devices (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_devices_device_id_unique ON devices(device_id);
+CREATE UNIQUE INDEX idx_devices_slug_unique ON devices(slug) WHERE slug IS NOT NULL;
 
 CREATE TABLE device_connections (
     device_id TEXT PRIMARY KEY REFERENCES devices(device_id) ON DELETE CASCADE,
