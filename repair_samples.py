@@ -102,7 +102,7 @@ def _next_month_start(value: datetime) -> datetime:
     return value.replace(month=value.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def _refresh_aggregates(connection: psycopg.Connection, candidates: list[RepairStats]) -> None:
+def _refresh_aggregates(database_url: str, candidates: list[RepairStats]) -> None:
     refresh_start = min(candidate.first_at for candidate in candidates).astimezone(timezone.utc)
     refresh_end = max(candidate.last_at for candidate in candidates).astimezone(timezone.utc)
 
@@ -115,10 +115,11 @@ def _refresh_aggregates(connection: psycopg.Connection, candidates: list[RepairS
     monthly_start = _month_start(daily_start)
     monthly_end = _next_month_start(daily_end)
 
-    with connection.cursor() as cursor:
-        cursor.execute("CALL refresh_continuous_aggregate('samples_hourly', %s, %s)", (hourly_start, hourly_end))
-        cursor.execute("CALL refresh_continuous_aggregate('samples_daily', %s, %s)", (daily_start, daily_end))
-        cursor.execute("CALL refresh_continuous_aggregate('samples_monthly', %s, %s)", (monthly_start, monthly_end))
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("CALL refresh_continuous_aggregate('samples_hourly', %s, %s)", (hourly_start, hourly_end))
+            cursor.execute("CALL refresh_continuous_aggregate('samples_daily', %s, %s)", (daily_start, daily_end))
+            cursor.execute("CALL refresh_continuous_aggregate('samples_monthly', %s, %s)", (monthly_start, monthly_end))
 
 
 def main() -> int:
@@ -144,8 +145,9 @@ def main() -> int:
             return 0
 
         repaired = _repair_samples(connection, args.device_id)
-        _refresh_aggregates(connection, repaired)
         connection.commit()
+
+        _refresh_aggregates(config.database_url, repaired)
         print(f"Repaired {total_rows} samples and refreshed aggregates.")
     return 0
 
