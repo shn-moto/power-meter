@@ -81,7 +81,7 @@ WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy(
     'samples_monthly',
-    start_offset      => INTERVAL '2 months',
-    end_offset        => INTERVAL '1 day',
+    start_offset      => INTERVAL '4 months',
+    end_offset        => INTERVAL '1 month',
     schedule_interval => INTERVAL '1 hour'
 );
