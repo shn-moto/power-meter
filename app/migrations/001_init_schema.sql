@@ -12,9 +12,9 @@ CREATE TABLE devices (
     product_name TEXT,
     icon TEXT,
     onboarding_source TEXT NOT NULL DEFAULT 'config',
-    power_dps_key TEXT NOT NULL,
-    power_scale DOUBLE PRECISION NOT NULL,
-    voltage_dps_keys JSONB NOT NULL,
+    power_dps_key TEXT,
+    power_scale DOUBLE PRECISION,
+    voltage_dps_keys JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
