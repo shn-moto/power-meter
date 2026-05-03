@@ -276,7 +276,7 @@ def _read_measurement_from_capabilities(
 
 def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
     try:
-        power_w = float(raw_dps.get("102")) if raw_dps.get("102") is not None else None
+        power_w = (float(raw_dps.get("102")) / 100.0) if raw_dps.get("102") is not None else None
     except (TypeError, ValueError):
         power_w = None
 
@@ -292,16 +292,7 @@ def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float 
         current_raw = float(raw_dps.get("103")) if raw_dps.get("103") is not None else None
     except (TypeError, ValueError):
         current_raw = None
-    current_ma = None
-    if current_raw is not None and current_raw > 0:
-        candidate_scales = (1.0, 10.0, 100.0, 1000.0)
-        if power_w is not None and voltage_v is not None and power_w > 0 and voltage_v > 0:
-            current_ma = min(
-                (current_raw * scale for scale in candidate_scales),
-                key=lambda candidate: abs(((candidate / 1000.0) * voltage_v) - power_w),
-            )
-        else:
-            current_ma = current_raw * 10.0
+    current_ma = current_raw if current_raw is not None and current_raw > 0 else None
 
     return current_ma, power_w, voltage_v
 

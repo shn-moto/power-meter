@@ -186,7 +186,7 @@ def _infer_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float, 
         for key in ("107", "108", "109")
         if _looks_like_voltage_value(normalized_dps.get(key))
     ]
-    return power_dps_key, 1.0, voltage_dps_keys
+    return power_dps_key, 100.0 if power_dps_key == "102" else 1.0, voltage_dps_keys
 
 
 def _complete_power_profile(
