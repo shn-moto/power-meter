@@ -941,6 +941,19 @@ def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]
     return None
 
 
+def _has_unmapped_breaker_phase_metrics(capabilities: list[dict[str, Any]] | None) -> bool:
+    if not capabilities:
+        return False
+    capability_codes = {
+        str(capability.get("capability_code") or "")
+        for capability in capabilities
+    }
+    return (
+        {"phase_a", "phase_b", "phase_c"}.issubset(capability_codes)
+        and "cur_voltage" not in capability_codes
+    )
+
+
 def _get_energy_counter_meta(
     config: AppConfig,
     device_id: str,
@@ -1391,6 +1404,10 @@ def _build_device_stats_result(
     latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
     latest_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else None
     latest_voltage_v = float(latest["voltage_v"]) if latest and latest["voltage_v"] is not None else None
+
+    if _has_unmapped_breaker_phase_metrics(capabilities):
+        latest_voltage_v = None
+        average_voltage_v = None
 
     return {
         "summary": {
