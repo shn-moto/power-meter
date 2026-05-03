@@ -15,8 +15,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import tinytuya
 
-from app.device_registry import DEVICE_KIND_LABELS, connect_device, sync_config_device_capabilities
-from config import AppConfig, load_app_config, load_devices
+from app.device_registry import DEVICE_KIND_LABELS, connect_device
+from config import AppConfig, load_app_config
 from app.storage import (
     DeviceSample,
     apply_migrations,
@@ -34,7 +34,6 @@ from app.storage import (
     init_connection_pool,
     pick_bucket,
     save_sample,
-    sync_devices,
 )
 from app.tuya_service import build_sample
 
@@ -592,9 +591,6 @@ async def lifespan(app: FastAPI):
     app.state.aggregate_cache = {}
     await asyncio.to_thread(apply_migrations, app.state.app_config.database_url)
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
-    configured_devices = load_devices()
-    await asyncio.to_thread(sync_devices, app.state.app_config, configured_devices)
-    await asyncio.to_thread(sync_config_device_capabilities, app.state.app_config, configured_devices)
     app.state.device_rows_by_id = {
         str(device["device_id"]): device
         for device in await asyncio.to_thread(get_device_rows, app.state.app_config)

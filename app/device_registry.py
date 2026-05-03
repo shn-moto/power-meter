@@ -18,7 +18,7 @@ from app.storage import (
     upsert_managed_device,
 )
 from app.tuya_service import fetch_status
-from config import AppConfig, ConfigError, TuyaDeviceConfig, load_cloud_config, load_devices
+from config import AppConfig, ConfigError, TuyaDeviceConfig, load_cloud_config
 
 
 DEVICE_KIND_LABELS = {
@@ -263,7 +263,6 @@ def _build_capabilities(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _known_subnets(config: AppConfig) -> list[ipaddress.IPv4Network]:
     raw_ips = set(get_known_local_ips(config))
-    raw_ips.update(device.ip_address for device in load_devices())
     subnets: list[ipaddress.IPv4Network] = []
     for raw_ip in sorted(raw_ips):
         try:
@@ -519,23 +518,3 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         "connection_ready": connection_ready,
         "connection_message": connection_message,
     }
-
-
-def sync_config_device_capabilities(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
-    cloud_config = load_cloud_config(required=False)
-    if not cloud_config or not devices:
-        return
-
-    cloud = tinytuya.Cloud(
-        apiRegion=cloud_config.region,
-        apiKey=cloud_config.api_key,
-        apiSecret=cloud_config.api_secret,
-        apiDeviceID=cloud_config.api_device_id or devices[0].device_id,
-    )
-
-    for device in devices:
-        dps_info = cloud.getdps(device.device_id)
-        if not isinstance(dps_info, dict) or not dps_info.get("success"):
-            continue
-        capabilities = _build_capabilities(dps_info.get("result") or {})
-        replace_device_capabilities(config, device.device_id, capabilities)

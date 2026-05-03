@@ -23,6 +23,12 @@ docker compose logs -f power-meter
 
 On startup the app runs all pending migrations from `app/migrations/*.sql` against the database. The `schema_migrations` table tracks applied versions.
 
+Devices are not loaded from JSON or `.env` files. Add them from the web UI after the stack is up:
+
+```bash
+open http://127.0.0.1:8484/connect-device
+```
+
 Smoke test:
 
 ```bash
@@ -65,9 +71,16 @@ APP_TIMEZONE=Europe/Warsaw
 ENERGY_TARIFF_PER_KWH=1.12
 POLL_INTERVAL_SECONDS=1
 SAMPLE_WRITE_INTERVAL_SECONDS=5
+
+TUYA_CLOUD_API_REGION=eu
+TUYA_CLOUD_API_KEY=<access-id>
+TUYA_CLOUD_API_SECRET=<access-secret>
+TUYA_CLOUD_API_DEVICE_ID=<optional-device-id>
 ```
 
 `DATABASE_URL` must use host `db` (the compose service name) so the app reaches Timescale over the internal network. `POSTGRES_*` are read by the `db` container to bootstrap the cluster on first run.
+
+`TUYA_CLOUD_API_*` are used by the "Подключить устройство" page to fetch device metadata and local keys from Tuya Cloud. Devices are added only through the web UI and stored in the database.
 
 ## Backups
 

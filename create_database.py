@@ -3,8 +3,8 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 from psycopg import sql
 
-from app.storage import apply_migrations, sync_devices
-from config import load_app_config, load_devices
+from app.storage import apply_migrations
+from config import load_app_config
 
 
 def build_admin_url(database_url: str) -> tuple[str, str]:
@@ -16,7 +16,6 @@ def build_admin_url(database_url: str) -> tuple[str, str]:
 
 def main() -> int:
     config = load_app_config()
-    devices = load_devices()
     admin_url, database_name = build_admin_url(config.database_url)
 
     with psycopg.connect(admin_url, autocommit=True) as connection:
@@ -30,8 +29,7 @@ def main() -> int:
                 print(f"Database {database_name} already exists")
 
     apply_migrations(config.database_url)
-    sync_devices(config, devices)
-    print("Database schema initialized and devices synchronized")
+    print("Database schema initialized")
     return 0
 
 
