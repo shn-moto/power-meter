@@ -27,6 +27,9 @@ DEVICE_KIND_LABELS = {
     "sensor": "Датчик",
     "light": "Лампочка",
 }
+FIXED_POWER_PROFILES: dict[str, tuple[str, float, tuple[str, ...]]] = {
+    "bf47402ca7399b6eef6bw7": ("102", 100.0, ("107", "108", "109")),
+}
 
 ENERGY_CODES = {
     "cur_power",
@@ -173,6 +176,20 @@ def _extract_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float,
             voltage_dps_keys.append(key)
 
     return power_dps_key, power_scale, voltage_dps_keys
+
+
+def _apply_fixed_power_profile(
+    device_id: str,
+    power_dps_key: str | None,
+    power_scale: float,
+    voltage_dps_keys: list[str],
+) -> tuple[str | None, float, list[str]]:
+    fixed_profile = FIXED_POWER_PROFILES.get(device_id)
+    if fixed_profile is None:
+        return power_dps_key, power_scale, voltage_dps_keys
+
+    fixed_power_dps_key, fixed_power_scale, fixed_voltage_dps_keys = fixed_profile
+    return fixed_power_dps_key, fixed_power_scale, list(fixed_voltage_dps_keys)
 
 
 def _infer_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float, list[str]]:
@@ -368,6 +385,12 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
     power_dps_key, power_scale, voltage_dps_keys = _extract_power_profile(dps_result)
+    power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
+        clean_device_id,
+        power_dps_key,
+        power_scale,
+        voltage_dps_keys,
+    )
     capabilities = _build_capabilities(dps_result)
 
     if existing:
@@ -394,6 +417,12 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
 
         power_dps_key, power_scale, voltage_dps_keys = _complete_existing_power_profile(
             config,
+            clean_device_id,
+            power_dps_key,
+            power_scale,
+            voltage_dps_keys,
+        )
+        power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
             clean_device_id,
             power_dps_key,
             power_scale,
@@ -478,6 +507,12 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             power_scale,
             voltage_dps_keys,
             local_payload.get("dps") if isinstance(local_payload, dict) else None,
+                power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
+                    clean_device_id,
+                    power_dps_key,
+                    power_scale,
+                    voltage_dps_keys,
+                )
         )
 
     upsert_managed_device(
