@@ -280,7 +280,21 @@ def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float 
     except (TypeError, ValueError):
         power_w = None
 
-    return None, power_w, None
+    voltage_values = [
+        float(raw_dps.get(key)) / 10.0 if float(raw_dps.get(key)) >= 1000 else float(raw_dps.get(key))
+        for key in ("107", "108", "109")
+        if raw_dps.get(key) is not None
+    ]
+    voltage_values = [value for value in voltage_values if value is not None and value > 0]
+    voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+
+    try:
+        current_raw = float(raw_dps.get("103")) if raw_dps.get("103") is not None else None
+    except (TypeError, ValueError):
+        current_raw = None
+    current_ma = current_raw if current_raw is not None and current_raw > 0 else None
+
+    return current_ma, power_w, voltage_v
 
 
 def _augment_current_summary(summary: dict[str, Any], capabilities: list[dict[str, Any]]) -> None:
