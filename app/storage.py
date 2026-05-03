@@ -1018,6 +1018,39 @@ def _bucket_energy_wh(row: dict[str, Any], bucket: str) -> float:
     return avg_power_w * _bucket_duration_hours(bucket)
 
 
+def _bucket_counter_energy_kwh(
+    row: dict[str, Any],
+    energy_counter_meta: tuple[str, int] | None,
+) -> float | None:
+    if not energy_counter_meta:
+        return None
+
+    dp_key, scale = energy_counter_meta
+    first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale)
+    last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale)
+    if first_kwh is None or last_kwh is None or last_kwh < first_kwh:
+        return None
+    return max(last_kwh - first_kwh, 0.0)
+
+
+def _estimate_bucket_energy_kwh(
+    row: dict[str, Any],
+    bucket: str,
+    energy_counter_meta: tuple[str, int] | None,
+) -> float:
+    integrated_kwh = _bucket_energy_wh(row, bucket) / 1000.0
+    counter_kwh = _bucket_counter_energy_kwh(row, energy_counter_meta)
+    if counter_kwh is None:
+        return integrated_kwh
+
+    # Some devices update cumulative energy in sparse jumps, which collapses
+    # multi-bucket charts to a single visible bar despite steady power samples.
+    if integrated_kwh > 0.0 and counter_kwh < (integrated_kwh * 0.5):
+        return integrated_kwh
+
+    return counter_kwh
+
+
 def _aggregate_energy_wh(
     bucket_rows: list[dict[str, Any]],
     bucket: str,
@@ -1026,14 +1059,10 @@ def _aggregate_energy_wh(
     if not bucket_rows:
         return 0.0
 
-    if energy_counter_meta:
-        dp_key, scale = energy_counter_meta
-        first_kwh = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[0].get("first_raw_dps")), dp_key, scale)
-        last_kwh = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[-1].get("last_raw_dps")), dp_key, scale)
-        if first_kwh is not None and last_kwh is not None and last_kwh >= first_kwh:
-            return (last_kwh - first_kwh) * 1000.0
-
-    return sum(_bucket_energy_wh(row, bucket) for row in bucket_rows)
+    return sum(
+        _estimate_bucket_energy_kwh(row, bucket, energy_counter_meta) * 1000.0
+        for row in bucket_rows
+    )
 
 
 def _build_chart_series_from_aggregate(
@@ -1043,24 +1072,8 @@ def _build_chart_series_from_aggregate(
 ) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
 
-    use_counter = False
-    if energy_counter_meta and len(bucket_rows) >= 1:
-        dp_key, scale = energy_counter_meta
-        first_value = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[0].get("first_raw_dps")), dp_key, scale)
-        last_value = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[-1].get("last_raw_dps")), dp_key, scale)
-        use_counter = first_value is not None and last_value is not None
-
     for row in bucket_rows:
-        if use_counter:
-            dp_key, scale = energy_counter_meta  # type: ignore[misc]
-            first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale)
-            last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale)
-            if first_kwh is not None and last_kwh is not None and last_kwh >= first_kwh:
-                energy_kwh = max(last_kwh - first_kwh, 0.0)
-            else:
-                energy_kwh = _bucket_energy_wh(row, bucket) / 1000.0
-        else:
-            energy_kwh = _bucket_energy_wh(row, bucket) / 1000.0
+        energy_kwh = _estimate_bucket_energy_kwh(row, bucket, energy_counter_meta)
 
         avg_power_kw = (_coerce_float(row.get("avg_power_w")) or 0.0) / 1000.0
         timestamp_dt = _parse_dt(row["bucket"]) if not isinstance(row["bucket"], datetime) else row["bucket"]
