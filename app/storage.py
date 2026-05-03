@@ -136,13 +136,12 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
             cursor.executemany(
                 """
                 INSERT INTO devices (
-                    slug, name, room, image_label, image_id, device_id, category_code, device_kind,
+                    slug, name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
                     power_dps_key, power_scale, voltage_dps_keys
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
                 ON CONFLICT(slug) DO UPDATE SET
                     device_id = EXCLUDED.device_id,
-                    image_id = COALESCE(devices.image_id, EXCLUDED.image_id),
                     device_kind = EXCLUDED.device_kind,
                     is_energy_meter = EXCLUDED.is_energy_meter,
                     onboarding_source = EXCLUDED.onboarding_source,
@@ -156,8 +155,6 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                         device.slug,
                         device.name,
                         device.room,
-                        device.image_label,
-                        device.image_id,
                         device.device_id,
                         None,
                         "meter",
@@ -215,8 +212,6 @@ def upsert_managed_device(
     slug: str,
     name: str,
     room: str,
-    image_label: str,
-    image_id: str | None,
     device_id: str,
     category_code: str | None,
     device_kind: str,
@@ -238,16 +233,15 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO devices (
-                    slug, name, room, image_label, image_id, device_id, category_code, device_kind,
+                    slug, name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
                     power_dps_key, power_scale, voltage_dps_keys
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
                 ON CONFLICT(slug) DO UPDATE SET
                     room = CASE
                         WHEN devices.room = '' OR devices.room = 'Без комнаты' THEN EXCLUDED.room
                         ELSE devices.room
                     END,
-                    image_id = COALESCE(devices.image_id, EXCLUDED.image_id),
                     device_id = EXCLUDED.device_id,
                     category_code = EXCLUDED.category_code,
                     device_kind = EXCLUDED.device_kind,
@@ -265,8 +259,6 @@ def upsert_managed_device(
                     slug,
                     name,
                     room,
-                    image_label,
-                    image_id,
                     device_id,
                     category_code,
                     device_kind,
@@ -341,8 +333,6 @@ def refresh_managed_device_cloud_data(
     device_id: str,
     name: str,
     room: str,
-    image_label: str,
-    image_id: str | None,
     category_code: str | None,
     device_kind: str,
     is_energy_meter: bool,
@@ -362,8 +352,6 @@ def refresh_managed_device_cloud_data(
                 UPDATE devices
                 SET name = %s,
                     room = %s,
-                    image_label = %s,
-                    image_id = COALESCE(image_id, %s),
                     category_code = %s,
                     device_kind = %s,
                     is_energy_meter = %s,
@@ -380,8 +368,6 @@ def refresh_managed_device_cloud_data(
                 (
                     name,
                     room,
-                    image_label,
-                    image_id,
                     category_code,
                     device_kind,
                     is_energy_meter,
@@ -641,8 +627,8 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.slug, d.name, d.room, d.image_label, d.device_kind, d.is_energy_meter,
-                      d.product_name, d.category_code, d.image_id, d.device_id,
+                SELECT d.slug, d.name, d.room, d.device_kind, d.is_energy_meter,
+                      d.product_name, d.category_code, d.device_id,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -658,7 +644,7 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                  SELECT d.slug, d.name, d.room, d.image_label, d.image_id, d.device_id, d.device_kind, d.is_energy_meter,
+                                    SELECT d.slug, d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter,
                       d.product_name, d.category_code, d.product_id, d.icon,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
@@ -733,7 +719,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                  SELECT d.slug, d.name, d.room, d.image_label, d.image_id, d.device_id,
+                                    SELECT d.slug, d.name, d.room, d.device_id,
                        c.local_key, c.ip_address, c.version, c.power_dps_key,
                        c.power_scale, c.voltage_dps_keys
                 FROM devices d
@@ -751,7 +737,6 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         slug=row["slug"],
         name=row["name"],
         room=row["room"],
-        image_label=row["image_label"],
         device_id=row["device_id"],
         local_key=row["local_key"],
         ip_address=row["ip_address"],
@@ -759,7 +744,6 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         power_dps_key=str(row["power_dps_key"] or ""),
         power_scale=float(row["power_scale"] or 1),
         voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
-        image_id=str(row.get("image_id") or "").strip() or None,
     )
 
 
@@ -767,7 +751,7 @@ def get_device_by_id(config: AppConfig, device_id: str) -> dict[str, Any] | None
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT slug, name, room, image_label, image_id, device_id FROM devices WHERE device_id = %s",
+                "SELECT slug, name, room, device_id FROM devices WHERE device_id = %s",
                 (device_id,),
             )
             return cursor.fetchone()
@@ -778,7 +762,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                  SELECT d.slug, d.name, d.room, d.image_label, d.image_id, d.device_id,
+                                    SELECT d.slug, d.name, d.room, d.device_id,
                        c.local_key, c.ip_address, c.version, c.power_dps_key,
                        c.power_scale, c.voltage_dps_keys
                 FROM devices d
@@ -796,7 +780,6 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 slug=row["slug"],
                 name=row["name"],
                 room=row["room"],
-                image_label=row["image_label"],
                 device_id=row["device_id"],
                 local_key=row["local_key"],
                 ip_address=row["ip_address"],
@@ -804,7 +787,6 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 power_dps_key=str(row["power_dps_key"] or ""),
                 power_scale=float(row["power_scale"] or 1),
                 voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
-                image_id=str(row.get("image_id") or "").strip() or None,
             )
         )
     return devices
@@ -1222,8 +1204,8 @@ def _get_dashboard_summary_context(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.slug, d.name, d.room, d.image_label, d.device_kind, d.is_energy_meter,
-                      d.product_name, d.category_code, d.image_id, d.device_id,
+                SELECT d.slug, d.name, d.room, d.device_kind, d.is_energy_meter,
+                    d.product_name, d.category_code, d.device_id,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -1332,8 +1314,6 @@ def get_dashboard_summary(
             "slug": device["slug"],
             "name": device["name"],
             "room": device["room"],
-            "image_label": device["image_label"],
-            "image_id": device.get("image_id"),
             "device_id": device.get("device_id"),
             "device_kind": device.get("device_kind"),
             "connection_ready": bool(device.get("connection_ready")),
@@ -1462,7 +1442,7 @@ def get_device_context_and_stats(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
+                SELECT slug, name, room, device_id, device_kind, is_energy_meter,
                        product_name, category_code, product_id, icon
                 FROM devices
                 WHERE device_id = %s

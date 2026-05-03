@@ -2,8 +2,6 @@ CREATE TABLE devices (
     slug TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     room TEXT NOT NULL,
-    image_label TEXT NOT NULL,
-    image_id TEXT,
     device_id TEXT NOT NULL,
     category_code TEXT,
     device_kind TEXT NOT NULL DEFAULT 'switch',

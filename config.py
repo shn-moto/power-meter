@@ -12,7 +12,6 @@ class TuyaDeviceConfig:
     slug: str
     name: str
     room: str
-    image_label: str
     device_id: str
     local_key: str
     ip_address: str
@@ -20,7 +19,6 @@ class TuyaDeviceConfig:
     power_dps_key: str
     power_scale: float
     voltage_dps_keys: tuple[str, ...]
-    image_id: str | None = None
 
 
 @dataclass(slots=True)
