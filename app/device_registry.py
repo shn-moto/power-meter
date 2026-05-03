@@ -11,7 +11,6 @@ from app.storage import (
     replace_device_capabilities,
     get_device_row,
     get_known_local_ips,
-    init_db,
     save_cloud_artifact,
     upsert_managed_device,
 )
@@ -245,8 +244,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     clean_device_id = device_id.strip()
     if not clean_device_id:
         raise ConfigError("Укажите device ID")
-
-    init_db(config)
 
     cloud_config = load_cloud_config(required=True)
     cloud = tinytuya.Cloud(

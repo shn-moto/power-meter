@@ -19,6 +19,7 @@ from app.device_registry import DEVICE_KIND_LABELS, connect_device, sync_config_
 from config import AppConfig, load_app_config, load_devices
 from app.storage import (
     DeviceSample,
+    apply_migrations,
     close_connection_pool,
     get_control_device,
     get_device_capabilities,
@@ -31,7 +32,6 @@ from app.storage import (
     get_sample_status,
     get_polling_devices,
     init_connection_pool,
-    init_db,
     pick_bucket,
     save_sample,
     sync_devices,
@@ -599,8 +599,8 @@ async def lifespan(app: FastAPI):
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
     app.state.aggregate_cache = {}
+    await asyncio.to_thread(apply_migrations, app.state.app_config.database_url)
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
-    await asyncio.to_thread(init_db, app.state.app_config)
     configured_devices = load_devices()
     await asyncio.to_thread(sync_devices, app.state.app_config, configured_devices)
     await asyncio.to_thread(sync_config_device_capabilities, app.state.app_config, configured_devices)

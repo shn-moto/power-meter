@@ -3,6 +3,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,34 +16,18 @@ from config import AppConfig, TuyaDeviceConfig
 
 
 RUSSIAN_MONTH_LABELS_SHORT = {
-    1: "янв",
-    2: "фев",
-    3: "мар",
-    4: "апр",
-    5: "май",
-    6: "июн",
-    7: "июл",
-    8: "авг",
-    9: "сен",
-    10: "окт",
-    11: "ноя",
-    12: "дек",
+    1: "янв", 2: "фев", 3: "мар", 4: "апр", 5: "май", 6: "июн",
+    7: "июл", 8: "авг", 9: "сен", 10: "окт", 11: "ноя", 12: "дек",
 }
 
 RUSSIAN_MONTH_LABELS_FULL = {
-    1: "Январь",
-    2: "Февраль",
-    3: "Март",
-    4: "Апрель",
-    5: "Май",
-    6: "Июнь",
-    7: "Июль",
-    8: "Август",
-    9: "Сентябрь",
-    10: "Октябрь",
-    11: "Ноябрь",
-    12: "Декабрь",
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
 }
+
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
 @dataclass(slots=True)
@@ -93,294 +78,59 @@ def _connect(database_url: str):
     return psycopg.connect(database_url, row_factory=dict_row)
 
 
-def init_db(config: AppConfig) -> None:
-    statements = [
-        """
-        CREATE TABLE IF NOT EXISTS devices (
-            slug TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            room TEXT NOT NULL,
-            image_label TEXT NOT NULL,
-            image_id TEXT,
-            device_id TEXT NOT NULL,
-            power_dps_key TEXT NOT NULL,
-            power_scale DOUBLE PRECISION NOT NULL,
-            voltage_dps_keys JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS category_code TEXT",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS image_id TEXT",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_kind TEXT NOT NULL DEFAULT 'switch'",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_energy_meter BOOLEAN NOT NULL DEFAULT FALSE",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS product_id TEXT",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS product_name TEXT",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS icon TEXT",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS onboarding_source TEXT NOT NULL DEFAULT 'config'",
-        "ALTER TABLE devices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_id_unique ON devices(device_id)",
-        """
-        CREATE TABLE IF NOT EXISTS device_connections (
-            device_id TEXT PRIMARY KEY REFERENCES devices(device_id) ON DELETE CASCADE,
-            local_key TEXT NOT NULL,
-            ip_address TEXT NOT NULL,
-            version DOUBLE PRECISION NOT NULL DEFAULT 3.5,
-            power_dps_key TEXT,
-            power_scale DOUBLE PRECISION NOT NULL DEFAULT 1,
-            voltage_dps_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS device_capabilities (
-            id BIGSERIAL PRIMARY KEY,
-            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-            capability_source TEXT NOT NULL,
-            capability_code TEXT NOT NULL,
-            capability_name TEXT,
-            value_type TEXT,
-            dp_id INTEGER,
-            values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS samples (
-            id BIGSERIAL PRIMARY KEY,
-            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-            captured_at TIMESTAMPTZ NOT NULL,
-            power_w DOUBLE PRECISION NOT NULL,
-            voltage_v DOUBLE PRECISION,
-            raw_dps JSONB NOT NULL,
-            source TEXT NOT NULL DEFAULT 'live',
-            source_event_id TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS device_events (
-            id BIGSERIAL PRIMARY KEY,
-            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-            event_at TIMESTAMPTZ NOT NULL,
-            event_type TEXT,
-            event_code TEXT,
-            source_event_id TEXT,
-            payload JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS device_cloud_artifacts (
-            id BIGSERIAL PRIMARY KEY,
-            device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-            artifact_type TEXT NOT NULL,
-            payload JSONB NOT NULL,
-            fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_device_connections_ip ON device_connections(ip_address)",
-        "ALTER TABLE device_connections ADD COLUMN IF NOT EXISTS device_id TEXT",
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = 'device_connections' AND column_name = 'device_slug'
-            ) THEN
-                UPDATE device_connections AS dc
-                SET device_id = d.device_id
-                FROM devices AS d
-                WHERE dc.device_id IS NULL AND dc.device_slug = d.slug;
+def _split_sql_statements(text: str) -> list[str]:
+    statements: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        current.append(line)
+        if line.rstrip().endswith(";"):
+            stmt = "\n".join(current).strip()
+            if stmt and stmt != ";":
+                statements.append(stmt)
+            current = []
+    tail = "\n".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
 
-                ALTER TABLE device_connections DROP COLUMN device_slug CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE device_connections ALTER COLUMN device_id SET NOT NULL",
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'device_connections_device_id_fkey'
-            ) THEN
-                ALTER TABLE device_connections
-                ADD CONSTRAINT device_connections_device_id_fkey
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
-            END IF;
 
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'device_connections_pkey'
-            ) THEN
-                ALTER TABLE device_connections
-                ADD CONSTRAINT device_connections_pkey PRIMARY KEY (device_id);
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE device_capabilities ADD COLUMN IF NOT EXISTS device_id TEXT",
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = 'device_capabilities' AND column_name = 'device_slug'
-            ) THEN
-                UPDATE device_capabilities AS dc
-                SET device_id = d.device_id
-                FROM devices AS d
-                WHERE dc.device_id IS NULL AND dc.device_slug = d.slug;
-
-                ALTER TABLE device_capabilities DROP COLUMN device_slug CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE device_capabilities ALTER COLUMN device_id SET NOT NULL",
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'device_capabilities_device_id_fkey'
-            ) THEN
-                ALTER TABLE device_capabilities
-                ADD CONSTRAINT device_capabilities_device_id_fkey
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_capabilities_unique ON device_capabilities(device_id, capability_source, capability_code)",
-        "CREATE INDEX IF NOT EXISTS idx_device_capabilities_device ON device_capabilities(device_id)",
-        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS device_id TEXT",
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = 'samples' AND column_name = 'device_slug'
-            ) THEN
-                UPDATE samples AS s
-                SET device_id = d.device_id
-                FROM devices AS d
-                WHERE s.device_id IS NULL AND s.device_slug = d.slug;
-
-                ALTER TABLE samples DROP COLUMN device_slug CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE samples ALTER COLUMN device_id SET NOT NULL",
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'samples_device_id_fkey'
-            ) THEN
-                ALTER TABLE samples
-                ADD CONSTRAINT samples_device_id_fkey
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_device_time_source ON samples(device_id, captured_at, source)",
-        "CREATE INDEX IF NOT EXISTS idx_samples_device_time ON samples(device_id, captured_at)",
-        "CREATE INDEX IF NOT EXISTS idx_samples_device_time_desc ON samples(device_id, captured_at DESC)",
-        "ALTER TABLE device_events ADD COLUMN IF NOT EXISTS device_id TEXT",
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = 'device_events' AND column_name = 'device_slug'
-            ) THEN
-                UPDATE device_events AS de
-                SET device_id = d.device_id
-                FROM devices AS d
-                WHERE de.device_id IS NULL AND de.device_slug = d.slug;
-
-                ALTER TABLE device_events DROP COLUMN device_slug CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE device_events ALTER COLUMN device_id SET NOT NULL",
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'device_events_device_id_fkey'
-            ) THEN
-                ALTER TABLE device_events
-                ADD CONSTRAINT device_events_device_id_fkey
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_events_unique ON device_events(device_id, source_event_id)",
-        "CREATE INDEX IF NOT EXISTS idx_device_events_device_time ON device_events(device_id, event_at)",
-        "ALTER TABLE device_cloud_artifacts ADD COLUMN IF NOT EXISTS device_id TEXT",
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = 'device_cloud_artifacts' AND column_name = 'device_slug'
-            ) THEN
-                UPDATE device_cloud_artifacts AS dca
-                SET device_id = d.device_id
-                FROM devices AS d
-                WHERE dca.device_id IS NULL AND dca.device_slug = d.slug;
-
-                ALTER TABLE device_cloud_artifacts DROP COLUMN device_slug CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "ALTER TABLE device_cloud_artifacts ALTER COLUMN device_id SET NOT NULL",
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'device_cloud_artifacts_device_id_fkey'
-            ) THEN
-                ALTER TABLE device_cloud_artifacts
-                ADD CONSTRAINT device_cloud_artifacts_device_id_fkey
-                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE;
-            END IF;
-        END
-        $$
-        """,
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_cloud_artifacts_unique ON device_cloud_artifacts(device_id, artifact_type)",
-        "CREATE INDEX IF NOT EXISTS idx_device_cloud_artifacts_type ON device_cloud_artifacts(device_id, artifact_type)",
-    ]
-    with _connect(config.database_url) as connection:
+def apply_migrations(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as connection:
         with connection.cursor() as cursor:
-            for statement in statements:
-                cursor.execute(statement)
-        connection.commit()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version    TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cursor.execute("SELECT version FROM schema_migrations")
+            applied: set[str] = {row[0] for row in cursor.fetchall()}
+
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        version = path.stem
+        if version in applied:
+            continue
+
+        statements = _split_sql_statements(path.read_text(encoding="utf-8"))
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                for statement in statements:
+                    cursor.execute(statement)
+                cursor.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (%s)",
+                    (version,),
+                )
+
+
+def init_db(config: AppConfig) -> None:
+    apply_migrations(config.database_url)
 
 
 def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
+    if not devices:
+        return
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
@@ -589,25 +339,56 @@ def save_sample(config: AppConfig, sample: DeviceSample) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-            """
-            INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
-                power_w = EXCLUDED.power_w,
-                voltage_v = EXCLUDED.voltage_v,
-                raw_dps = EXCLUDED.raw_dps,
-                source_event_id = EXCLUDED.source_event_id
-            """,
-            (
-                sample.device_id,
-                sample.captured_at,
-                sample.power_w,
-                sample.voltage_v,
-                Jsonb(sample.raw_dps),
-                sample.source,
-                sample.source_event_id,
-            ),
-        )
+                """
+                INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
+                    power_w = EXCLUDED.power_w,
+                    voltage_v = EXCLUDED.voltage_v,
+                    raw_dps = EXCLUDED.raw_dps,
+                    source_event_id = EXCLUDED.source_event_id
+                """,
+                (
+                    sample.device_id,
+                    sample.captured_at,
+                    sample.power_w,
+                    sample.voltage_v,
+                    Jsonb(sample.raw_dps),
+                    sample.source,
+                    sample.source_event_id,
+                ),
+            )
+        connection.commit()
+
+
+def save_samples_batch(config: AppConfig, samples: list[DeviceSample]) -> None:
+    if not samples:
+        return
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
+                    power_w = EXCLUDED.power_w,
+                    voltage_v = EXCLUDED.voltage_v,
+                    raw_dps = EXCLUDED.raw_dps,
+                    source_event_id = EXCLUDED.source_event_id
+                """,
+                [
+                    (
+                        sample.device_id,
+                        sample.captured_at,
+                        sample.power_w,
+                        sample.voltage_v,
+                        Jsonb(sample.raw_dps),
+                        sample.source,
+                        sample.source_event_id,
+                    )
+                    for sample in samples
+                ],
+            )
         connection.commit()
 
 
@@ -769,7 +550,7 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                  SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
+                SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
                        product_name, category_code, product_id, icon
                 FROM devices WHERE device_id = %s
                 """,
@@ -916,14 +697,14 @@ def get_samples(config: AppConfig, device_id: str, start: datetime, end: datetim
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-            """
-            SELECT captured_at, power_w, voltage_v, raw_dps
-            FROM samples
-            WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
-            ORDER BY captured_at ASC
-            """,
-            (device_id, start, end),
-        )
+                """
+                SELECT captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
+                """,
+                (device_id, start, end),
+            )
             return cursor.fetchall()
 
 
@@ -931,29 +712,16 @@ def get_latest_sample(config: AppConfig, device_id: str) -> dict[str, Any] | Non
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-            """
-            SELECT captured_at, power_w, voltage_v, raw_dps
-            FROM samples
-            WHERE device_id = %s
-            ORDER BY captured_at DESC
-            LIMIT 1
-            """,
-            (device_id,),
-        )
+                """
+                SELECT captured_at, power_w, voltage_v, raw_dps
+                FROM samples
+                WHERE device_id = %s
+                ORDER BY captured_at DESC
+                LIMIT 1
+                """,
+                (device_id,),
+            )
             return cursor.fetchone()
-
-
-def _integrate_energy_wh(rows: list[dict[str, Any]]) -> float:
-    if len(rows) < 2:
-        return 0.0
-
-    total_wh = 0.0
-    for current, following in zip(rows, rows[1:]):
-        current_dt = _parse_dt(current["captured_at"])
-        next_dt = _parse_dt(following["captured_at"])
-        hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
-        total_wh += _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"), current.get("raw_dps")) * hours
-    return total_wh
 
 
 def _bucket_start(dt: datetime, bucket: str) -> datetime:
@@ -1037,62 +805,23 @@ def _format_tooltip_label(dt: datetime, bucket: str, period: str) -> str:
     return f"{RUSSIAN_MONTH_LABELS_FULL[dt.month]} {dt.year}"
 
 
-def _build_series(rows: list[dict[str, Any]], bucket: str) -> list[dict[str, Any]]:
-    if len(rows) < 2:
-        return []
-
-    grouped: dict[datetime, dict[str, float]] = defaultdict(lambda: {"energy_wh": 0.0, "power_sum": 0.0, "count": 0})
-    for current, following in zip(rows, rows[1:]):
-        current_dt = _parse_dt(current["captured_at"])
-        next_dt = _parse_dt(following["captured_at"])
-        hours = max((next_dt - current_dt).total_seconds(), 0) / 3600.0
-        group = grouped[_bucket_start(current_dt, bucket)]
-        power_w = _normalize_sample_power_w(float(current["power_w"]), current.get("voltage_v"), current.get("raw_dps"))
-        group["energy_wh"] += power_w * hours
-        group["power_sum"] += power_w
-        group["count"] += 1
-
-    return [
-        {
-            "timestamp": bucket_start.isoformat(),
-            "energy_kwh": round(values["energy_wh"] / 1000.0, 4),
-            "avg_power_kw": round((values["power_sum"] / max(values["count"], 1)) / 1000.0, 4),
-        }
-        for bucket_start, values in sorted(grouped.items())
-    ]
+_CAGG_VIEWS = {
+    "hour": "samples_hourly",
+    "day": "samples_daily",
+    "month": "samples_monthly",
+}
 
 
-def _read_energy_counter_kwh(raw_dps: dict[str, Any], dp_key: str, scale: int) -> float | None:
+def _read_energy_counter_kwh(raw_dps: dict[str, Any] | None, dp_key: str, scale: int) -> float | None:
+    if not raw_dps:
+        return None
     raw_value = raw_dps.get(dp_key)
     if raw_value is None:
         return None
-
     try:
         return float(raw_value) / (10 ** scale)
     except (TypeError, ValueError):
         return None
-
-
-def _integrate_energy_counter_kwh(rows: list[dict[str, Any]], dp_key: str, scale: int) -> float | None:
-    if len(rows) < 2:
-        return None
-
-    total_kwh = 0.0
-    has_counter_pairs = False
-    for current, following in zip(rows, rows[1:]):
-        current_raw_dps = _normalize_json_field(current["raw_dps"])
-        following_raw_dps = _normalize_json_field(following["raw_dps"])
-        current_kwh = _read_energy_counter_kwh(current_raw_dps, dp_key, scale)
-        following_kwh = _read_energy_counter_kwh(following_raw_dps, dp_key, scale)
-        if current_kwh is None or following_kwh is None:
-            continue
-
-        has_counter_pairs = True
-        total_kwh += max(following_kwh - current_kwh, 0.0)
-
-    if not has_counter_pairs:
-        return None
-    return total_kwh
 
 
 def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]]) -> tuple[str, int] | None:
@@ -1118,53 +847,152 @@ def _get_energy_counter_meta(
     return _get_energy_counter_meta_from_capabilities(get_device_capabilities(config, device_id))
 
 
-def _build_series_from_energy_counter(
-    rows: list[dict[str, Any]],
-    bucket: str,
-    dp_key: str,
-    scale: int,
-) -> list[dict[str, Any]]:
-    if len(rows) < 2:
-        return []
-
-    grouped: dict[datetime, dict[str, float]] = defaultdict(lambda: {"energy_kwh": 0.0})
-    bucket_hours = _bucket_duration_hours(bucket)
-
-    for current, following in zip(rows, rows[1:]):
-        current_dt = _parse_dt(current["captured_at"])
-        group = grouped[_bucket_start(current_dt, bucket)]
-
-        delta_kwh = _integrate_energy_counter_kwh([current, following], dp_key, scale)
-        if delta_kwh is None:
-            continue
-        group["energy_kwh"] += delta_kwh
-
-    return [
-        {
-            "timestamp": bucket_start.isoformat(),
-            "energy_kwh": round(values["energy_kwh"], 4),
-            "avg_power_kw": round(values["energy_kwh"] / bucket_hours, 4),
-        }
-        for bucket_start, values in sorted(grouped.items())
-    ]
-
-
-def _calculate_energy_wh(
+def _read_aggregate_rows(
     config: AppConfig,
-    device_id: str,
-    rows: list[dict[str, Any]],
-    capabilities: list[dict[str, Any]] | None = None,
-    energy_counter_meta: tuple[str, int] | None = None,
-) -> float:
-    integrated_wh = _integrate_energy_wh(rows)
-    energy_counter_meta = energy_counter_meta or _get_energy_counter_meta(config, device_id, capabilities)
-    if not energy_counter_meta:
-        return integrated_wh
+    device_ids: list[str],
+    bucket: str,
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, Any]]:
+    if not device_ids:
+        return []
+    view = _CAGG_VIEWS.get(bucket)
+    if view is None:
+        return []
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    device_id, bucket,
+                    avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
+                    last_power_w, last_voltage_v,
+                    first_raw_dps, last_raw_dps,
+                    first_captured_at, last_captured_at
+                FROM {view}
+                WHERE device_id = ANY(%s) AND bucket >= %s AND bucket <= %s
+                ORDER BY device_id ASC, bucket ASC
+                """,
+                (device_ids, start, end),
+            )
+            return cursor.fetchall()
 
-    counter_kwh = _integrate_energy_counter_kwh(rows, *energy_counter_meta)
-    if counter_kwh is None:
-        return integrated_wh
-    return counter_kwh * 1000.0
+
+def _bucket_energy_wh(row: dict[str, Any], bucket: str) -> float:
+    energy_wh = _coerce_float(row.get("energy_wh"))
+    if energy_wh is not None:
+        return energy_wh
+    avg_power_w = _coerce_float(row.get("avg_power_w")) or 0.0
+    return avg_power_w * _bucket_duration_hours(bucket)
+
+
+def _aggregate_energy_wh(
+    bucket_rows: list[dict[str, Any]],
+    bucket: str,
+    energy_counter_meta: tuple[str, int] | None,
+) -> float:
+    if not bucket_rows:
+        return 0.0
+
+    if energy_counter_meta:
+        dp_key, scale = energy_counter_meta
+        first_kwh = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[0].get("first_raw_dps")), dp_key, scale)
+        last_kwh = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[-1].get("last_raw_dps")), dp_key, scale)
+        if first_kwh is not None and last_kwh is not None and last_kwh >= first_kwh:
+            return (last_kwh - first_kwh) * 1000.0
+
+    return sum(_bucket_energy_wh(row, bucket) for row in bucket_rows)
+
+
+def _build_chart_series_from_aggregate(
+    bucket_rows: list[dict[str, Any]],
+    bucket: str,
+    energy_counter_meta: tuple[str, int] | None,
+) -> list[dict[str, Any]]:
+    series: list[dict[str, Any]] = []
+
+    use_counter = False
+    if energy_counter_meta and len(bucket_rows) >= 1:
+        dp_key, scale = energy_counter_meta
+        first_value = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[0].get("first_raw_dps")), dp_key, scale)
+        last_value = _read_energy_counter_kwh(_normalize_json_field(bucket_rows[-1].get("last_raw_dps")), dp_key, scale)
+        use_counter = first_value is not None and last_value is not None
+
+    for row in bucket_rows:
+        if use_counter:
+            dp_key, scale = energy_counter_meta  # type: ignore[misc]
+            first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale)
+            last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale)
+            if first_kwh is not None and last_kwh is not None and last_kwh >= first_kwh:
+                energy_kwh = max(last_kwh - first_kwh, 0.0)
+            else:
+                energy_kwh = _bucket_energy_wh(row, bucket) / 1000.0
+        else:
+            energy_kwh = _bucket_energy_wh(row, bucket) / 1000.0
+
+        avg_power_kw = (_coerce_float(row.get("avg_power_w")) or 0.0) / 1000.0
+        timestamp_dt = _parse_dt(row["bucket"]) if not isinstance(row["bucket"], datetime) else row["bucket"]
+        series.append(
+            {
+                "timestamp": timestamp_dt.isoformat(),
+                "energy_kwh": round(energy_kwh, 4),
+                "avg_power_kw": round(avg_power_kw, 4),
+            }
+        )
+
+    return series
+
+
+def _prepare_chart_series(
+    rows_by_device: list[dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    period: str,
+    bucket: str,
+    energy_counter_meta: tuple[str, int] | None,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    base_series = _build_chart_series_from_aggregate(rows_by_device, bucket, energy_counter_meta)
+    chart = {
+        "metric": "energy_kwh",
+        "unit": "кВт·ч",
+        "label": "Потребление",
+        "bucket": bucket,
+        "period": period,
+    }
+
+    chart_series_by_bucket = {
+        _parse_dt(item["timestamp"]): {
+            **item,
+            "chart_value": round(float(item.get("energy_kwh") or 0.0), 4),
+        }
+        for item in base_series
+    }
+
+    if period in {"day", "week", "month", "year"}:
+        bucket_sequence = _build_fixed_bucket_sequence(start, period, bucket)
+    else:
+        bucket_sequence = _build_custom_bucket_sequence(start, end, bucket)
+
+    filled_series: list[dict[str, Any]] = []
+    for current in bucket_sequence:
+        filled_series.append(
+            chart_series_by_bucket.get(
+                current,
+                {
+                    "timestamp": current.isoformat(),
+                    "energy_kwh": 0.0,
+                    "avg_power_kw": 0.0,
+                    "chart_value": 0.0,
+                },
+            )
+        )
+
+    for item in filled_series:
+        bucket_dt = _parse_dt(item["timestamp"])
+        item["axis_label"] = _format_axis_label(bucket_dt, bucket, period)
+        item["tooltip_label"] = _format_tooltip_label(bucket_dt, bucket, period)
+
+    return filled_series, chart
 
 
 def _row_from_live_sample(sample: DeviceSample) -> dict[str, Any]:
@@ -1174,20 +1002,6 @@ def _row_from_live_sample(sample: DeviceSample) -> dict[str, Any]:
         "voltage_v": sample.voltage_v,
         "raw_dps": sample.raw_dps,
     }
-
-
-def _merge_live_sample(rows: list[dict[str, Any]], live_sample: DeviceSample | None) -> list[dict[str, Any]]:
-    if not live_sample:
-        return rows
-
-    if not rows:
-        return [_row_from_live_sample(live_sample)]
-
-    latest_dt = _parse_dt(rows[-1]["captured_at"])
-    if live_sample.captured_at <= latest_dt:
-        return rows
-
-    return [*rows, _row_from_live_sample(live_sample)]
 
 
 def get_sample_age_seconds(captured_at: datetime | None, now: datetime) -> int | None:
@@ -1221,7 +1035,7 @@ def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str
     return metadata
 
 
-def _group_rows_by_device(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _group_aggregate_rows_by_device(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[str(row.get("device_id") or "")].append(row)
@@ -1280,84 +1094,25 @@ def _get_dashboard_summary_context(
 
             cursor.execute(
                 """
-                SELECT device_id, captured_at, power_w, voltage_v, raw_dps
-                FROM samples
-                WHERE device_id = ANY(%s) AND captured_at >= %s AND captured_at <= %s
-                ORDER BY device_id ASC, captured_at ASC
+                SELECT device_id, bucket,
+                       avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
+                       last_power_w, last_voltage_v,
+                       first_raw_dps, last_raw_dps,
+                       first_captured_at, last_captured_at
+                FROM samples_daily
+                WHERE device_id = ANY(%s) AND bucket >= %s AND bucket <= %s
+                ORDER BY device_id ASC, bucket ASC
                 """,
                 (device_ids, month_start, now),
             )
-            month_rows = cursor.fetchall()
+            daily_rows = cursor.fetchall()
 
     return (
         device_rows,
         {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
-        _group_rows_by_device(month_rows),
+        _group_aggregate_rows_by_device(daily_rows),
         _build_energy_counter_meta_by_device(energy_counter_rows),
     )
-
-
-def _prepare_chart_series(
-    config: AppConfig,
-    device_id: str,
-    rows: list[dict[str, Any]],
-    start: datetime,
-    end: datetime,
-    period: str,
-    bucket: str,
-    series: list[dict[str, Any]],
-    energy_counter_meta: tuple[str, int] | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    chart_metric = "energy_kwh"
-    chart = {
-        "metric": chart_metric,
-        "unit": "кВт·ч",
-        "label": "Потребление",
-        "bucket": bucket,
-        "period": period,
-    }
-
-    max_chart_value = max((float(item.get(chart_metric) or 0.0) for item in series), default=0.0)
-    energy_counter_meta = energy_counter_meta or _get_energy_counter_meta(config, device_id)
-    if energy_counter_meta:
-        fallback_series = _build_series_from_energy_counter(rows, bucket, *energy_counter_meta)
-        fallback_max = max((float(item.get("energy_kwh") or 0.0) for item in fallback_series), default=0.0)
-        if fallback_series and fallback_max > 0.0:
-            series = fallback_series
-
-    chart_series_by_bucket = {
-        _parse_dt(item["timestamp"]): {
-            **item,
-            "chart_value": round(float(item.get(chart_metric) or 0.0), 4),
-        }
-        for item in series
-    }
-
-    if period in {"day", "week", "month", "year"}:
-        bucket_sequence = _build_fixed_bucket_sequence(start, period, bucket)
-    else:
-        bucket_sequence = _build_custom_bucket_sequence(start, end, bucket)
-
-    filled_series: list[dict[str, Any]] = []
-    for current in bucket_sequence:
-        filled_series.append(
-            chart_series_by_bucket.get(
-                current,
-                {
-                    "timestamp": current.isoformat(),
-                    "energy_kwh": 0.0,
-                    "avg_power_kw": 0.0,
-                    "chart_value": 0.0,
-                },
-            )
-        )
-
-    for item in filled_series:
-        bucket_dt = _parse_dt(item["timestamp"])
-        item["axis_label"] = _format_axis_label(bucket_dt, bucket, period)
-        item["tooltip_label"] = _format_tooltip_label(bucket_dt, bucket, period)
-
-    return filled_series, chart
 
 
 def get_dashboard_summary(
@@ -1372,23 +1127,20 @@ def get_dashboard_summary(
     online_device_count = 0
     live_samples = live_samples or {}
 
-    device_rows, latest_by_device, month_rows_by_device, energy_counter_meta_by_device = _get_dashboard_summary_context(
-        config,
-        month_start,
-        now,
+    device_rows, latest_by_device, daily_rows_by_device, energy_counter_meta_by_device = _get_dashboard_summary_context(
+        config, month_start, now
     )
 
     for device in device_rows:
-
         device_id = str(device.get("device_id") or "")
         live_sample = live_samples.get(device_id)
         latest = latest_by_device.get(device_id)
-        samples = _merge_live_sample(month_rows_by_device.get(device_id, []), live_sample)
-        device_energy_wh = _calculate_energy_wh(
-            config,
-            device_id,
-            samples,
-            energy_counter_meta=energy_counter_meta_by_device.get(device_id),
+
+        bucket_rows = daily_rows_by_device.get(device_id, [])
+        device_energy_wh = _aggregate_energy_wh(
+            bucket_rows,
+            "day",
+            energy_counter_meta_by_device.get(device_id),
         )
         total_energy_wh += device_energy_wh
 
@@ -1436,23 +1188,10 @@ def get_dashboard_summary(
     }
 
 
-def get_device_stats(
-    config: AppConfig,
-    device_id: str,
-    start: datetime,
-    end: datetime,
-    period: str,
-    bucket: str,
-) -> dict[str, Any]:
-    rows = get_samples(config, device_id, start, end)
-    latest = get_latest_sample(config, device_id)
-    return _build_device_stats_result(config, device_id, rows, latest, start, end, period, bucket)
-
-
 def _build_device_stats_result(
     config: AppConfig,
     device_id: str,
-    rows: list[dict[str, Any]],
+    bucket_rows: list[dict[str, Any]],
     latest: dict[str, Any] | None,
     start: datetime,
     end: datetime,
@@ -1460,17 +1199,33 @@ def _build_device_stats_result(
     bucket: str,
     capabilities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    series = _build_series(rows, bucket)
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
-    chart_series, chart = _prepare_chart_series(config, device_id, rows, start, end, period, bucket, series, energy_counter_meta)
-    total_energy_wh = _calculate_energy_wh(config, device_id, rows, capabilities, energy_counter_meta)
-    normalized_powers = [
-        _normalize_sample_power_w(float(row["power_w"]), row.get("voltage_v"), row.get("raw_dps"))
-        for row in rows
-    ]
-    average_power_w = sum(normalized_powers) / max(len(normalized_powers), 1) if normalized_powers else 0.0
-    peak_power_w = max(normalized_powers, default=0.0)
-    voltages = [float(row["voltage_v"]) for row in rows if row["voltage_v"] is not None]
+
+    chart_series, chart = _prepare_chart_series(bucket_rows, start, end, period, bucket, energy_counter_meta)
+    total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta)
+
+    if bucket_rows:
+        weighted_power_sum = sum(
+            (_coerce_float(r.get("avg_power_w")) or 0.0) * (int(r.get("sample_count") or 0) or 1)
+            for r in bucket_rows
+        )
+        weight_total = sum(int(r.get("sample_count") or 0) or 1 for r in bucket_rows)
+        average_power_w = weighted_power_sum / max(weight_total, 1)
+        peak_power_w = max((_coerce_float(r.get("peak_power_w")) or 0.0) for r in bucket_rows)
+        voltage_values = [
+            _coerce_float(r.get("avg_voltage_v"))
+            for r in bucket_rows
+            if r.get("avg_voltage_v") is not None
+        ]
+        voltage_values = [v for v in voltage_values if v is not None]
+        average_voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+        sample_count = sum(int(r.get("sample_count") or 0) for r in bucket_rows)
+    else:
+        average_power_w = 0.0
+        peak_power_w = 0.0
+        average_voltage_v = None
+        sample_count = 0
+
     latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
     latest_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else None
     latest_voltage_v = float(latest["voltage_v"]) if latest and latest["voltage_v"] is not None else None
@@ -1482,8 +1237,8 @@ def _build_device_stats_result(
             "peak_power_kw": round(peak_power_w / 1000.0, 3),
             "latest_power_w": round(latest_power_w, 1) if latest_power_w is not None else None,
             "latest_voltage_v": round(latest_voltage_v, 1) if latest_voltage_v is not None else None,
-            "average_voltage_v": round(sum(voltages) / len(voltages), 1) if voltages else None,
-            "sample_count": len(rows),
+            "average_voltage_v": round(average_voltage_v, 1) if average_voltage_v is not None else None,
+            "sample_count": sample_count,
             "latest_sample": _format_display_datetime(config, latest["captured_at"]) if latest else None,
             "latest_sample_age_seconds": get_sample_age_seconds(latest_captured_at, end),
             "latest_sample_status": get_sample_status(latest_captured_at, end),
@@ -1494,6 +1249,19 @@ def _build_device_stats_result(
     }
 
 
+def get_device_stats(
+    config: AppConfig,
+    device_id: str,
+    start: datetime,
+    end: datetime,
+    period: str,
+    bucket: str,
+) -> dict[str, Any]:
+    bucket_rows = _read_aggregate_rows(config, [device_id], bucket, start, end)
+    latest = get_latest_sample(config, device_id)
+    return _build_device_stats_result(config, device_id, bucket_rows, latest, start, end, period, bucket)
+
+
 def get_device_context_and_stats(
     config: AppConfig,
     device_id: str,
@@ -1502,6 +1270,7 @@ def get_device_context_and_stats(
     period: str,
     bucket: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
+    view = _CAGG_VIEWS.get(bucket, "samples_hourly")
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1529,15 +1298,19 @@ def get_device_context_and_stats(
             capabilities = cursor.fetchall()
 
             cursor.execute(
-                """
-                SELECT captured_at, power_w, voltage_v, raw_dps
-                FROM samples
-                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
-                ORDER BY captured_at ASC
+                f"""
+                SELECT bucket,
+                       avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
+                       last_power_w, last_voltage_v,
+                       first_raw_dps, last_raw_dps,
+                       first_captured_at, last_captured_at
+                FROM {view}
+                WHERE device_id = %s AND bucket >= %s AND bucket <= %s
+                ORDER BY bucket ASC
                 """,
                 (device_id, start, end),
             )
-            rows = cursor.fetchall()
+            bucket_rows = cursor.fetchall()
 
             cursor.execute(
                 """
@@ -1551,7 +1324,7 @@ def get_device_context_and_stats(
             )
             latest = cursor.fetchone()
 
-    stats = _build_device_stats_result(config, device_id, rows, latest, start, end, period, bucket, capabilities)
+    stats = _build_device_stats_result(config, device_id, bucket_rows, latest, start, end, period, bucket, capabilities)
     return device, capabilities, stats
 
 

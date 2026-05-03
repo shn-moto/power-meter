@@ -1,4 +1,22 @@
 services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: home-power-meter-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-home_power_meter}
+      POSTGRES_USER: ${POSTGRES_USER:-power_meter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-power_meter} -d ${POSTGRES_DB:-home_power_meter}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - power-meter
+
   power-meter:
     build:
       context: .
@@ -8,5 +26,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8484:8484"
+    networks:
+      - power-meter
+
+volumes:
+  timescale_data:
+
+networks:
+  power-meter:
+    driver: bridge

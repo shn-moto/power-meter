@@ -3,7 +3,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 from psycopg import sql
 
-from app.storage import init_db, sync_devices
+from app.storage import apply_migrations, sync_devices
 from config import load_app_config, load_devices
 
 
@@ -24,12 +24,12 @@ def main() -> int:
             cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database_name,))
             exists = cursor.fetchone() is not None
             if not exists:
-                cursor.execute(sql.SQL("CREATE DATABASE {}") .format(sql.Identifier(database_name)))
+                cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
                 print(f"Created database {database_name}")
             else:
                 print(f"Database {database_name} already exists")
 
-    init_db(config)
+    apply_migrations(config.database_url)
     sync_devices(config, devices)
     print("Database schema initialized and devices synchronized")
     return 0
