@@ -114,8 +114,8 @@ def _parse_device_record(
     slug = str(record.get("slug") or _slugify(name)).strip() or _slugify(name)
     room = str(record.get("room") or fallback_room).strip() or fallback_room
     image_label = str(record.get("image_label") or fallback_label).strip() or fallback_label
-    image_id = str(record.get("image_id") or "").strip() or None
     device_id = str(record.get("device_id") or record.get("id") or "").strip()
+    image_id = str(record.get("image_id") or device_id or "").strip() or None
     local_key = str(record.get("local_key") or record.get("key") or "").strip()
     ip_address = str(record.get("ip_address") or record.get("ip") or "").strip()
     version = float(record.get("version") or 3.5)

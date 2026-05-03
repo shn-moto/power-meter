@@ -413,7 +413,8 @@ if (page) {
                 axisTick: { alignWithLabel: true },
                     axisLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.4)' } },
                 axisLabel: {
-                    interval: 0,
+                    interval: 'auto',
+                    hideOverlap: true,
                         color: '#94cfff',
                     fontSize: 12,
                         fontFamily: 'Bahnschrift, Segoe UI, sans-serif',

@@ -1,4 +1,10 @@
-Drop device images in this directory using the device image_id as the file name.
+Legacy directory. Device photos should now live in `static/images/`.
+
+Naming rule: use the Tuya `device_id` as the file name.
+
+Examples:
+- `bf47402ca7399b6eef6bw7.png`
+- `33741346d8f15bcb2282.png`
 
 Supported file extensions:
 - .png
@@ -7,8 +13,4 @@ Supported file extensions:
 - .jpeg
 - .svg
 
-Examples:
-- main-breaker.png
-- dishwasher-front.webp
-
-When a matching file exists, the dashboard and device pages will render it automatically.
+When a matching file exists in `static/images/`, the dashboard and device pages will render it automatically.

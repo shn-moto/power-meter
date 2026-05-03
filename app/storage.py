@@ -335,6 +335,107 @@ def upsert_managed_device(
         connection.commit()
 
 
+def refresh_managed_device_cloud_data(
+    config: AppConfig,
+    *,
+    device_id: str,
+    name: str,
+    room: str,
+    image_label: str,
+    image_id: str | None,
+    category_code: str | None,
+    device_kind: str,
+    is_energy_meter: bool,
+    product_id: str | None,
+    product_name: str | None,
+    icon: str | None,
+    onboarding_source: str,
+    power_dps_key: str | None,
+    power_scale: float,
+    voltage_dps_keys: list[str] | tuple[str, ...],
+    capabilities: list[dict[str, Any]],
+) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE devices
+                SET name = %s,
+                    room = %s,
+                    image_label = %s,
+                    image_id = COALESCE(image_id, %s),
+                    category_code = %s,
+                    device_kind = %s,
+                    is_energy_meter = %s,
+                    product_id = %s,
+                    product_name = %s,
+                    icon = %s,
+                    onboarding_source = %s,
+                    updated_at = NOW(),
+                    power_dps_key = %s,
+                    power_scale = %s,
+                    voltage_dps_keys = %s
+                WHERE device_id = %s
+                """,
+                (
+                    name,
+                    room,
+                    image_label,
+                    image_id,
+                    category_code,
+                    device_kind,
+                    is_energy_meter,
+                    product_id,
+                    product_name,
+                    icon,
+                    onboarding_source,
+                    power_dps_key,
+                    power_scale,
+                    Jsonb(list(voltage_dps_keys)),
+                    device_id,
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE device_connections
+                SET power_dps_key = %s,
+                    power_scale = %s,
+                    voltage_dps_keys = %s,
+                    updated_at = NOW()
+                WHERE device_id = %s
+                """,
+                (
+                    power_dps_key,
+                    power_scale,
+                    Jsonb(list(voltage_dps_keys)),
+                    device_id,
+                ),
+            )
+            cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
+            if capabilities:
+                cursor.executemany(
+                    """
+                    INSERT INTO device_capabilities (
+                        device_id, capability_source, capability_code, capability_name,
+                        value_type, dp_id, values_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            device_id,
+                            capability.get("capability_source") or "status",
+                            capability.get("capability_code") or "unknown",
+                            capability.get("capability_name"),
+                            capability.get("value_type"),
+                            capability.get("dp_id"),
+                            Jsonb(capability.get("values_json") or {}),
+                        )
+                        for capability in capabilities
+                    ],
+                )
+        connection.commit()
+
+
 def save_sample(config: AppConfig, sample: DeviceSample) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -526,6 +627,13 @@ def _format_display_datetime(config: AppConfig, value: datetime | str | None) ->
     except ZoneInfoNotFoundError:
         local_dt = dt
     return local_dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def _get_timezone(config: AppConfig) -> ZoneInfo:
+    try:
+        return ZoneInfo(config.timezone)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
 
 
 def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
@@ -859,16 +967,22 @@ def _read_aggregate_rows(
     view = _CAGG_VIEWS.get(bucket)
     if view is None:
         return []
+    aggregate_columns = (
+        "avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh, "
+        "last_power_w, NULL::double precision AS last_voltage_v, "
+        "first_raw_dps, last_raw_dps, first_captured_at, last_captured_at"
+        if view == "samples_monthly"
+        else
+        "avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh, "
+        "last_power_w, last_voltage_v, first_raw_dps, last_raw_dps, first_captured_at, last_captured_at"
+    )
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 SELECT
                     device_id, bucket,
-                    avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
-                    last_power_w, last_voltage_v,
-                    first_raw_dps, last_raw_dps,
-                    first_captured_at, last_captured_at
+                    {aggregate_columns}
                 FROM {view}
                 WHERE device_id = ANY(%s) AND bucket >= %s AND bucket <= %s
                 ORDER BY device_id ASC, bucket ASC
@@ -943,7 +1057,19 @@ def _build_chart_series_from_aggregate(
     return series
 
 
+def _normalize_bucket_for_timezone(config: AppConfig, value: datetime, bucket: str) -> datetime:
+    local_dt = value.astimezone(_get_timezone(config))
+    if bucket == "hour":
+        return local_dt.replace(minute=0, second=0, microsecond=0)
+    if bucket == "day":
+        return local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "month":
+        return local_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return local_dt.replace(minute=(local_dt.minute // 15) * 15, second=0, microsecond=0)
+
+
 def _prepare_chart_series(
+    config: AppConfig,
     rows_by_device: list[dict[str, Any]],
     start: datetime,
     end: datetime,
@@ -952,21 +1078,30 @@ def _prepare_chart_series(
     energy_counter_meta: tuple[str, int] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     base_series = _build_chart_series_from_aggregate(rows_by_device, bucket, energy_counter_meta)
+    use_power_chart = (
+        any(float(item.get("avg_power_kw") or 0.0) > 0.0 for item in base_series)
+        and not any(float(item.get("energy_kwh") or 0.0) > 0.0 for item in base_series)
+    )
+
     chart = {
-        "metric": "energy_kwh",
-        "unit": "кВт·ч",
-        "label": "Потребление",
+        "metric": "avg_power_kw" if use_power_chart else "energy_kwh",
+        "unit": "кВт" if use_power_chart else "кВт·ч",
+        "label": "Средняя мощность" if use_power_chart else "Потребление",
         "bucket": bucket,
         "period": period,
     }
 
-    chart_series_by_bucket = {
-        _parse_dt(item["timestamp"]): {
+    chart_series_by_bucket = {}
+    for item in base_series:
+        bucket_dt = _normalize_bucket_for_timezone(config, _parse_dt(item["timestamp"]), bucket)
+        chart_series_by_bucket[bucket_dt] = {
             **item,
-            "chart_value": round(float(item.get("energy_kwh") or 0.0), 4),
+            "timestamp": bucket_dt.isoformat(),
+            "chart_value": round(
+                float(item.get("avg_power_kw") if use_power_chart else item.get("energy_kwh") or 0.0),
+                4,
+            ),
         }
-        for item in base_series
-    }
 
     if period in {"day", "week", "month", "year"}:
         bucket_sequence = _build_fixed_bucket_sequence(start, period, bucket)
@@ -1201,7 +1336,7 @@ def _build_device_stats_result(
 ) -> dict[str, Any]:
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
 
-    chart_series, chart = _prepare_chart_series(bucket_rows, start, end, period, bucket, energy_counter_meta)
+    chart_series, chart = _prepare_chart_series(config, bucket_rows, start, end, period, bucket, energy_counter_meta)
     total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta)
 
     if bucket_rows:
@@ -1301,7 +1436,8 @@ def get_device_context_and_stats(
                 f"""
                 SELECT bucket,
                        avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
-                       last_power_w, last_voltage_v,
+                      last_power_w,
+                      {"NULL::double precision AS last_voltage_v" if view == "samples_monthly" else "last_voltage_v"},
                        first_raw_dps, last_raw_dps,
                        first_captured_at, last_captured_at
                 FROM {view}

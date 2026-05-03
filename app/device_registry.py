@@ -7,13 +7,17 @@ from typing import Any
 import tinytuya
 
 from app.storage import (
+    get_control_device,
     get_device_by_id,
+    get_latest_sample,
     replace_device_capabilities,
     get_device_row,
     get_known_local_ips,
+    refresh_managed_device_cloud_data,
     save_cloud_artifact,
     upsert_managed_device,
 )
+from app.tuya_service import fetch_status
 from config import AppConfig, ConfigError, TuyaDeviceConfig, load_cloud_config, load_devices
 
 
@@ -59,6 +63,31 @@ def _parse_values(raw_values: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _normalize_raw_dps(raw_dps: Any) -> dict[str, Any]:
+    if isinstance(raw_dps, dict):
+        return {str(key): value for key, value in raw_dps.items()}
+    if isinstance(raw_dps, str) and raw_dps.strip():
+        try:
+            parsed = json.loads(raw_dps)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return {str(key): value for key, value in parsed.items()}
+    return {}
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_like_voltage_value(value: Any) -> bool:
+    numeric_value = _coerce_float(value)
+    return numeric_value is not None and 50.0 <= abs(numeric_value) <= 4000.0
 
 
 def _device_name(device_v1: dict[str, Any], device_v2: dict[str, Any]) -> str:
@@ -122,13 +151,21 @@ def _classify_device(category_code: str | None, dps_info: dict[str, Any]) -> tup
     return "sensor", False
 
 
+def _iter_dps_definitions(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
+    definitions: list[dict[str, Any]] = []
+    for source in ("status", "functions"):
+        for item in dps_info.get(source) or []:
+            if isinstance(item, dict):
+                definitions.append(item)
+    return definitions
+
+
 def _extract_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float, list[str]]:
-    status_defs = dps_info.get("status") or []
     power_dps_key: str | None = None
     power_scale = 1.0
     voltage_dps_keys: list[str] = []
 
-    for item in status_defs:
+    for item in _iter_dps_definitions(dps_info):
         code = str(item.get("code") or "")
         dp_id = item.get("dp_id")
         if dp_id is None:
@@ -136,13 +173,75 @@ def _extract_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float,
         key = str(dp_id)
         values = _parse_values(item.get("values"))
         scale = int(values.get("scale", 0) or 0)
-        if code == "cur_power":
+        if power_dps_key is None and code == "cur_power":
             power_dps_key = key
             power_scale = float(10**scale) if scale > 0 else 1.0
-        if "voltage" in code:
+        if "voltage" in code and key not in voltage_dps_keys:
             voltage_dps_keys.append(key)
 
     return power_dps_key, power_scale, voltage_dps_keys
+
+
+def _infer_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float, list[str]]:
+    normalized_dps = _normalize_raw_dps(raw_dps)
+    if not normalized_dps:
+        return None, 1.0, []
+
+    power_dps_key = "102" if _coerce_float(normalized_dps.get("102")) is not None else None
+    voltage_dps_keys = [
+        key
+        for key in ("107", "108", "109")
+        if _looks_like_voltage_value(normalized_dps.get(key))
+    ]
+    return power_dps_key, 1.0, voltage_dps_keys
+
+
+def _complete_power_profile(
+    power_dps_key: str | None,
+    power_scale: float,
+    voltage_dps_keys: list[str],
+    raw_dps: Any,
+) -> tuple[str | None, float, list[str]]:
+    if power_dps_key and voltage_dps_keys:
+        return power_dps_key, power_scale, voltage_dps_keys
+
+    fallback_power_dps_key, fallback_power_scale, fallback_voltage_dps_keys = _infer_power_profile_from_raw_dps(raw_dps)
+    if power_dps_key is None:
+        power_dps_key = fallback_power_dps_key
+        power_scale = fallback_power_scale
+    if not voltage_dps_keys:
+        voltage_dps_keys = fallback_voltage_dps_keys
+    return power_dps_key, power_scale, voltage_dps_keys
+
+
+def _complete_existing_power_profile(
+    config: AppConfig,
+    device_id: str,
+    power_dps_key: str | None,
+    power_scale: float,
+    voltage_dps_keys: list[str],
+) -> tuple[str | None, float, list[str]]:
+    latest_sample = get_latest_sample(config, device_id)
+    if latest_sample:
+        power_dps_key, power_scale, voltage_dps_keys = _complete_power_profile(
+            power_dps_key,
+            power_scale,
+            voltage_dps_keys,
+            latest_sample.get("raw_dps"),
+        )
+    if power_dps_key and voltage_dps_keys:
+        return power_dps_key, power_scale, voltage_dps_keys
+
+    control_device = get_control_device(config, device_id)
+    if not control_device or not control_device.ip_address:
+        return power_dps_key, power_scale, voltage_dps_keys
+
+    try:
+        payload = fetch_status(control_device)
+    except Exception:
+        return power_dps_key, power_scale, voltage_dps_keys
+
+    return _complete_power_profile(power_dps_key, power_scale, voltage_dps_keys, payload.get("dps"))
 
 
 def _build_capabilities(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -264,23 +363,79 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     device_info = device_v1.get("result") or {}
     device_info_v2 = device_v2.get("result") or {}
     dps_result = dps_info.get("result") or {}
-    local_key = str(device_info.get("local_key") or device_info_v2.get("local_key") or "").strip()
-    if not local_key:
-        raise ConfigError("Tuya Cloud не вернул local key для устройства")
 
     name = _device_name(device_info, device_info_v2)
     existing = get_device_by_id(config, clean_device_id)
     slug = existing["slug"] if existing else f"{_slugify(name)}-{clean_device_id[-4:]}"
-    resolved_room = _resolve_room_name(cloud, clean_device_id, device_v1, device_v2)
+    resolved_room = None
+    if not existing or not (str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME):
+        resolved_room = _resolve_room_name(cloud, clean_device_id, device_v1, device_v2)
     if existing and str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME:
         room = existing["room"]
     else:
         room = resolved_room or DEFAULT_ROOM_NAME
     image_label = existing["image_label"] if existing else name
-    image_id = str(existing.get("image_id") or "").strip() or None if existing else None
+    image_id = clean_device_id
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
     power_dps_key, power_scale, voltage_dps_keys = _extract_power_profile(dps_result)
+    capabilities = _build_capabilities(dps_result)
+
+    if existing:
+        power_dps_key, power_scale, voltage_dps_keys = _complete_existing_power_profile(
+            config,
+            clean_device_id,
+            power_dps_key,
+            power_scale,
+            voltage_dps_keys,
+        )
+        refresh_managed_device_cloud_data(
+            config,
+            device_id=clean_device_id,
+            name=name,
+            room=room,
+            image_label=image_label,
+            image_id=image_id,
+            category_code=str(device_info.get("category") or device_info_v2.get("category") or "") or None,
+            device_kind=kind,
+            is_energy_meter=is_energy_meter,
+            product_id=str(device_info.get("product_id") or device_info_v2.get("product_id") or "") or None,
+            product_name=str(device_info.get("product_name") or device_info_v2.get("product_name") or device_info_v2.get("name") or "") or None,
+            icon=str(device_info.get("icon") or device_info_v2.get("icon") or "") or None,
+            onboarding_source="cloud",
+            power_dps_key=power_dps_key,
+            power_scale=power_scale,
+            voltage_dps_keys=voltage_dps_keys,
+            capabilities=capabilities,
+        )
+        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
+        if isinstance(device_v2, dict):
+            save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
+        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
+
+        stored = get_device_row(config, clean_device_id)
+        control_device = get_control_device(config, clean_device_id)
+        connection_ready = bool(control_device and control_device.ip_address)
+        return {
+            "slug": slug,
+            "name": stored.get("name") if stored else name,
+            "device_id": clean_device_id,
+            "device_kind": kind,
+            "device_kind_label": DEVICE_KIND_LABELS.get(kind, kind),
+            "is_energy_meter": is_energy_meter,
+            "ip_address": control_device.ip_address if control_device and control_device.ip_address else None,
+            "version": control_device.version if control_device else None,
+            "product_name": stored.get("product_name") if stored else None,
+            "category_code": stored.get("category_code") if stored else None,
+            "capability_count": len(capabilities),
+            "connection_ready": connection_ready,
+            "connection_message": "",
+        }
+
+    local_key = str(device_info.get("local_key") or device_info_v2.get("local_key") or "").strip()
+    if not local_key:
+        raise ConfigError("Tuya Cloud не вернул local key для устройства")
+
     ip_address = ""
     version = 3.5
     connection_ready = False
@@ -293,7 +448,31 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             raise
         connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
 
-    capabilities = _build_capabilities(dps_result)
+    if connection_ready:
+        provisional_device = TuyaDeviceConfig(
+            slug=slug,
+            name=name,
+            room=room,
+            image_label=image_label,
+            image_id=image_id,
+            device_id=clean_device_id,
+            local_key=local_key,
+            ip_address=ip_address,
+            version=version,
+            power_dps_key=power_dps_key or "",
+            power_scale=power_scale,
+            voltage_dps_keys=tuple(voltage_dps_keys),
+        )
+        try:
+            local_payload = fetch_status(provisional_device)
+        except Exception:
+            local_payload = {}
+        power_dps_key, power_scale, voltage_dps_keys = _complete_power_profile(
+            power_dps_key,
+            power_scale,
+            voltage_dps_keys,
+            local_payload.get("dps") if isinstance(local_payload, dict) else None,
+        )
 
     upsert_managed_device(
         config,

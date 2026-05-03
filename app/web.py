@@ -41,7 +41,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260503-04"
+templates.env.globals["static_asset_version"] = "20260503-05"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -123,10 +123,6 @@ def _format_month_label(value: datetime) -> str:
     return f"{RUSSIAN_MONTHS[value.month]} {value.year}"
 
 
-def _resolve_device_image_url(image_id: str | None) -> str | None:
-    return _resolve_device_image_url_by_key(image_id, "device-images")
-
-
 def _resolve_device_image_url_by_key(image_key: str | None, directory_name: str) -> str | None:
     if not image_key:
         return None
@@ -142,13 +138,8 @@ def _resolve_device_image_url_by_key(image_key: str | None, directory_name: str)
 
 def _decorate_device_media(device: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(device)
-    image_id = str(enriched.get("image_id") or "").strip() or None
     device_id = str(enriched.get("device_id") or "").strip() or None
-    enriched["image_url"] = (
-        _resolve_device_image_url_by_key(device_id, "images")
-        or _resolve_device_image_url(image_id)
-        or _resolve_device_image_url_by_key(device_id, "device-images")
-    )
+    enriched["image_url"] = _resolve_device_image_url_by_key(device_id, "images")
     return enriched
 
 
