@@ -177,6 +177,55 @@ p {
     padding: 20px;
 }
 
+.sensor-layout {
+    display: grid;
+    gap: 20px;
+}
+
+.sensor-device-card {
+    display: grid;
+    grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+    gap: 20px;
+    padding: 20px;
+}
+
+.sensor-device-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 220px;
+    padding: 16px;
+    background:
+        linear-gradient(180deg, rgba(19, 28, 39, 0.62), rgba(7, 12, 18, 0.96)),
+        repeating-linear-gradient(0deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 22px),
+        repeating-linear-gradient(90deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 22px);
+    border: 1px solid var(--line);
+}
+
+.sensor-device-meta {
+    display: grid;
+    gap: 16px;
+}
+
+.sensor-metrics-panel,
+.sensor-notes-card {
+    padding: 20px;
+}
+
+.sensor-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+}
+
+.sensor-metric-card {
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid rgba(47, 36, 8, 0.2);
+    background: rgba(255, 245, 197, 0.22);
+}
+
 .connect-layout {
     display: grid;
     grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr);
@@ -724,6 +773,10 @@ button:hover {
     .hero-panel,
     .detail-header,
     .detail-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .sensor-device-card {
         grid-template-columns: 1fr;
     }
 

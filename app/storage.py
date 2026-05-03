@@ -658,11 +658,29 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT slug, name, room, image_label, image_id, device_id, device_kind, is_energy_meter,
-                       product_name, category_code, product_id, icon
-                FROM devices WHERE device_id = %s
+                  SELECT d.slug, d.name, d.room, d.image_label, d.image_id, d.device_id, d.device_kind, d.is_energy_meter,
+                      d.product_name, d.category_code, d.product_id, d.icon,
+                       COALESCE(c.ip_address, '') AS ip_address,
+                       (COALESCE(c.ip_address, '') <> '') AS connection_ready
+                FROM devices d
+                LEFT JOIN device_connections c ON c.device_id = d.device_id
+                WHERE d.device_id = %s
                 """,
                 (device_id,),
+            )
+            return cursor.fetchone()
+
+
+def get_cloud_artifact(config: AppConfig, device_id: str, artifact_type: str) -> dict[str, Any] | None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT artifact_type, payload, fetched_at
+                FROM device_cloud_artifacts
+                WHERE device_id = %s AND artifact_type = %s
+                """,
+                (device_id, artifact_type),
             )
             return cursor.fetchone()
 

@@ -16,23 +16,26 @@ from pydantic import BaseModel
 import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, connect_device
-from config import AppConfig, load_app_config
+from config import AppConfig, load_app_config, load_cloud_config
 from app.storage import (
     DeviceSample,
     apply_migrations,
     close_connection_pool,
     get_control_device,
+    get_cloud_artifact,
     get_device_capabilities,
     get_device_context_and_stats,
     get_dashboard_summary,
     get_device_row,
     get_device_rows,
     get_device_stats,
+    get_latest_sample,
     get_sample_age_seconds,
     get_sample_status,
     get_polling_devices,
     init_connection_pool,
     pick_bucket,
+    save_cloud_artifact,
     save_sample,
 )
 from app.tuya_service import build_sample
@@ -40,7 +43,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260503-07"
+templates.env.globals["static_asset_version"] = "20260503-08"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -69,6 +72,11 @@ DPS_LABELS = {
     "add_ele": "Энергия",
     "total_forward_energy": "Потребление",
     "total_reverse_energy": "Возврат энергии",
+    "va_temperature": "Температура",
+    "temp_current": "Температура",
+    "humidity_value": "Влажность",
+    "va_battery": "Батарея",
+    "temp_unit_convert": "Единицы температуры",
 }
 
 UNIT_LABELS = {
@@ -179,6 +187,14 @@ def _format_dps_value(capability: dict[str, Any] | None, raw_value: Any) -> str:
 
     if isinstance(raw_value, bool) or value_type == "Boolean":
         return "Включено" if bool(raw_value) else "Выключено"
+
+    if capability_code == "temp_unit_convert":
+        normalized = str(raw_value).strip().lower()
+        if normalized == "c":
+            return "Celsius"
+        if normalized == "f":
+            return "Fahrenheit"
+        return str(raw_value)
 
     if capability_code.startswith("countdown"):
         try:
@@ -528,6 +544,128 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
     }
 
 
+def _extract_cloud_status_result(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+
+    result = payload.get("result")
+    if isinstance(result, list):
+        return [item for item in result if isinstance(item, dict)]
+    if isinstance(result, dict):
+        return [item for item in (result.get("status") or []) if isinstance(item, dict)]
+    return []
+
+
+def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[dict[str, Any]], datetime | None, str | None]:
+    cloud_config = load_cloud_config(required=False)
+    if cloud_config:
+        try:
+            cloud = tinytuya.Cloud(
+                apiRegion=cloud_config.region,
+                apiKey=cloud_config.api_key,
+                apiSecret=cloud_config.api_secret,
+                apiDeviceID=cloud_config.api_device_id or device_id,
+            )
+            payload = cloud.cloudrequest(f"/v1.0/devices/{device_id}/status")
+            status_items = _extract_cloud_status_result(payload)
+            if status_items:
+                save_cloud_artifact(
+                    config,
+                    device_id=device_id,
+                    artifact_type="cloud_status_live",
+                    payload=payload if isinstance(payload, dict) else {"result": status_items},
+                )
+                return status_items, datetime.now(timezone.utc), "Tuya Cloud"
+        except Exception:
+            pass
+
+    for artifact_type, source_name in (("cloud_status_live", "Tuya Cloud cache"), ("onboard_device_v1", "Cloud snapshot")):
+        artifact = get_cloud_artifact(config, device_id, artifact_type)
+        if not artifact:
+            continue
+        status_items = _extract_cloud_status_result(artifact.get("payload"))
+        if status_items:
+            fetched_at = artifact.get("fetched_at")
+            return status_items, _parse_dt(fetched_at) if fetched_at else None, source_name
+
+    return [], None, None
+
+
+def _build_sensor_metrics(
+    capabilities: list[dict[str, Any]],
+    raw_dps: dict[str, Any],
+    cloud_status_items: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    values_by_code = {
+        str(item.get("code") or ""): item.get("value")
+        for item in cloud_status_items
+        if isinstance(item, dict) and item.get("code")
+    }
+    metrics: list[dict[str, str]] = []
+    seen_codes: set[str] = set()
+
+    for capability in capabilities:
+        if capability.get("capability_source") != "status":
+            continue
+
+        code = str(capability.get("capability_code") or "").strip()
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        dp_id = capability.get("dp_id")
+        raw_value = raw_dps.get(str(dp_id)) if dp_id is not None else None
+        if raw_value is None:
+            raw_value = values_by_code.get(code)
+
+        label = DPS_LABELS.get(code) or str(capability.get("capability_name") or code).replace("_", " ").strip().capitalize()
+        metrics.append(
+            {
+                "code": code,
+                "label": label,
+                "value": _format_dps_value(capability, raw_value),
+            }
+        )
+
+    return metrics
+
+
+def _build_sensor_page_payload(
+    config: AppConfig,
+    device: dict[str, Any],
+    capabilities: list[dict[str, Any]],
+    live_sample: DeviceSample | None,
+) -> dict[str, Any]:
+    latest_sample = live_sample
+    latest_sample_row = None
+    if latest_sample is None:
+        latest_sample_row = get_latest_sample(config, str(device.get("device_id") or ""))
+
+    local_raw_dps = (
+        latest_sample.raw_dps
+        if latest_sample is not None
+        else _normalize_json_field(latest_sample_row.get("raw_dps")) if latest_sample_row else {}
+    )
+    local_captured_at = (
+        latest_sample.captured_at
+        if latest_sample is not None
+        else _parse_dt(latest_sample_row.get("captured_at")) if latest_sample_row and latest_sample_row.get("captured_at") else None
+    )
+
+    cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, str(device.get("device_id") or ""))
+    metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
+    last_update = local_captured_at or cloud_fetched_at
+
+    return {
+        "metrics": metrics,
+        "state_source": "Локальное устройство" if local_raw_dps else (cloud_source or "Нет данных"),
+        "last_update": _format_live_timestamp(config, last_update) if last_update else None,
+        "last_update_status": get_sample_status(last_update, datetime.now(_get_timezone(config))) if local_captured_at else ("ok" if cloud_status_items else "error"),
+        "connection_ready": bool(device.get("connection_ready")),
+        "ip_address": str(device.get("ip_address") or "").strip() or None,
+    }
+
+
 def _get_aggregate_cache_key(*parts: str) -> tuple[str, ...]:
     return tuple(parts)
 
@@ -643,6 +781,29 @@ def dashboard(request: Request) -> HTMLResponse:
 @app.get("/devices/{device_id}", response_class=HTMLResponse)
 def device_details(request: Request, device_id: str) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+
+    decorated_device = _decorate_device_media(dict(device))
+    if not device.get("is_energy_meter"):
+        capabilities = get_device_capabilities(config, device_id)
+        sensor_payload = _build_sensor_page_payload(
+            config,
+            decorated_device,
+            capabilities,
+            request.app.state.live_samples.get(device_id),
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="sensor.html",
+            context={
+                "device": decorated_device,
+                "sensor": sensor_payload,
+                "page_title": f"{device['name']} - датчик",
+            },
+        )
+
     stats_cache_key = _get_aggregate_cache_key("device-stats", device_id, "day", "", "")
     payload = _get_cached_aggregate_payload(request, stats_cache_key)
     if payload is None:

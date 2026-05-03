@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="detail-header">
+    <div>
+        <p class="eyebrow">{{ device.room }}</p>
+        <h1>{{ device.name }}</h1>
+    </div>
+</section>
+
+<section class="sensor-layout">
+    <article class="detail-card sensor-device-card">
+        <div class="sensor-device-visual">
+            {% if device.image_url %}
+            <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
+            {% else %}
+            <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
+            {% endif %}
+        </div>
+        <div class="sensor-device-meta">
+            <h2>Состояние</h2>
+            <dl class="summary-grid">
+                <div><dt>Тип</dt><dd>{{ device.product_name or device.device_kind }}</dd></div>
+                <div><dt>Источник показаний</dt><dd>{{ sensor.state_source }}</dd></div>
+                <div><dt>Последнее обновление</dt><dd class="reading-status is-{{ sensor.last_update_status }}">{{ sensor.last_update or 'Нет данных' }}</dd></div>
+                <div><dt>Локальное подключение</dt><dd>{% if sensor.connection_ready and sensor.ip_address %}LAN: {{ sensor.ip_address }}{% else %}Не обнаружено{% endif %}</dd></div>
+            </dl>
+        </div>
+    </article>
+
+    <article class="detail-card lcd-panel sensor-metrics-panel">
+        <h2>Показания датчика</h2>
+        {% if sensor.metrics %}
+        <div class="sensor-metric-grid">
+            {% for metric in sensor.metrics %}
+            <section class="sensor-metric-card">
+                <span class="stat-label">{{ metric.label }}</span>
+                <strong class="stat-value">{{ metric.value }}</strong>
+            </section>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="chart-empty">Показания датчика пока недоступны.</p>
+        {% endif %}
+    </article>
+
+    <article class="detail-card sensor-notes-card">
+        <h2>Примечание</h2>
+        <p class="hero-copy">
+            Для датчиков не показывается сводка по потреблению энергии. Если локальное подключение недоступно,
+            страница использует данные из Tuya Cloud.
+        </p>
+    </article>
+</section>
+{% endblock %}
