@@ -71,6 +71,7 @@ APP_TIMEZONE=Europe/Warsaw
 ENERGY_TARIFF_PER_KWH=1.12
 POLL_INTERVAL_SECONDS=1
 SAMPLE_WRITE_INTERVAL_SECONDS=5
+LOCAL_DISCOVERY_SUBNETS=192.168.1.0/24
 
 TUYA_CLOUD_API_REGION=eu
 TUYA_CLOUD_API_KEY=<access-id>
@@ -81,6 +82,8 @@ TUYA_CLOUD_API_DEVICE_ID=<optional-device-id>
 `DATABASE_URL` must use host `db` (the compose service name) so the app reaches Timescale over the internal network. `POSTGRES_*` are read by the `db` container to bootstrap the cluster on first run.
 
 `TUYA_CLOUD_API_*` are used by the "Подключить устройство" page to fetch device metadata and local keys from Tuya Cloud. Devices are added only through the web UI and stored in the database.
+
+`LOCAL_DISCOVERY_SUBNETS` is a comma-separated list of LAN subnets the app may probe when TinyTuya broadcast discovery returns nothing, for example `192.168.1.0/24`. This is required if the app container cannot see Tuya UDP discovery traffic reliably.
 
 ## Backups
 

@@ -338,6 +338,15 @@ def _resolve_scale_divisor_for_dp(
 def _known_subnets(config: AppConfig) -> list[ipaddress.IPv4Network]:
     raw_ips = set(get_known_local_ips(config))
     subnets: list[ipaddress.IPv4Network] = []
+
+    for raw_subnet in config.local_discovery_subnets:
+        try:
+            network = ipaddress.ip_network(raw_subnet, strict=False)
+        except ValueError:
+            continue
+        if isinstance(network, ipaddress.IPv4Network) and network.is_private and network not in subnets:
+            subnets.append(network)
+
     for raw_ip in sorted(raw_ips):
         try:
             ip_obj = ipaddress.ip_address(raw_ip)

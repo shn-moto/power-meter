@@ -30,6 +30,14 @@ class AppConfig:
     database_url: str
     timezone: str
     tariff_per_kwh: float
+    local_discovery_subnets: tuple[str, ...]
+
+
+def _read_csv_values(dotenv_values: dict[str, str], name: str) -> tuple[str, ...]:
+    raw_value = _read_value(dotenv_values, name)
+    if not raw_value:
+        return ()
+    return tuple(part.strip() for part in raw_value.split(",") if part.strip())
 
 
 @dataclass(slots=True)
@@ -82,6 +90,7 @@ def load_app_config() -> AppConfig:
         database_url=_read_required_value(dotenv_values, "DATABASE_URL"),
         timezone=_read_value(dotenv_values, "APP_TIMEZONE", "Europe/Warsaw"),
         tariff_per_kwh=float(_read_value(dotenv_values, "ENERGY_TARIFF_PER_KWH", "1.12")),
+        local_discovery_subnets=_read_csv_values(dotenv_values, "LOCAL_DISCOVERY_SUBNETS"),
     )
 
 
