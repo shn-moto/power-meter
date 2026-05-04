@@ -305,6 +305,26 @@ p {
     font-weight: 700;
 }
 
+.config-option-list {
+    display: grid;
+    gap: 10px;
+}
+
+.connect-form .config-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-weight: 400;
+}
+
+.connect-form .config-option input {
+    margin: 3px 0 0;
+}
+
+.connect-form .config-option span {
+    line-height: 1.35;
+}
+
 .connect-feedback {
     margin-top: 18px;
     padding: 16px 18px;

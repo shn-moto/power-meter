@@ -35,16 +35,22 @@ if (connectForm) {
         });
 
         visualizedCodesContainer.innerHTML = '<p class="hero-copy">Выберите коды для live-сводки устройства.</p>';
+        const optionsList = document.createElement('div');
+        optionsList.className = 'config-option-list';
         visualizationOptions.forEach((option) => {
             const label = document.createElement('label');
+            label.className = 'config-option';
             const checkbox = document.createElement('input');
+            const text = document.createElement('span');
             checkbox.type = 'checkbox';
             checkbox.name = 'visualized_codes';
             checkbox.value = option.dp_id;
             checkbox.checked = selectedVisualizedCodes.has(String(option.dp_id));
-            label.append(checkbox, document.createTextNode(` ${option.dp_id} · ${option.name}${option.code ? ` (${option.code})` : ''}`));
-            visualizedCodesContainer.appendChild(label);
+            text.textContent = `${option.dp_id} · ${option.name}${option.code ? ` (${option.code})` : ''}`;
+            label.append(checkbox, text);
+            optionsList.appendChild(label);
         });
+        visualizedCodesContainer.appendChild(optionsList);
 
         configPanel.hidden = false;
     };

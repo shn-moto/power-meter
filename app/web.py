@@ -18,7 +18,7 @@ import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, connect_device
 from config import AppConfig, load_app_config, load_cloud_config
-from app.tuya_model import get_model_scale_divisor
+from app.tuya_model import extract_model_properties, get_model_scale_divisor
 from app.storage import (
     DeviceSample,
     apply_migrations,
@@ -47,7 +47,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260504-02"
+templates.env.globals["static_asset_version"] = "20260504-03"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -1160,7 +1160,18 @@ def device_summary_config_api(
         raise HTTPException(status_code=404, detail="Устройство не найдено")
 
     capabilities = get_device_capabilities(config, device_id)
-    allowed_codes = {str(capability.get("dp_id") or "") for capability in capabilities if capability.get("dp_id") is not None}
+    model_artifact = get_cloud_artifact(config, device_id, "onboard_model")
+    model_payload = model_artifact.get("payload") if model_artifact else {}
+    model_allowed_codes = {
+        str(item.get("abilityId") or "")
+        for item in extract_model_properties(model_payload if isinstance(model_payload, dict) else {})
+        if item.get("abilityId") is not None
+    }
+    allowed_codes = {
+        str(capability.get("dp_id") or "")
+        for capability in capabilities
+        if capability.get("dp_id") is not None
+    } | model_allowed_codes
     visualized_codes = [str(code) for code in payload.visualized_codes if str(code) in allowed_codes]
     total_power_dps_key = str(payload.total_power_dps_key or "").strip() or None
     if total_power_dps_key is not None and total_power_dps_key not in allowed_codes:
@@ -1168,8 +1179,6 @@ def device_summary_config_api(
 
     total_power_scale = 1.0
     if total_power_dps_key is not None:
-        model_artifact = get_cloud_artifact(config, device_id, "onboard_model")
-        model_payload = model_artifact.get("payload") if model_artifact else {}
         total_power_scale = get_model_scale_divisor(model_payload if isinstance(model_payload, dict) else {}, total_power_dps_key) or 0.0
 
         if total_power_scale <= 0.0:

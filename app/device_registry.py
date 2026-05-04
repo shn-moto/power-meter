@@ -291,10 +291,13 @@ def _build_summary_options(device_model: dict[str, Any], capabilities: list[dict
 def _build_capabilities(dps_info: dict[str, Any], device_model: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     property_index = build_model_property_index(device_model or {})
     capabilities: list[dict[str, Any]] = []
+    seen_dp_ids: set[str] = set()
     for source in ("functions", "status"):
         for item in dps_info.get(source) or []:
             dp_id = item.get("dp_id")
             model_property = property_index.get(str(dp_id)) if dp_id is not None else None
+            if dp_id is not None:
+                seen_dp_ids.add(str(dp_id))
             capabilities.append(
                 {
                     "capability_source": source,
@@ -310,7 +313,31 @@ def _build_capabilities(dps_info: dict[str, Any], device_model: dict[str, Any] |
                     "values_json": merge_values_json_with_model(_parse_values(item.get("values")), model_property),
                 }
             )
+
+    for dp_id, model_property in property_index.items():
+        if dp_id in seen_dp_ids:
+            continue
+        capabilities.append(
+            {
+                "capability_source": "model",
+                "capability_code": str(model_property.get("code") or "unknown"),
+                "capability_name": str(model_property.get("name") or model_property.get("code") or ""),
+                "value_type": ((model_property.get("typeSpec") or {}).get("type") or ""),
+                "dp_id": model_property.get("abilityId"),
+                "values_json": merge_values_json_with_model({}, model_property),
+            }
+        )
     return capabilities
+
+
+def _resolve_total_power_dp_from_capabilities(capabilities: list[dict[str, Any]]) -> str | None:
+    for capability in capabilities:
+        code = str(capability.get("capability_code") or "")
+        dp_id = capability.get("dp_id")
+        if dp_id is None or code not in {"add_ele", "total_forward_energy"}:
+            continue
+        return str(dp_id)
+    return None
 
 
 def _resolve_scale_divisor_for_dp(
@@ -460,6 +487,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
     capabilities = _build_capabilities(dps_result, device_model if isinstance(device_model, dict) else None)
     total_power_dps_key, total_power_scale = _extract_total_power_profile(dps_result)
+    total_power_dps_key = total_power_dps_key or _resolve_total_power_dp_from_capabilities(capabilities)
     total_power_scale = _resolve_scale_divisor_for_dp(
         capabilities,
         device_model if isinstance(device_model, dict) else {},
