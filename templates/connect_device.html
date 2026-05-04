@@ -46,10 +46,45 @@
         {% if devices %}
         <div class="registry-grid">
             {% for device in devices %}
-            <article class="registry-item">
-                <div>
-                    <h3>{{ device.name }}</h3>
-                    <p class="device-room">{{ kind_labels.get(device.device_kind, device.device_kind) }}{% if device.is_energy_meter %} · С энергомониторингом{% endif %}</p>
+            <article class="registry-item" data-device-id="{{ device.device_id }}">
+                <div class="registry-head">
+                    <div>
+                        <h3>{{ device.name }}</h3>
+                        <p class="device-room">{{ kind_labels.get(device.device_kind, device.device_kind) }}{% if device.is_energy_meter %} · С энергомониторингом{% endif %}</p>
+                    </div>
+                    <div class="registry-actions">
+                        {% if not device.connection_ready %}
+                        <button
+                            type="button"
+                            class="icon-action-button"
+                            data-device-action="retry-discovery"
+                            data-device-id="{{ device.device_id }}"
+                            title="Повторить локальное обнаружение"
+                            aria-label="Повторить локальное обнаружение {{ device.name }}"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/>
+                                <path d="M20 4v6h-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/>
+                            </svg>
+                        </button>
+                        {% endif %}
+                        <button
+                            type="button"
+                            class="icon-action-button icon-action-button-danger"
+                            data-device-action="delete-device"
+                            data-device-id="{{ device.device_id }}"
+                            data-device-name="{{ device.name }}"
+                            title="Удалить устройство"
+                            aria-label="Удалить устройство {{ device.name }}"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M4 7h16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/>
+                                <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/>
+                                <path d="M6 7l1 12h10l1-12" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.8"/>
+                                <path d="M9 7V4h6v3" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.8"/>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
                 <div class="registry-meta">
                     <span>{{ device.room }}</span>

@@ -12,6 +12,7 @@ from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.tuya_model import get_model_scale_divisor
 from config import AppConfig, TuyaDeviceConfig
 
 
@@ -668,6 +669,13 @@ def update_device_summary_config(
         connection.commit()
 
 
+def delete_managed_device(config: AppConfig, device_id: str) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM devices WHERE device_id = %s", (device_id,))
+        connection.commit()
+
+
 def get_cloud_artifact(config: AppConfig, device_id: str, artifact_type: str) -> dict[str, Any] | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -929,19 +937,19 @@ _CAGG_VIEWS = {
 }
 
 
-def _read_energy_counter_kwh(raw_dps: dict[str, Any] | None, dp_key: str, scale: int) -> float | None:
+def _read_energy_counter_kwh(raw_dps: dict[str, Any] | None, dp_key: str, scale_divisor: float) -> float | None:
     if not raw_dps:
         return None
     raw_value = raw_dps.get(dp_key)
     if raw_value is None:
         return None
     try:
-        return float(raw_value) / (10 ** scale)
+        return float(raw_value) / max(scale_divisor, 1.0)
     except (TypeError, ValueError):
         return None
 
 
-def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]]) -> tuple[str, int] | None:
+def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]]) -> tuple[str, float] | None:
     for capability in capabilities:
         code = str(capability.get("capability_code") or "")
         if code not in {"total_forward_energy", "add_ele"}:
@@ -950,7 +958,8 @@ def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]
         if dp_id is None:
             continue
         values_json = capability.get("values_json") or {}
-        return str(dp_id), int(values_json.get("scale", 0) or 0)
+        scale_digits = int(values_json.get("scale", 0) or 0)
+        return str(dp_id), float(10 ** scale_digits) if scale_digits > 0 else 1.0
     return None
 
 
@@ -958,7 +967,11 @@ def _get_energy_counter_meta(
     config: AppConfig,
     device_id: str,
     capabilities: list[dict[str, Any]] | None = None,
-) -> tuple[str, int] | None:
+) -> tuple[str, float] | None:
+    control_device = get_control_device(config, device_id)
+    if control_device and control_device.total_power_dps_key:
+        return control_device.total_power_dps_key, max(float(control_device.total_power_scale or 1.0), 1.0)
+
     if capabilities is not None:
         return _get_energy_counter_meta_from_capabilities(capabilities)
     return _get_energy_counter_meta_from_capabilities(get_device_capabilities(config, device_id))
@@ -1011,14 +1024,14 @@ def _bucket_energy_wh(row: dict[str, Any], bucket: str) -> float:
 
 def _bucket_counter_energy_kwh(
     row: dict[str, Any],
-    energy_counter_meta: tuple[str, int] | None,
+    energy_counter_meta: tuple[str, float] | None,
 ) -> float | None:
     if not energy_counter_meta:
         return None
 
-    dp_key, scale = energy_counter_meta
-    first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale)
-    last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale)
+    dp_key, scale_divisor = energy_counter_meta
+    first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale_divisor)
+    last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale_divisor)
     if first_kwh is None or last_kwh is None or last_kwh < first_kwh:
         return None
     return max(last_kwh - first_kwh, 0.0)
@@ -1027,7 +1040,7 @@ def _bucket_counter_energy_kwh(
 def _estimate_bucket_energy_kwh(
     row: dict[str, Any],
     bucket: str,
-    energy_counter_meta: tuple[str, int] | None,
+    energy_counter_meta: tuple[str, float] | None,
 ) -> float:
     integrated_kwh = _bucket_energy_wh(row, bucket) / 1000.0
     counter_kwh = _bucket_counter_energy_kwh(row, energy_counter_meta)
@@ -1045,7 +1058,7 @@ def _estimate_bucket_energy_kwh(
 def _aggregate_energy_wh(
     bucket_rows: list[dict[str, Any]],
     bucket: str,
-    energy_counter_meta: tuple[str, int] | None,
+    energy_counter_meta: tuple[str, float] | None,
 ) -> float:
     if not bucket_rows:
         return 0.0
@@ -1059,7 +1072,7 @@ def _aggregate_energy_wh(
 def _build_chart_series_from_aggregate(
     bucket_rows: list[dict[str, Any]],
     bucket: str,
-    energy_counter_meta: tuple[str, int] | None,
+    energy_counter_meta: tuple[str, float] | None,
 ) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
 
@@ -1097,7 +1110,7 @@ def _prepare_chart_series(
     end: datetime,
     period: str,
     bucket: str,
-    energy_counter_meta: tuple[str, int] | None,
+    energy_counter_meta: tuple[str, float] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     base_series = _build_chart_series_from_aggregate(rows_by_device, bucket, energy_counter_meta)
     use_power_chart = (
@@ -1177,17 +1190,17 @@ def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
     return "ok"
 
 
-def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, int]]:
-    metadata: dict[str, tuple[str, int]] = {}
+def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, float]]:
+    metadata: dict[str, tuple[str, float]] = {}
     for row in rows:
         device_id = str(row.get("device_id") or "")
         if not device_id or device_id in metadata:
             continue
-        dp_id = row.get("dp_id")
-        if dp_id is None:
+        dp_id = str(row.get("total_power_dps_key") or "").strip()
+        if not dp_id:
             continue
-        values_json = row.get("values_json") or {}
-        metadata[device_id] = (str(dp_id), int(values_json.get("scale", 0) or 0))
+        scale_divisor = max(float(row.get("total_power_scale") or 1.0), 1.0)
+        metadata[device_id] = (dp_id, scale_divisor)
     return metadata
 
 
@@ -1206,7 +1219,7 @@ def _get_dashboard_summary_context(
     list[dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[str, list[dict[str, Any]]],
-    dict[str, tuple[str, int]],
+    dict[str, tuple[str, float]],
 ]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -1215,7 +1228,9 @@ def _get_dashboard_summary_context(
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
                     d.product_name, d.category_code, d.device_id,
                        COALESCE(c.ip_address, '') AS ip_address,
-                       (COALESCE(c.ip_address, '') <> '') AS connection_ready
+                      (COALESCE(c.ip_address, '') <> '') AS connection_ready,
+                      c.total_power_dps_key,
+                      c.total_power_scale
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
                 ORDER BY name
@@ -1247,17 +1262,6 @@ def _get_dashboard_summary_context(
 
             cursor.execute(
                 """
-                SELECT device_id, capability_code, dp_id, values_json
-                FROM device_capabilities
-                WHERE device_id = ANY(%s) AND capability_code IN ('total_forward_energy', 'add_ele')
-                ORDER BY device_id ASC, dp_id ASC NULLS LAST, capability_code ASC
-                """,
-                (energy_device_ids,),
-            )
-            energy_counter_rows = cursor.fetchall()
-
-            cursor.execute(
-                """
                 SELECT device_id, bucket,
                       avg_power_w, peak_power_w, sample_count, energy_wh,
                       last_power_w,
@@ -1275,7 +1279,7 @@ def _get_dashboard_summary_context(
         device_rows,
         {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
         _group_aggregate_rows_by_device(daily_rows),
-        _build_energy_counter_meta_by_device(energy_counter_rows),
+        _build_energy_counter_meta_by_device(device_rows),
     )
 
 

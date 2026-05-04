@@ -18,10 +18,12 @@ import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, connect_device
 from config import AppConfig, load_app_config, load_cloud_config
+from app.tuya_model import get_model_scale_divisor
 from app.storage import (
     DeviceSample,
     apply_migrations,
     close_connection_pool,
+    delete_managed_device,
     get_control_device,
     get_cloud_artifact,
     get_device_capabilities,
@@ -45,7 +47,7 @@ from app.tuya_service import build_sample
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260504-01"
+templates.env.globals["static_asset_version"] = "20260504-02"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -1113,6 +1115,39 @@ def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONR
     return JSONResponse(jsonable_encoder(result))
 
 
+@app.post("/api/devices/{device_id}/retry-discovery")
+def retry_device_discovery_api(request: Request, device_id: str) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    if not get_device_row(config, device_id):
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+
+    try:
+        result = connect_device(config, device_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    device_row = get_device_row(config, result["device_id"])
+    if device_row:
+        request.app.state.device_rows_by_id[result["device_id"]] = device_row
+    _invalidate_aggregate_cache(request, device_id=result["device_id"])
+    return JSONResponse(jsonable_encoder(result))
+
+
+@app.delete("/api/devices/{device_id}")
+def delete_device_api(request: Request, device_id: str) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+
+    delete_managed_device(config, device_id)
+    request.app.state.live_samples.pop(device_id, None)
+    request.app.state.device_rows_by_id.pop(device_id, None)
+    request.app.state.device_capabilities_cache.pop(device_id, None)
+    _invalidate_aggregate_cache(request, device_id=device_id)
+    return JSONResponse({"status": "ok", "device_id": device_id})
+
+
 @app.post("/api/devices/{device_id}/summary-config")
 def device_summary_config_api(
     request: Request,
@@ -1132,13 +1167,22 @@ def device_summary_config_api(
         raise HTTPException(status_code=400, detail="Выбранный total power DPS отсутствует в спецификации устройства")
 
     total_power_scale = 1.0
-    for capability in capabilities:
-        if str(capability.get("dp_id") or "") != (total_power_dps_key or ""):
-            continue
-        values_json = capability.get("values_json") or {}
-        scale = int(values_json.get("scale", 0) or 0)
-        total_power_scale = float(10 ** scale) if scale > 0 else 1.0
-        break
+    if total_power_dps_key is not None:
+        model_artifact = get_cloud_artifact(config, device_id, "onboard_model")
+        model_payload = model_artifact.get("payload") if model_artifact else {}
+        total_power_scale = get_model_scale_divisor(model_payload if isinstance(model_payload, dict) else {}, total_power_dps_key) or 0.0
+
+        if total_power_scale <= 0.0:
+            for capability in capabilities:
+                if str(capability.get("dp_id") or "") != total_power_dps_key:
+                    continue
+                values_json = capability.get("values_json") or {}
+                scale = int(values_json.get("scale", 0) or 0)
+                total_power_scale = float(10 ** scale) if scale > 0 else 1.0
+                break
+
+        if total_power_scale <= 0.0:
+            raise HTTPException(status_code=400, detail="Не удалось определить scale для выбранного total power DPS")
 
     update_device_summary_config(
         config,

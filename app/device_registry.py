@@ -17,6 +17,12 @@ from app.storage import (
     save_cloud_artifact,
     upsert_managed_device,
 )
+from app.tuya_model import (
+    build_model_property_index,
+    extract_model_properties,
+    get_model_scale_divisor,
+    merge_values_json_with_model,
+)
 from app.tuya_service import fetch_status
 from config import AppConfig, ConfigError, TuyaDeviceConfig, load_cloud_config
 
@@ -26,9 +32,6 @@ DEVICE_KIND_LABELS = {
     "switch": "Выключатель",
     "sensor": "Датчик",
     "light": "Лампочка",
-}
-FIXED_POWER_PROFILES: dict[str, tuple[str, float]] = {
-    "bf47402ca7399b6eef6bw7": ("1", 100.0),
 }
 
 ENERGY_CODES = {
@@ -175,40 +178,11 @@ def _extract_total_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, 
     return total_power_dps_key, total_power_scale
 
 
-def _apply_fixed_power_profile(
-    device_id: str,
-    total_power_dps_key: str | None,
-    total_power_scale: float,
-) -> tuple[str | None, float]:
-    fixed_profile = FIXED_POWER_PROFILES.get(device_id)
-    if fixed_profile is None:
-        return total_power_dps_key, total_power_scale
-
-    fixed_total_power_dps_key, fixed_total_power_scale = fixed_profile
-    return fixed_total_power_dps_key, fixed_total_power_scale
-
-
-def _infer_total_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float]:
-    normalized_dps = _normalize_raw_dps(raw_dps)
-    if not normalized_dps:
-        return None, 1.0
-
-    total_power_dps_key = "1" if _coerce_float(normalized_dps.get("1")) is not None else None
-    return total_power_dps_key, 100.0 if total_power_dps_key else 1.0
-
-
 def _complete_total_power_profile(
     total_power_dps_key: str | None,
     total_power_scale: float,
     raw_dps: Any,
 ) -> tuple[str | None, float]:
-    if total_power_dps_key:
-        return total_power_dps_key, total_power_scale
-
-    fallback_total_power_dps_key, fallback_total_power_scale = _infer_total_power_profile_from_raw_dps(raw_dps)
-    if total_power_dps_key is None:
-        total_power_dps_key = fallback_total_power_dps_key
-        total_power_scale = fallback_total_power_scale
     return total_power_dps_key, total_power_scale
 
 
@@ -270,31 +244,10 @@ def _default_visualized_codes(
     return selected
 
 
-def _extract_model_properties(device_model: dict[str, Any]) -> list[dict[str, Any]]:
-    result = device_model.get("result") or {}
-    model_text = str(result.get("model") or "").strip()
-    if not model_text:
-        return []
-
-    try:
-        model_payload = json.loads(model_text)
-    except json.JSONDecodeError:
-        return []
-
-    properties: list[dict[str, Any]] = []
-    for service in model_payload.get("services") or []:
-        if not isinstance(service, dict):
-            continue
-        for item in service.get("properties") or []:
-            if isinstance(item, dict):
-                properties.append(item)
-    return properties
-
-
 def _build_summary_options(device_model: dict[str, Any], capabilities: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     options: list[dict[str, Any]] = []
 
-    for item in _extract_model_properties(device_model):
+    for item in extract_model_properties(device_model):
         dp_id = item.get("abilityId")
         if dp_id is None:
             continue
@@ -335,21 +288,51 @@ def _build_summary_options(device_model: dict[str, Any], capabilities: list[dict
     return power_options, options
 
 
-def _build_capabilities(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_capabilities(dps_info: dict[str, Any], device_model: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    property_index = build_model_property_index(device_model or {})
     capabilities: list[dict[str, Any]] = []
     for source in ("functions", "status"):
         for item in dps_info.get(source) or []:
+            dp_id = item.get("dp_id")
+            model_property = property_index.get(str(dp_id)) if dp_id is not None else None
             capabilities.append(
                 {
                     "capability_source": source,
                     "capability_code": str(item.get("code") or "unknown"),
-                    "capability_name": str(item.get("name") or item.get("code") or ""),
-                    "value_type": item.get("type"),
-                    "dp_id": item.get("dp_id"),
-                    "values_json": _parse_values(item.get("values")),
+                    "capability_name": str(
+                        item.get("name")
+                        or (model_property or {}).get("name")
+                        or item.get("code")
+                        or ""
+                    ),
+                    "value_type": item.get("type") or ((model_property or {}).get("typeSpec") or {}).get("type"),
+                    "dp_id": dp_id,
+                    "values_json": merge_values_json_with_model(_parse_values(item.get("values")), model_property),
                 }
             )
     return capabilities
+
+
+def _resolve_scale_divisor_for_dp(
+    capabilities: list[dict[str, Any]],
+    device_model: dict[str, Any],
+    dp_id: str | None,
+) -> float | None:
+    if not dp_id:
+        return None
+
+    model_scale = get_model_scale_divisor(device_model, dp_id)
+    if model_scale is not None:
+        return model_scale
+
+    for capability in capabilities:
+        if str(capability.get("dp_id") or "") != dp_id:
+            continue
+        values_json = capability.get("values_json") or {}
+        scale_digits = int(values_json.get("scale", 0) or 0)
+        return float(10 ** scale_digits) if scale_digits > 0 else 1.0
+
+    return None
 
 
 def _known_subnets(config: AppConfig) -> list[ipaddress.IPv4Network]:
@@ -466,13 +449,13 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         room = resolved_room or DEFAULT_ROOM_NAME
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
+    capabilities = _build_capabilities(dps_result, device_model if isinstance(device_model, dict) else None)
     total_power_dps_key, total_power_scale = _extract_total_power_profile(dps_result)
-    total_power_dps_key, total_power_scale = _apply_fixed_power_profile(
-        clean_device_id,
+    total_power_scale = _resolve_scale_divisor_for_dp(
+        capabilities,
+        device_model if isinstance(device_model, dict) else {},
         total_power_dps_key,
-        total_power_scale,
-    )
-    capabilities = _build_capabilities(dps_result)
+    ) or total_power_scale
     default_visualized_codes = _default_visualized_codes(capabilities, total_power_dps_key)
 
     if existing:
@@ -503,13 +486,19 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             total_power_dps_key,
             total_power_scale,
         )
-        recommended_total_power_dps_key, recommended_total_power_scale = _apply_fixed_power_profile(
-            clean_device_id,
+        recommended_total_power_scale = _resolve_scale_divisor_for_dp(
+            capabilities,
+            device_model if isinstance(device_model, dict) else {},
             recommended_total_power_dps_key,
-            recommended_total_power_scale,
-        )
+        ) or recommended_total_power_scale
         saved_total_power_dps_key = str(control_device.total_power_dps_key or "").strip() or None if control_device else None
-        saved_total_power_scale = float(control_device.total_power_scale or 1) if saved_total_power_dps_key and control_device else 1.0
+        saved_total_power_scale = 1.0
+        if saved_total_power_dps_key and control_device:
+            saved_total_power_scale = _resolve_scale_divisor_for_dp(
+                capabilities,
+                device_model if isinstance(device_model, dict) else {},
+                saved_total_power_dps_key,
+            ) or float(control_device.total_power_scale or 1)
         saved_visualized_codes = list(control_device.visualized_codes) if control_device and control_device.visualized_codes else []
         summary_visualized_codes = saved_visualized_codes or default_visualized_codes
 
@@ -579,32 +568,29 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             raise
         connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
 
-    if connection_ready:
-        provisional_device = TuyaDeviceConfig(
-            name=name,
-            room=room,
-            device_id=clean_device_id,
-            local_key=local_key,
-            ip_address=ip_address,
-            version=version,
-            total_power_dps_key=total_power_dps_key or "",
-            total_power_scale=total_power_scale,
-            visualized_codes=tuple(default_visualized_codes),
-        )
-        try:
-            local_payload = fetch_status(provisional_device)
-        except Exception:
-            local_payload = {}
-        total_power_dps_key, total_power_scale = _complete_total_power_profile(
-            total_power_dps_key,
-            total_power_scale,
-            local_payload.get("dps") if isinstance(local_payload, dict) else None,
-        )
-        total_power_dps_key, total_power_scale = _apply_fixed_power_profile(
-            clean_device_id,
-            total_power_dps_key,
-            total_power_scale,
-        )
+    if not connection_ready or not ip_address:
+        raise ConfigError(connection_message or LOCAL_DISCOVERY_ERROR_MESSAGE)
+
+    provisional_device = TuyaDeviceConfig(
+        name=name,
+        room=room,
+        device_id=clean_device_id,
+        local_key=local_key,
+        ip_address=ip_address,
+        version=version,
+        total_power_dps_key=total_power_dps_key or "",
+        total_power_scale=total_power_scale,
+        visualized_codes=tuple(default_visualized_codes),
+    )
+    try:
+        local_payload = fetch_status(provisional_device)
+    except Exception:
+        local_payload = {}
+    total_power_dps_key, total_power_scale = _complete_total_power_profile(
+        total_power_dps_key,
+        total_power_scale,
+        local_payload.get("dps") if isinstance(local_payload, dict) else None,
+    )
 
     upsert_managed_device(
         config,

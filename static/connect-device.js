@@ -136,4 +136,73 @@ if (connectForm) {
             submitButton.disabled = false;
         }
     });
+
+    document.addEventListener('click', async (event) => {
+        const actionButton = event.target.closest('[data-device-action]');
+        if (!actionButton) {
+            return;
+        }
+
+        const action = actionButton.dataset.deviceAction;
+        const deviceId = String(actionButton.dataset.deviceId || '').trim();
+        const deviceName = String(actionButton.dataset.deviceName || deviceId || 'устройство').trim();
+        if (!deviceId) {
+            return;
+        }
+
+        if (action === 'delete-device') {
+            if (!window.confirm(`Удалить устройство ${deviceName}? Все сохраненные данные по нему будут удалены.`)) {
+                return;
+            }
+
+            actionButton.disabled = true;
+            setFeedback(`Удаляю устройство ${deviceName}.`, 'pending');
+            try {
+                const response = await fetch(`/api/devices/${deviceId}`, {
+                    method: 'DELETE',
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || 'Не удалось удалить устройство.');
+                }
+                setFeedback(`Устройство ${deviceName} удалено.`, 'success');
+                setTimeout(() => window.location.reload(), 500);
+            } catch (error) {
+                setFeedback(error.message, 'error');
+                actionButton.disabled = false;
+            }
+            return;
+        }
+
+        if (action === 'retry-discovery') {
+            actionButton.disabled = true;
+            setFeedback(`Повторно ищу устройство ${deviceName} в локальной сети.`, 'pending');
+            try {
+                const response = await fetch(`/api/devices/${deviceId}/retry-discovery`, {
+                    method: 'POST',
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || 'Не удалось повторить локальное обнаружение.');
+                }
+
+                const message = payload.connection_ready
+                    ? `
+                    <strong>${payload.name}</strong> обнаружено в локальной сети.<br>
+                    Локальный IP: ${payload.ip_address}.<br>
+                    Версия протокола: ${payload.version}.<br>
+                    `
+                    : `
+                    <strong>${payload.name}</strong> пока не найдено в локальной сети.<br>
+                    ${payload.connection_message || 'Локальное обнаружение пока не завершено.'}
+                    `;
+
+                setFeedback(message, payload.connection_ready ? 'success' : 'pending');
+                setTimeout(() => window.location.reload(), payload.connection_ready ? 600 : 1200);
+            } catch (error) {
+                setFeedback(error.message, 'error');
+                actionButton.disabled = false;
+            }
+        }
+    });
 }
