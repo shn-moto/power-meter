@@ -24,13 +24,10 @@ if (page) {
     const timerCancel = document.querySelector('[data-timer-cancel]');
     const chartInstance = window.echarts ? window.echarts.init(chart) : null;
     const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
-    const summaryCurrentPower = summary.querySelector('[data-summary-current-power]');
-    const summaryCurrentCurrent = summary.querySelector('[data-summary-current-current]');
-    const summaryCurrentVoltage = summary.querySelector('[data-summary-current-voltage]');
+    const liveMetrics = page.querySelector('[data-live-metrics]');
     const summaryEnergy = summary.querySelector('[data-summary-energy]');
     const summaryAveragePower = summary.querySelector('[data-summary-average-power]');
     const summaryPeakPower = summary.querySelector('[data-summary-peak-power]');
-    const summaryAverageVoltage = summary.querySelector('[data-summary-average-voltage]');
     const summarySampleCount = summary.querySelector('[data-summary-sample-count]');
     const summaryLatestSample = summary.querySelector('[data-device-latest-sample]');
     let currentPeriod = 'day';
@@ -352,15 +349,32 @@ if (page) {
         summaryEnergy.textContent = `${fields.energy_kwh} кВт·ч`;
         summaryAveragePower.textContent = `${fields.average_power_kw} кВт`;
         summaryPeakPower.textContent = `${fields.peak_power_kw} кВт`;
-        summaryAverageVoltage.textContent = formatValue(fields.average_voltage_v, ' В');
         summarySampleCount.textContent = String(fields.sample_count);
+    };
+
+    const renderSelectedMetrics = (metrics) => {
+        liveMetrics.innerHTML = '';
+        if (!Array.isArray(metrics) || !metrics.length) {
+            const empty = document.createElement('div');
+            empty.innerHTML = '<dt>Live-поля</dt><dd>Не выбраны</dd>';
+            liveMetrics.appendChild(empty);
+            return;
+        }
+
+        metrics.forEach((metric) => {
+            const item = document.createElement('div');
+            const term = document.createElement('dt');
+            const description = document.createElement('dd');
+            term.textContent = metric.label || `DPS ${metric.code}`;
+            description.textContent = metric.value || '--';
+            item.append(term, description);
+            liveMetrics.appendChild(item);
+        });
     };
 
     const renderLiveSummary = (payload) => {
         const fields = payload.summary;
-        summaryCurrentPower.textContent = formatPower(fields.current_power_w);
-        summaryCurrentCurrent.textContent = formatCurrent(fields.current_current_ma);
-        summaryCurrentVoltage.textContent = formatValue(fields.current_voltage_v, ' В');
+        renderSelectedMetrics(payload.live_metrics || []);
         summaryLatestSample.textContent = fields.latest_sample || '--';
         applyReadingStatus(summaryLatestSample, fields.latest_sample_status);
         syncFunctionStates(payload.device_functions || []);

@@ -1,3 +1,0 @@
-ALTER TABLE devices DROP COLUMN IF EXISTS image_label;
-
-ALTER TABLE devices DROP COLUMN IF EXISTS image_id;

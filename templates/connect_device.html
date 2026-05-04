@@ -20,6 +20,19 @@
         </form>
 
         <div class="connect-feedback" data-connect-feedback hidden></div>
+
+        <div class="connect-feedback" data-connect-config hidden>
+            <form class="connect-form" data-connect-config-form>
+                <label>
+                    DPS код общего накопительного потребления
+                    <select name="total_power_dps_key" data-total-power-select>
+                        <option value="">Не выбран</option>
+                    </select>
+                </label>
+                <div data-visualized-codes></div>
+                <button type="submit">Сохранить конфигурацию сводки</button>
+            </form>
+        </div>
     </article>
 
     <article class="connect-card">

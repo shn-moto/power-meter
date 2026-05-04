@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
@@ -37,13 +38,14 @@ from app.storage import (
     pick_bucket,
     save_cloud_artifact,
     save_sample,
+    update_device_summary_config,
 )
 from app.tuya_service import build_sample
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260503-10"
+templates.env.globals["static_asset_version"] = "20260504-01"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -110,6 +112,11 @@ SUPPORTED_CONTROL_TYPES = {
 
 class ConnectDevicePayload(BaseModel):
     device_id: str
+
+
+class DeviceSummaryConfigPayload(BaseModel):
+    total_power_dps_key: str | None = None
+    visualized_codes: list[str] = []
 
 
 class DeviceFunctionPayload(BaseModel):
@@ -299,6 +306,10 @@ def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float 
 
 def _augment_current_summary(summary: dict[str, Any], capabilities: list[dict[str, Any]]) -> None:
     raw_dps = summary.get("latest_raw_dps") or {}
+    has_total_counter = any(
+        str(capability.get("capability_code") or "") in {"total_forward_energy", "add_ele"}
+        for capability in capabilities
+    )
     current_ma = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_current")
     power_w = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_power")
     voltage_v = _read_measurement_from_capabilities(raw_dps, capabilities, "cur_voltage")
@@ -312,9 +323,7 @@ def _augment_current_summary(summary: dict[str, Any], capabilities: list[dict[st
         voltage_v = breaker_voltage_v
 
     if power_w is None:
-        power_w = summary.get("latest_power_w")
-    if voltage_v is None:
-        voltage_v = summary.get("latest_voltage_v")
+        power_w = None if has_total_counter else summary.get("latest_power_w")
 
     summary["current_power_w"] = round(power_w, 1) if power_w is not None else None
     summary["current_voltage_v"] = round(voltage_v, 1) if voltage_v is not None else None
@@ -369,6 +378,71 @@ def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str
         )
 
     return functions
+
+
+def _get_capability_by_dp_id(capabilities: list[dict[str, Any]], dp_id: str) -> dict[str, Any] | None:
+    for capability in capabilities:
+        if str(capability.get("dp_id") or "") == dp_id:
+            return capability
+    return None
+
+
+def _format_metric_number(value: float, digits: int = 3) -> str:
+    return f"{value:.{digits}f}".rstrip("0").rstrip(".")
+
+
+def _decode_phase_packet(raw_value: Any) -> str:
+    if not isinstance(raw_value, str) or not raw_value:
+        return "Нет данных"
+
+    try:
+        payload = base64.b64decode(raw_value)
+    except Exception:
+        return str(raw_value)
+
+    if len(payload) not in {8, 10}:
+        return str(raw_value)
+
+    voltage_v = int.from_bytes(payload[0:2], byteorder="big", signed=False) / 10.0
+    current_a = int.from_bytes(payload[2:5], byteorder="big", signed=False) / 1000.0
+    power_kw = int.from_bytes(payload[5:8], byteorder="big", signed=False) / 1000.0
+    parts = [
+        f"U {_format_metric_number(voltage_v, 1)} В",
+        f"I {_format_metric_number(current_a)} А",
+        f"P {_format_metric_number(power_kw)} кВт",
+    ]
+    if len(payload) == 10:
+        leakage_a = int.from_bytes(payload[8:10], byteorder="big", signed=False) / 1000.0
+        parts.append(f"Leak {_format_metric_number(leakage_a)} А")
+    return " · ".join(parts)
+
+
+def _build_live_metrics(
+    visualized_codes: list[str] | tuple[str, ...],
+    capabilities: list[dict[str, Any]],
+    raw_dps: dict[str, Any],
+) -> list[dict[str, str]]:
+    metrics: list[dict[str, str]] = []
+    for code in visualized_codes:
+        key = str(code)
+        capability = _get_capability_by_dp_id(capabilities, key)
+        raw_value = raw_dps.get(key)
+        capability_code = str((capability or {}).get("capability_code") or "")
+        if capability_code in {"phase_a", "phase_b", "phase_c"}:
+            rendered_value = _decode_phase_packet(raw_value)
+        else:
+            rendered_value = _format_dps_value(capability, raw_value)
+
+        label = (
+            DPS_LABELS.get(capability_code)
+            or str((capability or {}).get("capability_name") or capability_code or f"DPS {key}")
+        )
+        metrics.append({
+            "code": key,
+            "label": label,
+            "value": rendered_value,
+        })
+    return metrics
 
 
 def _attach_function_state(functions: list[dict[str, Any]], raw_dps: dict[str, Any]) -> list[dict[str, Any]]:
@@ -436,12 +510,11 @@ async def _poll_loop(app: FastAPI) -> None:
         devices = await asyncio.to_thread(get_polling_devices, config)
         for device in devices:
             try:
-                captured_at, power_w, voltage_v, raw_dps = await asyncio.to_thread(build_sample, device)
+                captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
                 sample = DeviceSample(
                     device_id=device.device_id,
                     captured_at=captured_at,
                     power_w=power_w,
-                    voltage_v=voltage_v,
                     raw_dps=raw_dps,
                 )
                 app.state.live_samples[device.device_id] = sample
@@ -490,7 +563,6 @@ def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str
     for device in summary.get("devices", []):
         live_sample = live_samples.get(device["device_id"])
         if live_sample:
-            device["current_power_kw"] = round(live_sample.power_w / 1000.0, 3)
             device["last_seen"] = _format_live_timestamp(config, live_sample.captured_at)
             device["raw_dps"] = live_sample.raw_dps
         total_power_w += float(device.get("current_power_kw") or 0.0) * 1000.0
@@ -509,9 +581,6 @@ def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample 
     stats["summary"]["latest_sample_status"] = get_sample_status(live_sample.captured_at, now)
     stats["summary"]["latest_raw_dps"] = live_sample.raw_dps
     stats["summary"]["latest_power_w"] = round(live_sample.power_w, 1)
-    if live_sample.voltage_v is not None:
-        stats["summary"]["average_voltage_v"] = round(live_sample.voltage_v, 1)
-        stats["summary"]["latest_voltage_v"] = round(live_sample.voltage_v, 1)
     return stats
 
 
@@ -527,6 +596,7 @@ def _get_cached_device_capabilities(request: Request, config: AppConfig, device_
 def _build_device_live_payload(
     config: AppConfig,
     capabilities: list[dict[str, Any]],
+    visualized_codes: list[str] | tuple[str, ...],
     live_sample: DeviceSample | None,
 ) -> dict[str, Any]:
     if live_sample:
@@ -536,7 +606,6 @@ def _build_device_live_payload(
             "latest_sample_status": get_sample_status(live_sample.captured_at, datetime.now(_get_timezone(config))),
             "latest_raw_dps": live_sample.raw_dps,
             "latest_power_w": round(live_sample.power_w, 1),
-            "latest_voltage_v": round(live_sample.voltage_v, 1) if live_sample.voltage_v is not None else None,
         }
     else:
         summary = {
@@ -545,13 +614,13 @@ def _build_device_live_payload(
             "latest_sample_status": "error",
             "latest_raw_dps": {},
             "latest_power_w": None,
-            "latest_voltage_v": None,
         }
 
     _augment_current_summary(summary, capabilities)
 
     return {
         "summary": summary,
+        "live_metrics": _build_live_metrics(visualized_codes, capabilities, summary["latest_raw_dps"]),
         "device_functions": _attach_function_state(_build_device_functions(capabilities), summary["latest_raw_dps"]),
     }
 
@@ -582,11 +651,10 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
         }
 
         if device.get("is_energy_meter"):
-            total_power_w += float(sample.power_w)
             devices.append(
                 {
                     **entry,
-                    "current_power_kw": round(float(sample.power_w) / 1000.0, 3),
+                    "current_power_kw": 0.0,
                 }
             )
             continue
@@ -859,6 +927,7 @@ def _build_device_stats_payload(
     stats = _apply_live_stats(config, stats, live_sample)
     _augment_current_summary(stats["summary"], capabilities)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
+    stats["live_metrics"] = _build_live_metrics(device.get("visualized_codes") or [], capabilities, stats["summary"]["latest_raw_dps"])
     return {
         "device": dict(device),
         "period": {
@@ -1044,6 +1113,53 @@ def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONR
     return JSONResponse(jsonable_encoder(result))
 
 
+@app.post("/api/devices/{device_id}/summary-config")
+def device_summary_config_api(
+    request: Request,
+    device_id: str,
+    payload: DeviceSummaryConfigPayload,
+) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+
+    capabilities = get_device_capabilities(config, device_id)
+    allowed_codes = {str(capability.get("dp_id") or "") for capability in capabilities if capability.get("dp_id") is not None}
+    visualized_codes = [str(code) for code in payload.visualized_codes if str(code) in allowed_codes]
+    total_power_dps_key = str(payload.total_power_dps_key or "").strip() or None
+    if total_power_dps_key is not None and total_power_dps_key not in allowed_codes:
+        raise HTTPException(status_code=400, detail="Выбранный total power DPS отсутствует в спецификации устройства")
+
+    total_power_scale = 1.0
+    for capability in capabilities:
+        if str(capability.get("dp_id") or "") != (total_power_dps_key or ""):
+            continue
+        values_json = capability.get("values_json") or {}
+        scale = int(values_json.get("scale", 0) or 0)
+        total_power_scale = float(10 ** scale) if scale > 0 else 1.0
+        break
+
+    update_device_summary_config(
+        config,
+        device_id,
+        total_power_dps_key=total_power_dps_key,
+        total_power_scale=total_power_scale,
+        visualized_codes=visualized_codes,
+    )
+    updated_device = get_device_row(config, device_id)
+    if updated_device:
+        request.app.state.device_rows_by_id[device_id] = updated_device
+    _invalidate_aggregate_cache(request, device_id=device_id)
+    return JSONResponse(
+        {
+            "status": "ok",
+            "total_power_dps_key": total_power_dps_key,
+            "visualized_codes": visualized_codes,
+        }
+    )
+
+
 @app.get("/api/devices/{device_id}/sensor")
 def sensor_device_api(request: Request, device_id: str) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
@@ -1094,12 +1210,11 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
         tinytuya_device.set_socketRetryLimit(1)
         _apply_device_command(tinytuya_device, function_code, function["dp_id"], value)
 
-        captured_at, power_w, voltage_v, raw_dps = build_sample(device)
+        captured_at, power_w, raw_dps = build_sample(device)
         sample = DeviceSample(
             device_id=device.device_id,
             captured_at=captured_at,
             power_w=power_w,
-            voltage_v=voltage_v,
             raw_dps=raw_dps,
         )
         request.app.state.live_samples[device.device_id] = sample
@@ -1145,5 +1260,11 @@ def device_stats_api(
 def device_live_api(request: Request, device_id: str) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     capabilities = _get_cached_device_capabilities(request, config, device_id)
-    payload = _build_device_live_payload(config, capabilities, request.app.state.live_samples.get(device_id))
+    device = get_device_row(config, device_id)
+    payload = _build_device_live_payload(
+        config,
+        capabilities,
+        tuple(str(code) for code in ((device or {}).get("visualized_codes") or [])),
+        request.app.state.live_samples.get(device_id),
+    )
     return JSONResponse(jsonable_encoder(payload))

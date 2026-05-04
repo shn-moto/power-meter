@@ -10,9 +10,9 @@ CREATE TABLE devices (
     product_name TEXT,
     icon TEXT,
     onboarding_source TEXT NOT NULL DEFAULT 'config',
-    power_dps_key TEXT,
-    power_scale DOUBLE PRECISION,
-    voltage_dps_keys JSONB,
+    total_power_dps_key TEXT,
+    total_power_scale DOUBLE PRECISION NOT NULL DEFAULT 1,
+    visualized_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -24,9 +24,8 @@ CREATE TABLE device_connections (
     local_key TEXT NOT NULL,
     ip_address TEXT NOT NULL,
     version DOUBLE PRECISION NOT NULL DEFAULT 3.5,
-    power_dps_key TEXT,
-    power_scale DOUBLE PRECISION NOT NULL DEFAULT 1,
-    voltage_dps_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+    total_power_dps_key TEXT,
+    total_power_scale DOUBLE PRECISION NOT NULL DEFAULT 1,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -52,29 +51,13 @@ CREATE TABLE samples (
     device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
     captured_at TIMESTAMPTZ NOT NULL,
     power_w DOUBLE PRECISION NOT NULL,
-    voltage_v DOUBLE PRECISION,
     raw_dps JSONB NOT NULL,
     source TEXT NOT NULL DEFAULT 'live',
-    source_event_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX idx_samples_device_time_source ON samples(device_id, captured_at, source);
 CREATE INDEX idx_samples_device_time_desc ON samples(device_id, captured_at DESC);
-
-CREATE TABLE device_events (
-    id BIGSERIAL PRIMARY KEY,
-    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    event_at TIMESTAMPTZ NOT NULL,
-    event_type TEXT,
-    event_code TEXT,
-    source_event_id TEXT,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX idx_device_events_unique ON device_events(device_id, source_event_id);
-CREATE INDEX idx_device_events_device_time ON device_events(device_id, event_at);
 
 CREATE TABLE device_cloud_artifacts (
     id BIGSERIAL PRIMARY KEY,

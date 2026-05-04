@@ -35,10 +35,8 @@ class DeviceSample:
     device_id: str
     captured_at: datetime
     power_w: float
-    voltage_v: float | None
     raw_dps: dict[str, Any]
     source: str = "live"
-    source_event_id: str | None = None
 
 
 _connection_pool: ConnectionPool | None = None
@@ -138,7 +136,7 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
-                    power_dps_key, power_scale, voltage_dps_keys
+                    total_power_dps_key, total_power_scale, visualized_codes
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -147,9 +145,9 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                     is_energy_meter = EXCLUDED.is_energy_meter,
                     onboarding_source = EXCLUDED.onboarding_source,
                     updated_at = NOW(),
-                    power_dps_key = EXCLUDED.power_dps_key,
-                    power_scale = EXCLUDED.power_scale,
-                    voltage_dps_keys = EXCLUDED.voltage_dps_keys
+                    total_power_dps_key = EXCLUDED.total_power_dps_key,
+                    total_power_scale = EXCLUDED.total_power_scale,
+                    visualized_codes = EXCLUDED.visualized_codes
                 """,
                 [
                     (
@@ -163,9 +161,9 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                         None,
                         None,
                         "config",
-                        device.power_dps_key,
-                        device.power_scale,
-                        Jsonb(list(device.voltage_dps_keys)),
+                        device.total_power_dps_key or None,
+                        device.total_power_scale,
+                        Jsonb(list(device.visualized_codes)),
                     )
                     for device in devices
                 ],
@@ -173,8 +171,8 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
             cursor.executemany(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -185,9 +183,8 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                         WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.version
                         ELSE device_connections.version
                     END,
-                    power_dps_key = EXCLUDED.power_dps_key,
-                    power_scale = EXCLUDED.power_scale,
-                    voltage_dps_keys = EXCLUDED.voltage_dps_keys,
+                    total_power_dps_key = EXCLUDED.total_power_dps_key,
+                    total_power_scale = EXCLUDED.total_power_scale,
                     updated_at = NOW()
                 """,
                 [
@@ -196,9 +193,8 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                         device.local_key,
                         device.ip_address,
                         device.version,
-                        device.power_dps_key,
-                        device.power_scale,
-                        Jsonb(list(device.voltage_dps_keys)),
+                        device.total_power_dps_key or None,
+                        device.total_power_scale,
                     )
                     for device in devices
                 ],
@@ -222,9 +218,9 @@ def upsert_managed_device(
     local_key: str,
     ip_address: str,
     version: float,
-    power_dps_key: str | None,
-    power_scale: float,
-    voltage_dps_keys: list[str] | tuple[str, ...],
+    total_power_dps_key: str | None,
+    total_power_scale: float,
+    visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
 ) -> None:
     with _connect(config.database_url) as connection:
@@ -234,7 +230,7 @@ def upsert_managed_device(
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
-                    power_dps_key, power_scale, voltage_dps_keys
+                    total_power_dps_key, total_power_scale, visualized_codes
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -250,9 +246,9 @@ def upsert_managed_device(
                     icon = EXCLUDED.icon,
                     onboarding_source = EXCLUDED.onboarding_source,
                     updated_at = NOW(),
-                    power_dps_key = EXCLUDED.power_dps_key,
-                    power_scale = EXCLUDED.power_scale,
-                    voltage_dps_keys = EXCLUDED.voltage_dps_keys
+                    total_power_dps_key = EXCLUDED.total_power_dps_key,
+                    total_power_scale = EXCLUDED.total_power_scale,
+                    visualized_codes = EXCLUDED.visualized_codes
                 """,
                 (
                     name,
@@ -265,16 +261,16 @@ def upsert_managed_device(
                     product_name,
                     icon,
                     onboarding_source,
-                    power_dps_key,
-                    power_scale,
-                    Jsonb(list(voltage_dps_keys)),
+                    total_power_dps_key,
+                    total_power_scale,
+                    Jsonb(list(visualized_codes)),
                 ),
             )
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, power_dps_key, power_scale, voltage_dps_keys, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -285,9 +281,8 @@ def upsert_managed_device(
                         WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.version
                         ELSE device_connections.version
                     END,
-                    power_dps_key = EXCLUDED.power_dps_key,
-                    power_scale = EXCLUDED.power_scale,
-                    voltage_dps_keys = EXCLUDED.voltage_dps_keys,
+                    total_power_dps_key = EXCLUDED.total_power_dps_key,
+                    total_power_scale = EXCLUDED.total_power_scale,
                     updated_at = NOW()
                 """,
                 (
@@ -295,9 +290,8 @@ def upsert_managed_device(
                     local_key,
                     ip_address,
                     version,
-                    power_dps_key,
-                    power_scale,
-                    Jsonb(list(voltage_dps_keys)),
+                    total_power_dps_key,
+                    total_power_scale,
                 ),
             )
             cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
@@ -338,9 +332,9 @@ def refresh_managed_device_cloud_data(
     product_name: str | None,
     icon: str | None,
     onboarding_source: str,
-    power_dps_key: str | None,
-    power_scale: float,
-    voltage_dps_keys: list[str] | tuple[str, ...],
+    total_power_dps_key: str | None,
+    total_power_scale: float,
+    visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
 ) -> None:
     with _connect(config.database_url) as connection:
@@ -358,9 +352,9 @@ def refresh_managed_device_cloud_data(
                     icon = %s,
                     onboarding_source = %s,
                     updated_at = NOW(),
-                    power_dps_key = %s,
-                    power_scale = %s,
-                    voltage_dps_keys = %s
+                    total_power_dps_key = %s,
+                    total_power_scale = %s,
+                    visualized_codes = %s
                 WHERE device_id = %s
                 """,
                 (
@@ -373,25 +367,23 @@ def refresh_managed_device_cloud_data(
                     product_name,
                     icon,
                     onboarding_source,
-                    power_dps_key,
-                    power_scale,
-                    Jsonb(list(voltage_dps_keys)),
+                    total_power_dps_key,
+                    total_power_scale,
+                    Jsonb(list(visualized_codes)),
                     device_id,
                 ),
             )
             cursor.execute(
                 """
                 UPDATE device_connections
-                SET power_dps_key = %s,
-                    power_scale = %s,
-                    voltage_dps_keys = %s,
+                SET total_power_dps_key = %s,
+                    total_power_scale = %s,
                     updated_at = NOW()
                 WHERE device_id = %s
                 """,
                 (
-                    power_dps_key,
-                    power_scale,
-                    Jsonb(list(voltage_dps_keys)),
+                    total_power_dps_key,
+                    total_power_scale,
                     device_id,
                 ),
             )
@@ -425,22 +417,18 @@ def save_sample(config: AppConfig, sample: DeviceSample) -> None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO samples (device_id, captured_at, power_w, raw_dps, source)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
                     power_w = EXCLUDED.power_w,
-                    voltage_v = EXCLUDED.voltage_v,
-                    raw_dps = EXCLUDED.raw_dps,
-                    source_event_id = EXCLUDED.source_event_id
+                    raw_dps = EXCLUDED.raw_dps
                 """,
                 (
                     sample.device_id,
                     sample.captured_at,
                     sample.power_w,
-                    sample.voltage_v,
                     Jsonb(sample.raw_dps),
                     sample.source,
-                    sample.source_event_id,
                 ),
             )
         connection.commit()
@@ -453,60 +441,22 @@ def save_samples_batch(config: AppConfig, samples: list[DeviceSample]) -> None:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """
-                INSERT INTO samples (device_id, captured_at, power_w, voltage_v, raw_dps, source, source_event_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO samples (device_id, captured_at, power_w, raw_dps, source)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (device_id, captured_at, source) DO UPDATE SET
                     power_w = EXCLUDED.power_w,
-                    voltage_v = EXCLUDED.voltage_v,
-                    raw_dps = EXCLUDED.raw_dps,
-                    source_event_id = EXCLUDED.source_event_id
+                    raw_dps = EXCLUDED.raw_dps
                 """,
                 [
                     (
                         sample.device_id,
                         sample.captured_at,
                         sample.power_w,
-                        sample.voltage_v,
                         Jsonb(sample.raw_dps),
                         sample.source,
-                        sample.source_event_id,
                     )
                     for sample in samples
                 ],
-            )
-        connection.commit()
-
-
-def save_device_event(
-    config: AppConfig,
-    *,
-    device_id: str,
-    event_at: datetime,
-    event_type: str | None,
-    event_code: str | None,
-    source_event_id: str | None,
-    payload: dict[str, Any],
-) -> None:
-    with _connect(config.database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO device_events (device_id, event_at, event_type, event_code, source_event_id, payload)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (device_id, source_event_id) DO UPDATE SET
-                    event_at = EXCLUDED.event_at,
-                    event_type = EXCLUDED.event_type,
-                    event_code = EXCLUDED.event_code,
-                    payload = EXCLUDED.payload
-                """,
-                (
-                    device_id,
-                    event_at,
-                    event_type,
-                    event_code,
-                    source_event_id,
-                    Jsonb(payload),
-                ),
             )
         connection.commit()
 
@@ -569,9 +519,28 @@ def _normalize_voltage_value(value: Any) -> float | None:
     return voltage
 
 
+def _read_reference_voltage(raw_dps: dict[str, Any] | None) -> float | None:
+    payload = _normalize_json_field(raw_dps)
+    if not payload:
+        return None
+
+    direct_voltage = _normalize_voltage_value(payload.get("6"))
+    if direct_voltage is not None:
+        return direct_voltage
+
+    phase_voltages = [
+        _normalize_voltage_value(payload.get(key))
+        for key in ("107", "108", "109")
+        if payload.get(key) is not None
+    ]
+    phase_voltages = [value for value in phase_voltages if value is not None and value > 0]
+    if not phase_voltages:
+        return None
+    return sum(phase_voltages) / len(phase_voltages)
+
+
 def _normalize_power_by_measurements(
     power_w: float,
-    voltage_v: float | None,
     raw_dps: dict[str, Any] | None,
 ) -> float:
     payload = _normalize_json_field(raw_dps)
@@ -579,7 +548,7 @@ def _normalize_power_by_measurements(
         return power_w
 
     current_raw = _coerce_float(payload.get("4"))
-    measured_voltage = voltage_v if voltage_v is not None else _normalize_voltage_value(payload.get("6"))
+    measured_voltage = _read_reference_voltage(payload)
     if current_raw is None or measured_voltage is None or current_raw <= 0 or measured_voltage <= 0:
         return power_w
 
@@ -594,9 +563,10 @@ def _normalize_power_by_measurements(
     return power_w
 
 
-def _normalize_sample_power_w(power_w: float, voltage_v: float | None, raw_dps: dict[str, Any] | None = None) -> float:
-    power_w = _normalize_power_by_measurements(power_w, voltage_v, raw_dps)
-    if power_w > 5000 and voltage_v is not None and 180 <= voltage_v <= 260:
+def _normalize_sample_power_w(power_w: float, raw_dps: dict[str, Any] | None = None) -> float:
+    power_w = _normalize_power_by_measurements(power_w, raw_dps)
+    reference_voltage = _read_reference_voltage(raw_dps)
+    if power_w > 5000 and reference_voltage is not None and 180 <= reference_voltage <= 260:
         return power_w / 10.0
     return power_w
 
@@ -626,7 +596,8 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
             cursor.execute(
                 """
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
-                      d.product_name, d.category_code, d.device_id,
+                        d.product_name, d.category_code, d.device_id,
+                        d.total_power_dps_key, d.visualized_codes,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -643,7 +614,8 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
             cursor.execute(
                 """
                                     SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter,
-                      d.product_name, d.category_code, d.product_id, d.icon,
+                        d.product_name, d.category_code, d.product_id, d.icon,
+                        d.total_power_dps_key, d.visualized_codes,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -653,6 +625,47 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
                 (device_id,),
             )
             return cursor.fetchone()
+
+
+def update_device_summary_config(
+    config: AppConfig,
+    device_id: str,
+    *,
+    total_power_dps_key: str | None,
+    total_power_scale: float,
+    visualized_codes: list[str] | tuple[str, ...],
+) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE devices
+                SET total_power_dps_key = %s,
+                    visualized_codes = %s,
+                    updated_at = NOW()
+                WHERE device_id = %s
+                """,
+                (
+                    total_power_dps_key,
+                    Jsonb(list(visualized_codes)),
+                    device_id,
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE device_connections
+                SET total_power_dps_key = %s,
+                    total_power_scale = %s,
+                    updated_at = NOW()
+                WHERE device_id = %s
+                """,
+                (
+                    total_power_dps_key,
+                    total_power_scale,
+                    device_id,
+                ),
+            )
+        connection.commit()
 
 
 def get_cloud_artifact(config: AppConfig, device_id: str, artifact_type: str) -> dict[str, Any] | None:
@@ -718,8 +731,8 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
             cursor.execute(
                 """
                                     SELECT d.name, d.room, d.device_id,
-                       c.local_key, c.ip_address, c.version, c.power_dps_key,
-                       c.power_scale, c.voltage_dps_keys
+                        c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
+                      d.visualized_codes
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
                 WHERE d.device_id = %s
@@ -738,9 +751,9 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         local_key=row["local_key"],
         ip_address=row["ip_address"],
         version=float(row["version"]),
-        power_dps_key=str(row["power_dps_key"] or ""),
-        power_scale=float(row["power_scale"] or 1),
-        voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
+        total_power_dps_key=str(row["total_power_dps_key"] or ""),
+        total_power_scale=float(row["total_power_scale"] or 1),
+        visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
     )
 
 
@@ -760,8 +773,8 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
             cursor.execute(
                 """
                                     SELECT d.name, d.room, d.device_id,
-                       c.local_key, c.ip_address, c.version, c.power_dps_key,
-                       c.power_scale, c.voltage_dps_keys
+                        c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
+                      d.visualized_codes
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
                 WHERE c.local_key <> '' AND c.ip_address <> ''
@@ -780,9 +793,9 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 local_key=row["local_key"],
                 ip_address=row["ip_address"],
                 version=float(row["version"]),
-                power_dps_key=str(row["power_dps_key"] or ""),
-                power_scale=float(row["power_scale"] or 1),
-                voltage_dps_keys=tuple(str(key) for key in (row["voltage_dps_keys"] or [])),
+                total_power_dps_key=str(row["total_power_dps_key"] or ""),
+                total_power_scale=float(row["total_power_scale"] or 1),
+                visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
             )
         )
     return devices
@@ -802,7 +815,7 @@ def get_samples(config: AppConfig, device_id: str, start: datetime, end: datetim
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT captured_at, power_w, voltage_v, raw_dps
+                SELECT captured_at, power_w, raw_dps
                 FROM samples
                 WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
                 ORDER BY captured_at ASC
@@ -817,7 +830,7 @@ def get_latest_sample(config: AppConfig, device_id: str) -> dict[str, Any] | Non
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT captured_at, power_w, voltage_v, raw_dps
+                SELECT captured_at, power_w, raw_dps
                 FROM samples
                 WHERE device_id = %s
                 ORDER BY captured_at DESC
@@ -964,13 +977,13 @@ def _read_aggregate_rows(
     if view is None:
         return []
     aggregate_columns = (
-        "avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh, "
-        "last_power_w, NULL::double precision AS last_voltage_v, "
+        "avg_power_w, peak_power_w, sample_count, energy_wh, "
+        "last_power_w, "
         "first_raw_dps, last_raw_dps, first_captured_at, last_captured_at"
         if view == "samples_monthly"
         else
-        "avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh, "
-        "last_power_w, last_voltage_v, first_raw_dps, last_raw_dps, first_captured_at, last_captured_at"
+        "avg_power_w, peak_power_w, sample_count, energy_wh, "
+        "last_power_w, first_raw_dps, last_raw_dps, first_captured_at, last_captured_at"
     )
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -1143,7 +1156,6 @@ def _row_from_live_sample(sample: DeviceSample) -> dict[str, Any]:
     return {
         "captured_at": sample.captured_at,
         "power_w": sample.power_w,
-        "voltage_v": sample.voltage_v,
         "raw_dps": sample.raw_dps,
     }
 
@@ -1221,7 +1233,7 @@ def _get_dashboard_summary_context(
 
             cursor.execute(
                 """
-                SELECT DISTINCT ON (device_id) device_id, captured_at, power_w, voltage_v, raw_dps
+                SELECT DISTINCT ON (device_id) device_id, captured_at, power_w, raw_dps
                 FROM samples
                 WHERE device_id = ANY(%s)
                 ORDER BY device_id ASC, captured_at DESC
@@ -1247,8 +1259,8 @@ def _get_dashboard_summary_context(
             cursor.execute(
                 """
                 SELECT device_id, bucket,
-                       avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
-                       last_power_w, last_voltage_v,
+                      avg_power_w, peak_power_w, sample_count, energy_wh,
+                      last_power_w,
                        first_raw_dps, last_raw_dps,
                        first_captured_at, last_captured_at
                 FROM samples_daily
@@ -1290,12 +1302,10 @@ def get_dashboard_summary(
         latest = latest_by_device.get(device_id)
 
         if live_sample:
-            current_power_w = _normalize_sample_power_w(float(live_sample.power_w), live_sample.voltage_v, live_sample.raw_dps)
             last_seen = _format_display_datetime(config, live_sample.captured_at)
             raw_dps = live_sample.raw_dps
             effective_captured_at = live_sample.captured_at
         else:
-            current_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else 0.0
             last_seen = _format_display_datetime(config, latest["captured_at"]) if latest else None
             raw_dps = _normalize_json_field(latest["raw_dps"]) if latest else {}
             effective_captured_at = _parse_dt(latest["captured_at"]) if latest else None
@@ -1326,6 +1336,7 @@ def get_dashboard_summary(
                 "day",
                 energy_counter_meta_by_device.get(device_id),
             )
+            current_power_w = 0.0
             total_energy_wh += device_energy_wh
             total_power_w += current_power_w
             devices.append(
@@ -1365,32 +1376,30 @@ def _build_device_stats_result(
 
     chart_series, chart = _prepare_chart_series(config, bucket_rows, start, end, period, bucket, energy_counter_meta)
     total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta)
+    duration_hours = max((end - start).total_seconds() / 3600.0, 0.0)
 
     if bucket_rows:
-        weighted_power_sum = sum(
-            (_coerce_float(r.get("avg_power_w")) or 0.0) * (int(r.get("sample_count") or 0) or 1)
-            for r in bucket_rows
-        )
-        weight_total = sum(int(r.get("sample_count") or 0) or 1 for r in bucket_rows)
-        average_power_w = weighted_power_sum / max(weight_total, 1)
-        peak_power_w = max((_coerce_float(r.get("peak_power_w")) or 0.0) for r in bucket_rows)
-        voltage_values = [
-            _coerce_float(r.get("avg_voltage_v"))
-            for r in bucket_rows
-            if r.get("avg_voltage_v") is not None
-        ]
-        voltage_values = [v for v in voltage_values if v is not None]
-        average_voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
+        if energy_counter_meta:
+            average_power_w = (total_energy_wh / duration_hours) if duration_hours > 0 else 0.0
+            peak_power_w = 0.0
+        else:
+            weighted_power_sum = sum(
+                (_coerce_float(r.get("avg_power_w")) or 0.0) * (int(r.get("sample_count") or 0) or 1)
+                for r in bucket_rows
+            )
+            weight_total = sum(int(r.get("sample_count") or 0) or 1 for r in bucket_rows)
+            average_power_w = weighted_power_sum / max(weight_total, 1)
+            peak_power_w = max((_coerce_float(r.get("peak_power_w")) or 0.0) for r in bucket_rows)
         sample_count = sum(int(r.get("sample_count") or 0) for r in bucket_rows)
     else:
         average_power_w = 0.0
         peak_power_w = 0.0
-        average_voltage_v = None
         sample_count = 0
 
     latest_captured_at = _parse_dt(latest["captured_at"]) if latest else None
-    latest_power_w = _normalize_sample_power_w(float(latest["power_w"]), latest.get("voltage_v"), latest.get("raw_dps")) if latest else None
-    latest_voltage_v = float(latest["voltage_v"]) if latest and latest["voltage_v"] is not None else None
+    latest_power_w = (
+        None if energy_counter_meta else _normalize_sample_power_w(float(latest["power_w"]), latest.get("raw_dps"))
+    ) if latest else None
 
     return {
         "summary": {
@@ -1398,8 +1407,6 @@ def _build_device_stats_result(
             "average_power_kw": round(average_power_w / 1000.0, 3),
             "peak_power_kw": round(peak_power_w / 1000.0, 3),
             "latest_power_w": round(latest_power_w, 1) if latest_power_w is not None else None,
-            "latest_voltage_v": round(latest_voltage_v, 1) if latest_voltage_v is not None else None,
-            "average_voltage_v": round(average_voltage_v, 1) if average_voltage_v is not None else None,
             "sample_count": sample_count,
             "latest_sample": _format_display_datetime(config, latest["captured_at"]) if latest else None,
             "latest_sample_age_seconds": get_sample_age_seconds(latest_captured_at, end),
@@ -1438,7 +1445,8 @@ def get_device_context_and_stats(
             cursor.execute(
                 """
                 SELECT name, room, device_id, device_kind, is_energy_meter,
-                       product_name, category_code, product_id, icon
+                      product_name, category_code, product_id, icon,
+                      total_power_dps_key, visualized_codes
                 FROM devices
                 WHERE device_id = %s
                 """,
@@ -1462,9 +1470,8 @@ def get_device_context_and_stats(
             cursor.execute(
                 f"""
                 SELECT bucket,
-                       avg_power_w, peak_power_w, avg_voltage_v, sample_count, energy_wh,
+                      avg_power_w, peak_power_w, sample_count, energy_wh,
                       last_power_w,
-                      {"NULL::double precision AS last_voltage_v" if view == "samples_monthly" else "last_voltage_v"},
                        first_raw_dps, last_raw_dps,
                        first_captured_at, last_captured_at
                 FROM {view}
@@ -1477,7 +1484,7 @@ def get_device_context_and_stats(
 
             cursor.execute(
                 """
-                SELECT captured_at, power_w, voltage_v, raw_dps
+                SELECT captured_at, power_w, raw_dps
                 FROM samples
                 WHERE device_id = %s
                 ORDER BY captured_at DESC

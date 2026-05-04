@@ -27,8 +27,8 @@ DEVICE_KIND_LABELS = {
     "sensor": "Датчик",
     "light": "Лампочка",
 }
-FIXED_POWER_PROFILES: dict[str, tuple[str, float, tuple[str, ...]]] = {
-    "bf47402ca7399b6eef6bw7": ("102", 100.0, ("107", "108", "109")),
+FIXED_POWER_PROFILES: dict[str, tuple[str, float]] = {
+    "bf47402ca7399b6eef6bw7": ("1", 100.0),
 }
 
 ENERGY_CODES = {
@@ -156,10 +156,9 @@ def _iter_dps_definitions(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
     return definitions
 
 
-def _extract_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float, list[str]]:
-    power_dps_key: str | None = None
-    power_scale = 1.0
-    voltage_dps_keys: list[str] = []
+def _extract_total_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float]:
+    total_power_dps_key: str | None = None
+    total_power_scale = 1.0
 
     for item in _iter_dps_definitions(dps_info):
         code = str(item.get("code") or "")
@@ -169,89 +168,171 @@ def _extract_power_profile(dps_info: dict[str, Any]) -> tuple[str | None, float,
         key = str(dp_id)
         values = _parse_values(item.get("values"))
         scale = int(values.get("scale", 0) or 0)
-        if power_dps_key is None and code == "cur_power":
-            power_dps_key = key
-            power_scale = float(10**scale) if scale > 0 else 1.0
-        if "voltage" in code and key not in voltage_dps_keys:
-            voltage_dps_keys.append(key)
+        if total_power_dps_key is None and code in {"add_ele", "total_forward_energy"}:
+            total_power_dps_key = key
+            total_power_scale = float(10**scale) if scale > 0 else 1.0
 
-    return power_dps_key, power_scale, voltage_dps_keys
+    return total_power_dps_key, total_power_scale
 
 
 def _apply_fixed_power_profile(
     device_id: str,
-    power_dps_key: str | None,
-    power_scale: float,
-    voltage_dps_keys: list[str],
-) -> tuple[str | None, float, list[str]]:
+    total_power_dps_key: str | None,
+    total_power_scale: float,
+) -> tuple[str | None, float]:
     fixed_profile = FIXED_POWER_PROFILES.get(device_id)
     if fixed_profile is None:
-        return power_dps_key, power_scale, voltage_dps_keys
+        return total_power_dps_key, total_power_scale
 
-    fixed_power_dps_key, fixed_power_scale, fixed_voltage_dps_keys = fixed_profile
-    return fixed_power_dps_key, fixed_power_scale, list(fixed_voltage_dps_keys)
+    fixed_total_power_dps_key, fixed_total_power_scale = fixed_profile
+    return fixed_total_power_dps_key, fixed_total_power_scale
 
 
-def _infer_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float, list[str]]:
+def _infer_total_power_profile_from_raw_dps(raw_dps: Any) -> tuple[str | None, float]:
     normalized_dps = _normalize_raw_dps(raw_dps)
     if not normalized_dps:
-        return None, 1.0, []
+        return None, 1.0
 
-    power_dps_key = "102" if _coerce_float(normalized_dps.get("102")) is not None else None
-    voltage_dps_keys = [
-        key
-        for key in ("107", "108", "109")
-        if _looks_like_voltage_value(normalized_dps.get(key))
-    ]
-    return power_dps_key, 100.0 if power_dps_key == "102" else 1.0, voltage_dps_keys
+    total_power_dps_key = "1" if _coerce_float(normalized_dps.get("1")) is not None else None
+    return total_power_dps_key, 100.0 if total_power_dps_key else 1.0
 
 
-def _complete_power_profile(
-    power_dps_key: str | None,
-    power_scale: float,
-    voltage_dps_keys: list[str],
+def _complete_total_power_profile(
+    total_power_dps_key: str | None,
+    total_power_scale: float,
     raw_dps: Any,
-) -> tuple[str | None, float, list[str]]:
-    if power_dps_key and voltage_dps_keys:
-        return power_dps_key, power_scale, voltage_dps_keys
+) -> tuple[str | None, float]:
+    if total_power_dps_key:
+        return total_power_dps_key, total_power_scale
 
-    fallback_power_dps_key, fallback_power_scale, fallback_voltage_dps_keys = _infer_power_profile_from_raw_dps(raw_dps)
-    if power_dps_key is None:
-        power_dps_key = fallback_power_dps_key
-        power_scale = fallback_power_scale
-    if not voltage_dps_keys:
-        voltage_dps_keys = fallback_voltage_dps_keys
-    return power_dps_key, power_scale, voltage_dps_keys
+    fallback_total_power_dps_key, fallback_total_power_scale = _infer_total_power_profile_from_raw_dps(raw_dps)
+    if total_power_dps_key is None:
+        total_power_dps_key = fallback_total_power_dps_key
+        total_power_scale = fallback_total_power_scale
+    return total_power_dps_key, total_power_scale
 
 
 def _complete_existing_power_profile(
     config: AppConfig,
     device_id: str,
-    power_dps_key: str | None,
-    power_scale: float,
-    voltage_dps_keys: list[str],
-) -> tuple[str | None, float, list[str]]:
+    total_power_dps_key: str | None,
+    total_power_scale: float,
+) -> tuple[str | None, float]:
     latest_sample = get_latest_sample(config, device_id)
     if latest_sample:
-        power_dps_key, power_scale, voltage_dps_keys = _complete_power_profile(
-            power_dps_key,
-            power_scale,
-            voltage_dps_keys,
+        total_power_dps_key, total_power_scale = _complete_total_power_profile(
+            total_power_dps_key,
+            total_power_scale,
             latest_sample.get("raw_dps"),
         )
-    if power_dps_key and voltage_dps_keys:
-        return power_dps_key, power_scale, voltage_dps_keys
+    if total_power_dps_key:
+        return total_power_dps_key, total_power_scale
 
     control_device = get_control_device(config, device_id)
     if not control_device or not control_device.ip_address:
-        return power_dps_key, power_scale, voltage_dps_keys
+        return total_power_dps_key, total_power_scale
 
     try:
         payload = fetch_status(control_device)
     except Exception:
-        return power_dps_key, power_scale, voltage_dps_keys
+        return total_power_dps_key, total_power_scale
 
-    return _complete_power_profile(power_dps_key, power_scale, voltage_dps_keys, payload.get("dps"))
+    return _complete_total_power_profile(total_power_dps_key, total_power_scale, payload.get("dps"))
+
+
+def _default_visualized_codes(
+    capabilities: list[dict[str, Any]],
+    total_power_dps_key: str | None,
+) -> list[str]:
+    preferred_codes = [
+        "cur_power",
+        "cur_current",
+        "cur_voltage",
+        "add_ele",
+        "total_forward_energy",
+    ]
+    selected: list[str] = []
+
+    for preferred_code in preferred_codes:
+        for capability in capabilities:
+            if str(capability.get("capability_code") or "") != preferred_code:
+                continue
+            dp_id = capability.get("dp_id")
+            if dp_id is None:
+                continue
+            key = str(dp_id)
+            if key not in selected:
+                selected.append(key)
+
+    if total_power_dps_key and total_power_dps_key not in selected:
+        selected.append(total_power_dps_key)
+
+    return selected
+
+
+def _extract_model_properties(device_model: dict[str, Any]) -> list[dict[str, Any]]:
+    result = device_model.get("result") or {}
+    model_text = str(result.get("model") or "").strip()
+    if not model_text:
+        return []
+
+    try:
+        model_payload = json.loads(model_text)
+    except json.JSONDecodeError:
+        return []
+
+    properties: list[dict[str, Any]] = []
+    for service in model_payload.get("services") or []:
+        if not isinstance(service, dict):
+            continue
+        for item in service.get("properties") or []:
+            if isinstance(item, dict):
+                properties.append(item)
+    return properties
+
+
+def _build_summary_options(device_model: dict[str, Any], capabilities: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    options: list[dict[str, Any]] = []
+
+    for item in _extract_model_properties(device_model):
+        dp_id = item.get("abilityId")
+        if dp_id is None:
+            continue
+        type_spec = item.get("typeSpec") or {}
+        options.append(
+            {
+                "dp_id": str(dp_id),
+                "code": str(item.get("code") or ""),
+                "name": str(item.get("name") or item.get("code") or dp_id),
+                "value_type": str(type_spec.get("type") or ""),
+                "unit": str(type_spec.get("unit") or ""),
+                "scale": int(type_spec.get("scale", 0) or 0),
+            }
+        )
+
+    if not options:
+        for capability in capabilities:
+            dp_id = capability.get("dp_id")
+            if dp_id is None:
+                continue
+            values_json = capability.get("values_json") or {}
+            options.append(
+                {
+                    "dp_id": str(dp_id),
+                    "code": str(capability.get("capability_code") or ""),
+                    "name": str(capability.get("capability_name") or capability.get("capability_code") or dp_id),
+                    "value_type": str(capability.get("value_type") or ""),
+                    "unit": str(values_json.get("unit") or ""),
+                    "scale": int(values_json.get("scale", 0) or 0),
+                }
+            )
+
+    options.sort(key=lambda item: int(item["dp_id"]) if str(item.get("dp_id") or "").isdigit() else 999999)
+    power_options = [
+        item for item in options
+        if item.get("value_type") in {"value", "Integer", "integer"}
+    ]
+    return power_options, options
 
 
 def _build_capabilities(dps_info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -365,6 +446,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
     if not isinstance(device_v1, dict) or not device_v1.get("success"):
         raise ConfigError(f"Не удалось получить устройство из Tuya Cloud: {device_v1.get('msg') or device_v1.get('code')}")
     device_v2 = cloud.cloudrequest(f"/v2.0/cloud/thing/{clean_device_id}")
+    device_model = cloud.cloudrequest(f"/v2.0/cloud/thing/{clean_device_id}/model")
     dps_info = cloud.getdps(clean_device_id)
     if not isinstance(dps_info, dict) or not dps_info.get("success"):
         raise ConfigError(f"Не удалось получить DP-описание устройства: {dps_info.get('msg') or dps_info.get('code')}")
@@ -384,14 +466,14 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         room = resolved_room or DEFAULT_ROOM_NAME
 
     kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
-    power_dps_key, power_scale, voltage_dps_keys = _extract_power_profile(dps_result)
-    power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
+    total_power_dps_key, total_power_scale = _extract_total_power_profile(dps_result)
+    total_power_dps_key, total_power_scale = _apply_fixed_power_profile(
         clean_device_id,
-        power_dps_key,
-        power_scale,
-        voltage_dps_keys,
+        total_power_dps_key,
+        total_power_scale,
     )
     capabilities = _build_capabilities(dps_result)
+    default_visualized_codes = _default_visualized_codes(capabilities, total_power_dps_key)
 
     if existing:
         control_device = get_control_device(config, clean_device_id)
@@ -415,19 +497,21 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
                     raise
                 connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
 
-        power_dps_key, power_scale, voltage_dps_keys = _complete_existing_power_profile(
+        recommended_total_power_dps_key, recommended_total_power_scale = _complete_existing_power_profile(
             config,
             clean_device_id,
-            power_dps_key,
-            power_scale,
-            voltage_dps_keys,
+            total_power_dps_key,
+            total_power_scale,
         )
-        power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
+        recommended_total_power_dps_key, recommended_total_power_scale = _apply_fixed_power_profile(
             clean_device_id,
-            power_dps_key,
-            power_scale,
-            voltage_dps_keys,
+            recommended_total_power_dps_key,
+            recommended_total_power_scale,
         )
+        saved_total_power_dps_key = str(control_device.total_power_dps_key or "").strip() or None if control_device else None
+        saved_total_power_scale = float(control_device.total_power_scale or 1) if saved_total_power_dps_key and control_device else 1.0
+        saved_visualized_codes = list(control_device.visualized_codes) if control_device and control_device.visualized_codes else []
+        summary_visualized_codes = saved_visualized_codes or default_visualized_codes
 
         upsert_managed_device(
             config,
@@ -444,17 +528,20 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             local_key=local_key,
             ip_address=ip_address,
             version=version,
-            power_dps_key=power_dps_key,
-            power_scale=power_scale,
-            voltage_dps_keys=voltage_dps_keys,
+            total_power_dps_key=saved_total_power_dps_key,
+            total_power_scale=saved_total_power_scale,
+            visualized_codes=saved_visualized_codes,
             capabilities=capabilities,
         )
         save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
         if isinstance(device_v2, dict):
             save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
+        if isinstance(device_model, dict):
+            save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_model", payload=device_model)
         save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
 
         stored = get_device_row(config, clean_device_id)
+        power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
         return {
             "name": stored.get("name") if stored else name,
             "device_id": clean_device_id,
@@ -468,6 +555,12 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             "capability_count": len(capabilities),
             "connection_ready": connection_ready,
             "connection_message": connection_message,
+            "summary_config": {
+                "total_power_dps_key": saved_total_power_dps_key or recommended_total_power_dps_key,
+                "visualized_codes": summary_visualized_codes,
+                "power_options": power_options,
+                "visualization_options": visualization_options,
+            },
         }
 
     local_key = str(device_info.get("local_key") or device_info_v2.get("local_key") or "").strip()
@@ -494,25 +587,23 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             local_key=local_key,
             ip_address=ip_address,
             version=version,
-            power_dps_key=power_dps_key or "",
-            power_scale=power_scale,
-            voltage_dps_keys=tuple(voltage_dps_keys),
+            total_power_dps_key=total_power_dps_key or "",
+            total_power_scale=total_power_scale,
+            visualized_codes=tuple(default_visualized_codes),
         )
         try:
             local_payload = fetch_status(provisional_device)
         except Exception:
             local_payload = {}
-        power_dps_key, power_scale, voltage_dps_keys = _complete_power_profile(
-            power_dps_key,
-            power_scale,
-            voltage_dps_keys,
+        total_power_dps_key, total_power_scale = _complete_total_power_profile(
+            total_power_dps_key,
+            total_power_scale,
             local_payload.get("dps") if isinstance(local_payload, dict) else None,
-                power_dps_key, power_scale, voltage_dps_keys = _apply_fixed_power_profile(
-                    clean_device_id,
-                    power_dps_key,
-                    power_scale,
-                    voltage_dps_keys,
-                )
+        )
+        total_power_dps_key, total_power_scale = _apply_fixed_power_profile(
+            clean_device_id,
+            total_power_dps_key,
+            total_power_scale,
         )
 
     upsert_managed_device(
@@ -530,18 +621,21 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         local_key=local_key,
         ip_address=ip_address,
         version=version,
-        power_dps_key=power_dps_key,
-        power_scale=power_scale,
-        voltage_dps_keys=voltage_dps_keys,
+        total_power_dps_key=None,
+        total_power_scale=1.0,
+        visualized_codes=[],
         capabilities=capabilities,
     )
 
     save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
     if isinstance(device_v2, dict):
         save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
+    if isinstance(device_model, dict):
+        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_model", payload=device_model)
     save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
 
     stored = get_device_row(config, clean_device_id)
+    power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
     return {
         "name": name,
         "device_id": clean_device_id,
@@ -555,4 +649,10 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         "capability_count": len(capabilities),
         "connection_ready": connection_ready,
         "connection_message": connection_message,
+        "summary_config": {
+            "total_power_dps_key": total_power_dps_key,
+            "visualized_codes": default_visualized_codes,
+            "power_options": power_options,
+            "visualization_options": visualization_options,
+        },
     }

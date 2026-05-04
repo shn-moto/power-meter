@@ -15,9 +15,9 @@ class TuyaDeviceConfig:
     local_key: str
     ip_address: str
     version: float
-    power_dps_key: str
-    power_scale: float
-    voltage_dps_keys: tuple[str, ...]
+    total_power_dps_key: str
+    total_power_scale: float
+    visualized_codes: tuple[str, ...]
 
 
 @dataclass(slots=True)

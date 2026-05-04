@@ -1,5 +1,0 @@
-ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_pkey;
-
-ALTER TABLE devices ALTER COLUMN slug DROP NOT NULL;
-
-ALTER TABLE devices ADD CONSTRAINT devices_pkey PRIMARY KEY (device_id);

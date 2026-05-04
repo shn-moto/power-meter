@@ -48,9 +48,9 @@ The script does `git pull` and `docker compose up -d --build`. Migrations run au
 
 Migrations live in [app/migrations/](../app/migrations/) and are applied in lexical order:
 
-- `001_init_schema.sql` — base tables (`devices`, `device_connections`, `device_capabilities`, `samples`, `device_events`, `device_cloud_artifacts`).
+- `001_init_schema.sql` — clean base schema for greenfield installs (`devices`, `device_connections`, `device_capabilities`, `samples`, `device_cloud_artifacts`) with the current meter fields: `total_power_dps_key`, `total_power_scale`, `visualized_codes`.
 - `002_timescaledb.sql` — `CREATE EXTENSION timescaledb` + `samples` becomes a hypertable (7-day chunks).
-- `003_continuous_aggregates.sql` — continuous aggregates `samples_hourly` → `samples_daily` → `samples_monthly` with refresh policies. Real-time aggregation is on by default, so the dashboard reads include the current open bucket.
+- `003_continuous_aggregates.sql` — continuous aggregates `samples_hourly` → `samples_daily` → `samples_monthly` for the current no-voltage sample model, with refresh policies and real-time aggregation enabled.
 - `004_compression_retention.sql` — compress chunks older than 14 days (segmentby `device_id`); retention policy drops raw `samples` older than 1 year. Continuous aggregates keep their data forever.
 
 To add a new migration, drop a `005_<name>.sql` file. Each file is executed in autocommit; if it fails partway, fix the SQL and rerun — only files whose name is in `schema_migrations` are skipped.
