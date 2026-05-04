@@ -104,5 +104,20 @@
     </article>
 </section>
 
+<dialog class="timer-dialog progress-dialog" data-connect-progress-dialog>
+    <div class="timer-dialog-form progress-dialog-form" aria-live="polite">
+        <div class="progress-dialog-body">
+            <div class="progress-spinner" aria-hidden="true"></div>
+            <div>
+                <h3 data-connect-progress-title>Поиск устройства в локальной сети</h3>
+                <p class="hero-copy" data-connect-progress-message>Пытаюсь определить локальный IP и версию протокола. Это может занять до минуты.</p>
+            </div>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+            <span></span>
+        </div>
+    </div>
+</dialog>
+
 <script src="/static/connect-device.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

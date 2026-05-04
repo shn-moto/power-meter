@@ -6,6 +6,9 @@ if (connectForm) {
     const configForm = document.querySelector('[data-connect-config-form]');
     const totalPowerSelect = document.querySelector('[data-total-power-select]');
     const visualizedCodesContainer = document.querySelector('[data-visualized-codes]');
+    const progressDialog = document.querySelector('[data-connect-progress-dialog]');
+    const progressTitle = document.querySelector('[data-connect-progress-title]');
+    const progressMessage = document.querySelector('[data-connect-progress-message]');
     let pendingDeviceId = null;
 
     const setFeedback = (message, tone) => {
@@ -13,6 +16,45 @@ if (connectForm) {
         feedback.className = `connect-feedback is-${tone}`;
         feedback.innerHTML = message;
     };
+
+    const showProgress = (title, message) => {
+        if (!progressDialog) {
+            return;
+        }
+
+        if (progressTitle) {
+            progressTitle.textContent = title;
+        }
+        if (progressMessage) {
+            progressMessage.textContent = message;
+        }
+
+        if (typeof progressDialog.showModal === 'function') {
+            if (!progressDialog.open) {
+                progressDialog.showModal();
+            }
+            return;
+        }
+
+        progressDialog.setAttribute('open', 'open');
+    };
+
+    const hideProgress = () => {
+        if (!progressDialog) {
+            return;
+        }
+
+        if (typeof progressDialog.close === 'function' && progressDialog.open) {
+            progressDialog.close();
+            return;
+        }
+
+        progressDialog.removeAttribute('open');
+    };
+
+    progressDialog?.addEventListener('cancel', (event) => {
+        event.preventDefault();
+    });
 
     const renderConfigOptions = (summaryConfig) => {
         if (!configPanel || !configForm || !totalPowerSelect || !visualizedCodesContainer) {
@@ -102,6 +144,10 @@ if (connectForm) {
 
         submitButton.disabled = true;
         setFeedback('Подключение устройства запущено. Это может занять до минуты, пока приложение найдет его в локальной сети.', 'pending');
+        showProgress(
+            'Поиск устройства в локальной сети',
+            'Запрашиваю модель из Tuya Cloud и пытаюсь определить локальный IP. Это может занять до минуты.'
+        );
 
         try {
             const response = await fetch('/api/devices/connect', {
@@ -139,6 +185,7 @@ if (connectForm) {
         } catch (error) {
             setFeedback(error.message, 'error');
         } finally {
+            hideProgress();
             submitButton.disabled = false;
         }
     });
@@ -183,6 +230,10 @@ if (connectForm) {
         if (action === 'retry-discovery') {
             actionButton.disabled = true;
             setFeedback(`Повторно ищу устройство ${deviceName} в локальной сети.`, 'pending');
+            showProgress(
+                'Повторный поиск локального IP',
+                `Проверяю устройство ${deviceName} в локальной сети и подбираю версию протокола.`
+            );
             try {
                 const response = await fetch(`/api/devices/${deviceId}/retry-discovery`, {
                     method: 'POST',
@@ -208,6 +259,8 @@ if (connectForm) {
             } catch (error) {
                 setFeedback(error.message, 'error');
                 actionButton.disabled = false;
+            } finally {
+                hideProgress();
             }
         }
     });
