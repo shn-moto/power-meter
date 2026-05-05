@@ -11,21 +11,22 @@
         <header class="topbar">
             <span class="topbar-brand">HOME POWER METER</span>
             <nav class="topbar-nav">
-                {% if request.state.current_user %}
+                {% if request.state.current_user or request.state.is_local_request %}
                 {% if request.url.path == '/' %}
                 <a class="topbar-button" href="/connect-device">Подключить устройство</a>
                 {% else %}
                 <a class="topbar-link" href="/">На главный экран</a>
                 {% endif %}
+                {% if request.state.current_user %}
                 <span class="topbar-user">{{ request.state.current_user }}</span>
                 <form class="topbar-inline-form" method="post" action="/logout">
                     <button class="topbar-button" type="submit">Выйти</button>
                 </form>
                 {% else %}
-                <a class="topbar-link" href="/login">Вход</a>
-                {% if request.state.is_local_request %}
                 <a class="topbar-button" href="/register">Регистрация</a>
                 {% endif %}
+                {% else %}
+                <a class="topbar-link" href="/login">Вход</a>
                 {% endif %}
             </nav>
         </header>
