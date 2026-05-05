@@ -1,7 +1,8 @@
 const sensorPage = document.querySelector('[data-sensor-page]');
 
 if (sensorPage) {
-    const SENSOR_REFRESH_INTERVAL_MS = 60000;
+    const SENSOR_REFRESH_INTERVAL_MS_LOCAL = 1000;
+    const SENSOR_REFRESH_INTERVAL_MS_CLOUD = 60000;
     const deviceId = sensorPage.dataset.deviceId;
     const initialPayloadNode = document.querySelector('[data-initial-sensor]');
     const sourceNode = document.querySelector('[data-sensor-source]');
@@ -11,6 +12,8 @@ if (sensorPage) {
     const emptyNode = document.querySelector('[data-sensor-empty]');
     const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
     let isLoading = false;
+    let latestPayload = initialPayload;
+    let refreshTimerId = null;
 
     const escapeHtml = (value) => String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -51,6 +54,7 @@ if (sensorPage) {
     };
 
     const renderPayload = (payload) => {
+        latestPayload = payload;
         if (sourceNode) {
             sourceNode.textContent = payload.state_source || 'Нет данных';
         }
@@ -66,9 +70,13 @@ if (sensorPage) {
         renderMetrics(payload.metrics || []);
     };
 
+    const getRefreshIntervalMs = () => latestPayload?.connection_ready
+        ? SENSOR_REFRESH_INTERVAL_MS_LOCAL
+        : SENSOR_REFRESH_INTERVAL_MS_CLOUD;
+
     const loadSensor = async () => {
         if (isLoading) {
-            return;
+            return null;
         }
         isLoading = true;
         try {
@@ -78,21 +86,31 @@ if (sensorPage) {
                 throw new Error(payload.detail || 'Не удалось обновить показания датчика.');
             }
             renderPayload(payload);
+            return payload;
         } catch {
             // Keep the last rendered sensor state if a cloud refresh fails.
+            return null;
         } finally {
             isLoading = false;
         }
+    };
+
+    const scheduleNextRefresh = () => {
+        if (refreshTimerId) {
+            clearTimeout(refreshTimerId);
+        }
+
+        refreshTimerId = setTimeout(async () => {
+            if (!document.hidden) {
+                await loadSensor();
+            }
+            scheduleNextRefresh();
+        }, getRefreshIntervalMs());
     };
 
     if (initialPayload) {
         renderPayload(initialPayload);
     }
 
-    setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-        loadSensor();
-    }, SENSOR_REFRESH_INTERVAL_MS);
+    scheduleNextRefresh();
 }
