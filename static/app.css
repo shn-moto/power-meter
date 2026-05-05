@@ -543,15 +543,18 @@ p {
 }
 
 .raw-phase-chip {
+    --raw-chip-key-width: 28px;
+    --raw-chip-value-width: 56px;
     position: relative;
     display: grid;
-    grid-template-columns: repeat(4, 28px minmax(42px, 1fr));
+    grid-template-columns: repeat(4, var(--raw-chip-key-width) var(--raw-chip-value-width));
     align-items: stretch;
     border: 2px solid rgba(18, 18, 18, 0.92);
     background: #f8ea08;
     color: #111;
     cursor: help;
-    max-width: 100%;
+    width: calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
+    flex: 0 0 calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
     overflow: visible;
     box-shadow: inset 0 0 0 1px rgba(255, 247, 161, 0.3);
 }
@@ -637,7 +640,8 @@ p {
 
 @media (max-width: 980px) {
     .raw-phase-chip {
-        grid-template-columns: repeat(4, 24px minmax(34px, 1fr));
+        --raw-chip-key-width: 24px;
+        --raw-chip-value-width: 44px;
     }
 
     .raw-phase-chip-key,

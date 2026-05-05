@@ -239,6 +239,58 @@ if (page) {
         return text;
     };
 
+    const isMissingMetricValue = (value) => value === null || value === undefined || value === '' || value === '--' || value === 'Нет данных';
+
+    const rebuildPhasePacketValue = (parts) => {
+        const filledParts = (Array.isArray(parts) ? parts : []).filter((part) => !isMissingMetricValue(part?.value));
+        if (!filledParts.length) {
+            return 'Нет данных';
+        }
+        return filledParts.map((part) => `${part.short_label} ${part.value} ${part.unit}`).join(' ');
+    };
+
+    const mergePhasePacketMetric = (previousMetric, nextMetric) => {
+        const previousParts = Array.isArray(previousMetric?.parts) ? previousMetric.parts : [];
+        const nextParts = Array.isArray(nextMetric?.parts) ? nextMetric.parts : [];
+        const mergedParts = nextParts.map((part, index) => {
+            const previousPart = previousParts[index];
+            if (!previousPart || !isMissingMetricValue(previousPart.value) && !isMissingMetricValue(part?.value)) {
+                return part;
+            }
+            if (isMissingMetricValue(part?.value) && !isMissingMetricValue(previousPart?.value)) {
+                return { ...part, value: previousPart.value };
+            }
+            return part;
+        });
+
+        return {
+            ...nextMetric,
+            parts: mergedParts,
+            value: rebuildPhasePacketValue(mergedParts),
+        };
+    };
+
+    const mergeMetricWithPrevious = (previousMetric, nextMetric) => {
+        if (!previousMetric) {
+            return nextMetric;
+        }
+        if (nextMetric?.display_kind === 'phase_packet') {
+            return mergePhasePacketMetric(previousMetric, nextMetric);
+        }
+        if (isMissingMetricValue(nextMetric?.value) && !isMissingMetricValue(previousMetric?.value)) {
+            return {
+                ...nextMetric,
+                value: previousMetric.value,
+            };
+        }
+        return nextMetric;
+    };
+
+    const mergeLiveMetrics = (previousMetrics, nextMetrics) => {
+        const previousByCode = new Map((Array.isArray(previousMetrics) ? previousMetrics : []).map((metric) => [metric.code, metric]));
+        return (Array.isArray(nextMetrics) ? nextMetrics : []).map((metric) => mergeMetricWithPrevious(previousByCode.get(metric.code), metric));
+    };
+
     const createSummaryRow = (label, value, status = null) => {
         const item = document.createElement('div');
         const term = document.createElement('dt');
@@ -423,7 +475,7 @@ if (page) {
 
     const renderLiveSummary = (payload) => {
         const fields = payload.summary;
-        summaryState.metrics = Array.isArray(payload.live_metrics) ? payload.live_metrics : [];
+        summaryState.metrics = mergeLiveMetrics(summaryState.metrics, payload.live_metrics);
         summaryState.latestSample = fields.latest_sample || '--';
         summaryState.latestSampleStatus = fields.latest_sample_status || 'error';
         renderSummaryPanel();
