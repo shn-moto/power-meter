@@ -13,9 +13,9 @@
   },
   "connection": {
     "local_key": "XwuF<2ue`9H8~i![",
-    "local_ip": "",
+    "local_ip": "192.168.1.95",
     "protocol_version": 3.3,
-    "ip_source": "cloud-status",
+    "ip_source": "manual-seed",
     "last_verified_at": null,
     "discovery_required": false
   },
