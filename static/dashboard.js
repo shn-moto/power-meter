@@ -194,13 +194,13 @@ if (dashboardPage) {
                 lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
                 applyReadingStatus(lastSeenNode, device.last_seen_status);
             }
-            if (connectionNode) {
+            if (connectionNode && device.connection_label) {
                 connectionNode.textContent = device.connection_label || 'Облачное устройство';
             }
-            if (primaryNode) {
+            if (primaryNode && device.primary_metric) {
                 primaryNode.textContent = device.primary_metric?.value || 'Нет данных';
             }
-            if (secondaryNode) {
+            if (secondaryNode && (device.secondary_metric || device.connection_label)) {
                 secondaryNode.textContent = device.secondary_metric?.value || device.connection_label || 'Нет данных';
             }
         });
