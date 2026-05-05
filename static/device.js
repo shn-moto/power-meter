@@ -295,10 +295,13 @@ if (page) {
         return nextMetrics.map((metric) => mergeMetricWithPrevious(previousByCode.get(metric.code), metric));
     };
 
-    const createSummaryRow = (label, value, status = null) => {
+    const createSummaryRow = (label, value, status = null, rowClass = '') => {
         const item = document.createElement('div');
         const term = document.createElement('dt');
         const description = document.createElement('dd');
+        if (rowClass) {
+            item.classList.add(rowClass);
+        }
         term.textContent = label;
         if (value instanceof Node) {
             description.appendChild(value);
@@ -318,7 +321,8 @@ if (page) {
         const metricRows = Array.isArray(summaryState.metrics) ? summaryState.metrics : [];
         if (metricRows.length) {
             metricRows.forEach((metric) => {
-                summary.appendChild(createSummaryRow(metric.label || `DPS ${metric.code}`, createMetricValueNode(metric)));
+                const rowClass = metric?.display_kind === 'phase_packet' ? 'summary-row-phase' : '';
+                summary.appendChild(createSummaryRow(metric.label || `DPS ${metric.code}`, createMetricValueNode(metric), null, rowClass));
             });
         } else {
             summary.appendChild(createSummaryRow('Поля визуализации', 'Не выбраны'));

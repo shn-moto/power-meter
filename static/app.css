@@ -549,6 +549,23 @@ p {
     min-width: 0;
 }
 
+.summary-grid .summary-row-phase {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.summary-grid .summary-row-phase dt,
+.summary-grid .summary-row-phase dd {
+    flex: 0 0 auto;
+}
+
+.summary-grid .summary-row-phase dd {
+    justify-self: auto;
+    justify-content: flex-end;
+}
+
 .raw-phase-chip {
     --raw-chip-key-width: 28px;
     --raw-chip-value-width: 56px;
@@ -679,6 +696,10 @@ p {
 }
 
 @media (max-width: 980px) {
+    .summary-grid .summary-row-phase {
+        gap: 12px;
+    }
+
     .raw-phase-chip {
         --raw-chip-key-width: 24px;
         --raw-chip-value-width: 44px;

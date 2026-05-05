@@ -26,7 +26,10 @@
       "1",
       "6",
       "7",
-      "8"
+      "8",
+      "107",
+      "108",
+      "109"
     ]
   },
   "dps": [
@@ -141,6 +144,29 @@
             10
           ]
         }
+      }
+    },
+    {
+      "dp_id": "16",
+      "code": "switch",
+      "name": "Power Switch",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Питание",
+      "display_order": 100,
+      "poll_priority": 100,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
       }
     }
   ],
