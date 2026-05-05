@@ -240,6 +240,7 @@ def upsert_managed_device(
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
+                        WHEN EXCLUDED.onboarding_source = 'profile' THEN EXCLUDED.room
                         WHEN devices.room = '' OR devices.room = 'Без комнаты' THEN EXCLUDED.room
                         ELSE devices.room
                     END,
