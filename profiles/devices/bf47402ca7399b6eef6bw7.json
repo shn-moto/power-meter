@@ -6,7 +6,7 @@
     "room": "Кухня",
     "device_kind": "breaker",
     "is_energy_meter": true,
-    "category_code": "",
+    "category_code": "dlq",
     "product_id": "",
     "product_name": "",
     "icon": ""

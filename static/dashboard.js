@@ -80,7 +80,7 @@ if (dashboardPage) {
             </dl>
         </div>
         <div class="registry-meta sensor-summary-meta">
-            <span data-sensor-connection>${escapeHtml(device.connection_label || 'Ожидает локального обнаружения')}</span>
+            <span data-sensor-connection>${escapeHtml(device.connection_label || 'Облачное устройство')}</span>
             <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</span>
         </div>
     `;
@@ -195,7 +195,7 @@ if (dashboardPage) {
                 applyReadingStatus(lastSeenNode, device.last_seen_status);
             }
             if (connectionNode) {
-                connectionNode.textContent = device.connection_label || 'Ожидает локального обнаружения';
+                connectionNode.textContent = device.connection_label || 'Облачное устройство';
             }
             if (primaryNode) {
                 primaryNode.textContent = device.primary_metric?.value || 'Нет данных';

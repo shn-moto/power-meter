@@ -8,12 +8,14 @@ import tinytuya
 
 from app.storage import (
     get_control_device,
+    get_device_capabilities,
     get_device_by_id,
     get_latest_sample,
     replace_device_capabilities,
     get_device_row,
     get_known_local_ips,
     refresh_managed_device_cloud_data,
+    update_device_connection_endpoint,
     upsert_managed_device,
 )
 from app.tuya_model import (
@@ -447,223 +449,71 @@ def _discover_local_endpoint(config: AppConfig, device_id: str, local_key: str) 
     raise ConfigError(LOCAL_DISCOVERY_ERROR_MESSAGE)
 
 
-def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
+def lookup_device_local_ip(config: AppConfig, device_id: str) -> dict[str, Any]:
     clean_device_id = device_id.strip()
     if not clean_device_id:
         raise ConfigError("Укажите device ID")
 
-    cloud_config = load_cloud_config(required=True)
-    cloud = tinytuya.Cloud(
-        apiRegion=cloud_config.region,
-        apiKey=cloud_config.api_key,
-        apiSecret=cloud_config.api_secret,
-        apiDeviceID=cloud_config.api_device_id or clean_device_id,
-    )
+    stored = get_device_row(config, clean_device_id)
+    if not stored:
+        raise ConfigError("Устройство с таким device ID не найдено в системе. Сначала добавьте для него профиль.")
 
-    device_v1 = cloud.cloudrequest(f"/v1.0/devices/{clean_device_id}")
-    if not isinstance(device_v1, dict) or not device_v1.get("success"):
-        raise ConfigError(f"Не удалось получить устройство из Tuya Cloud: {device_v1.get('msg') or device_v1.get('code')}")
-    device_v2 = cloud.cloudrequest(f"/v2.0/cloud/thing/{clean_device_id}")
-    device_model = cloud.cloudrequest(f"/v2.0/cloud/thing/{clean_device_id}/model")
-    dps_info = cloud.getdps(clean_device_id)
-    if not isinstance(dps_info, dict) or not dps_info.get("success"):
-        raise ConfigError(f"Не удалось получить DP-описание устройства: {dps_info.get('msg') or dps_info.get('code')}")
+    control_device = get_control_device(config, clean_device_id)
+    if not control_device:
+        raise ConfigError("Для устройства не найдены параметры локального подключения.")
 
-    device_info = device_v1.get("result") or {}
-    device_info_v2 = device_v2.get("result") or {}
-    dps_result = dps_info.get("result") or {}
+    local_key = str(control_device.local_key or "").strip()
+    if not local_key:
+        raise ConfigError("Для устройства не задан local key, локальный поиск IP невозможен.")
 
-    name = _device_name(device_info, device_info_v2)
-    existing = get_device_by_id(config, clean_device_id)
-    resolved_room = None
-    if not existing or not (str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME):
-        resolved_room = _resolve_room_name(cloud, clean_device_id, device_v1, device_v2)
-    if existing and str(existing.get("room") or "").strip() and existing["room"] != DEFAULT_ROOM_NAME:
-        room = existing["room"]
-    else:
-        room = resolved_room or DEFAULT_ROOM_NAME
+    capabilities = get_device_capabilities(config, clean_device_id)
+    ip_address = str(control_device.ip_address or "").strip()
+    version = float(control_device.version or 3.5)
+    connection_ready = bool(ip_address)
+    connection_message = ""
 
-    kind, is_energy_meter = _classify_device(str(device_info.get("category") or device_info_v2.get("category") or ""), dps_result)
-    capabilities = _build_capabilities(dps_result, device_model if isinstance(device_model, dict) else None)
-    total_power_dps_key, total_power_scale = _extract_total_power_profile(dps_result)
-    total_power_dps_key = total_power_dps_key or _resolve_total_power_dp_from_capabilities(capabilities)
-    total_power_scale = _resolve_scale_divisor_for_dp(
-        capabilities,
-        device_model if isinstance(device_model, dict) else {},
-        total_power_dps_key,
-    ) or total_power_scale
-    default_visualized_codes = _default_visualized_codes(capabilities, total_power_dps_key)
-
-    if existing:
-        control_device = get_control_device(config, clean_device_id)
-        local_key = str(
-            device_info.get("local_key")
-            or device_info_v2.get("local_key")
-            or (control_device.local_key if control_device else "")
-            or ""
-        ).strip()
-        ip_address = control_device.ip_address if control_device and control_device.ip_address else ""
-        version = control_device.version if control_device else 3.5
-        connection_ready = bool(ip_address)
-        connection_message = ""
-
-        if not connection_ready and local_key:
-            try:
-                ip_address, version = _discover_local_endpoint(config, clean_device_id, local_key)
-                connection_ready = True
-            except ConfigError as error:
-                if str(error) != LOCAL_DISCOVERY_ERROR_MESSAGE:
-                    raise
-                connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
-
-        recommended_total_power_dps_key, recommended_total_power_scale = _complete_existing_power_profile(
+    try:
+        resolved_ip_address, resolved_version = _discover_local_endpoint(config, clean_device_id, local_key)
+        ip_address = resolved_ip_address
+        version = resolved_version
+        connection_ready = True
+        update_device_connection_endpoint(
             config,
             clean_device_id,
-            total_power_dps_key,
-            total_power_scale,
-        )
-        recommended_total_power_scale = _resolve_scale_divisor_for_dp(
-            capabilities,
-            device_model if isinstance(device_model, dict) else {},
-            recommended_total_power_dps_key,
-        ) or recommended_total_power_scale
-        saved_total_power_dps_key = str(control_device.total_power_dps_key or "").strip() or None if control_device else None
-        saved_power_type = str(control_device.power_type or "total").strip().lower() if control_device else "total"
-        saved_total_power_scale = 1.0
-        if saved_total_power_dps_key and control_device:
-            saved_total_power_scale = _resolve_scale_divisor_for_dp(
-                capabilities,
-                device_model if isinstance(device_model, dict) else {},
-                saved_total_power_dps_key,
-            ) or float(control_device.total_power_scale or 1)
-        saved_visualized_codes = list(control_device.visualized_codes) if control_device and control_device.visualized_codes else []
-        summary_visualized_codes = saved_visualized_codes or default_visualized_codes
-
-        upsert_managed_device(
-            config,
-            device_id=clean_device_id,
-            name=name,
-            room=room,
-            category_code=str(device_info.get("category") or device_info_v2.get("category") or "") or None,
-            device_kind=kind,
-            is_energy_meter=is_energy_meter,
-            product_id=str(device_info.get("product_id") or device_info_v2.get("product_id") or "") or None,
-            product_name=str(device_info.get("product_name") or device_info_v2.get("product_name") or device_info_v2.get("name") or "") or None,
-            icon=str(device_info.get("icon") or device_info_v2.get("icon") or "") or None,
-            onboarding_source="cloud",
-            local_key=local_key,
             ip_address=ip_address,
             version=version,
-            total_power_dps_key=saved_total_power_dps_key,
-            total_power_scale=saved_total_power_scale,
-            visualized_codes=saved_visualized_codes,
-            capabilities=capabilities,
         )
-
-        stored = get_device_row(config, clean_device_id)
-        power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
-        return {
-            "name": stored.get("name") if stored else name,
-            "device_id": clean_device_id,
-            "device_kind": kind,
-            "device_kind_label": DEVICE_KIND_LABELS.get(kind, kind),
-            "is_energy_meter": is_energy_meter,
-            "ip_address": ip_address or None,
-            "version": version if connection_ready else None,
-            "product_name": stored.get("product_name") if stored else None,
-            "category_code": stored.get("category_code") if stored else None,
-            "capability_count": len(capabilities),
-            "connection_ready": connection_ready,
-            "connection_message": connection_message,
-            "summary_config": {
-                "total_power_dps_key": saved_total_power_dps_key or recommended_total_power_dps_key,
-                "visualized_codes": summary_visualized_codes,
-                "power_type": saved_power_type,
-                "power_options": power_options,
-                "visualization_options": visualization_options,
-            },
-        }
-
-    local_key = str(device_info.get("local_key") or device_info_v2.get("local_key") or "").strip()
-    if not local_key:
-        raise ConfigError("Tuya Cloud не вернул local key для устройства")
-
-    ip_address = ""
-    version = 3.5
-    connection_ready = False
-    connection_message = ""
-    try:
-        ip_address, version = _discover_local_endpoint(config, clean_device_id, local_key)
-        connection_ready = True
     except ConfigError as error:
         if str(error) != LOCAL_DISCOVERY_ERROR_MESSAGE:
             raise
-        connection_message = LOCAL_DISCOVERY_ERROR_MESSAGE
+        if connection_ready:
+            connection_message = "Не удалось подтвердить новый IP, использую сохраненный локальный адрес."
+        else:
+            connection_message = "Локальный IP по device ID не найден. Устройство останется в облачном режиме."
 
-    if not connection_ready or not ip_address:
-        raise ConfigError(connection_message or LOCAL_DISCOVERY_ERROR_MESSAGE)
+    power_options, visualization_options = _build_summary_options({}, capabilities)
+    summary_total_power_dps_key = str(stored.get("total_power_dps_key") or control_device.total_power_dps_key or "").strip() or None
+    summary_visualized_codes = [str(code) for code in (stored.get("visualized_codes") or control_device.visualized_codes or [])]
+    summary_power_type = str(stored.get("power_type") or control_device.power_type or "total").strip().lower() or "total"
+    device_kind = str(stored.get("device_kind") or "sensor")
 
-    provisional_device = TuyaDeviceConfig(
-        name=name,
-        room=room,
-        device_id=clean_device_id,
-        local_key=local_key,
-        ip_address=ip_address,
-        version=version,
-        total_power_dps_key=total_power_dps_key or "",
-        total_power_scale=total_power_scale,
-        visualized_codes=tuple(default_visualized_codes),
-    )
-    try:
-        local_payload = fetch_status(provisional_device)
-    except Exception:
-        local_payload = {}
-    total_power_dps_key, total_power_scale = _complete_total_power_profile(
-        total_power_dps_key,
-        total_power_scale,
-        local_payload.get("dps") if isinstance(local_payload, dict) else None,
-    )
-
-    upsert_managed_device(
-        config,
-        name=name,
-        room=room,
-        device_id=clean_device_id,
-        category_code=str(device_info.get("category") or device_info_v2.get("category") or "") or None,
-        device_kind=kind,
-        is_energy_meter=is_energy_meter,
-        product_id=str(device_info.get("product_id") or device_info_v2.get("product_id") or "") or None,
-        product_name=str(device_info.get("product_name") or device_info_v2.get("product_name") or device_info_v2.get("name") or "") or None,
-        icon=str(device_info.get("icon") or device_info_v2.get("icon") or "") or None,
-        onboarding_source="cloud",
-        local_key=local_key,
-        ip_address=ip_address,
-        version=version,
-        total_power_dps_key=None,
-        total_power_scale=1.0,
-        visualized_codes=[],
-        capabilities=capabilities,
-    )
-
-    stored = get_device_row(config, clean_device_id)
-    power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
     return {
-        "name": name,
+        "name": stored.get("name") or control_device.name,
         "device_id": clean_device_id,
-        "device_kind": kind,
-        "device_kind_label": DEVICE_KIND_LABELS.get(kind, kind),
-        "is_energy_meter": is_energy_meter,
+        "device_kind": device_kind,
+        "device_kind_label": DEVICE_KIND_LABELS.get(device_kind, device_kind),
+        "is_energy_meter": bool(stored.get("is_energy_meter")),
         "ip_address": ip_address or None,
-        "version": version,
-        "product_name": stored.get("product_name") if stored else None,
-        "category_code": stored.get("category_code") if stored else None,
+        "version": version if connection_ready else None,
+        "product_name": stored.get("product_name"),
+        "category_code": stored.get("category_code"),
         "capability_count": len(capabilities),
         "connection_ready": connection_ready,
         "connection_message": connection_message,
         "summary_config": {
-            "total_power_dps_key": total_power_dps_key,
-            "visualized_codes": default_visualized_codes,
-            "power_type": "total",
+            "total_power_dps_key": summary_total_power_dps_key,
+            "visualized_codes": summary_visualized_codes,
+            "power_type": summary_power_type,
             "power_options": power_options,
             "visualization_options": visualization_options,
         },

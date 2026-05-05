@@ -163,10 +163,10 @@ if (connectForm) {
         }
 
         submitButton.disabled = true;
-        setFeedback('Подключение устройства запущено. Это может занять до минуты, пока приложение найдет его в локальной сети.', 'pending');
+        setFeedback('Ищу локальный IP по device ID. Это может занять до минуты.', 'pending');
         showProgress(
             'Поиск устройства в локальной сети',
-            'Запрашиваю модель из Tuya Cloud и пытаюсь определить локальный IP. Это может занять до минуты.'
+            'Пытаюсь определить локальный IP и версию протокола для уже известного устройства. Это может занять до минуты.'
         );
 
         try {
@@ -182,17 +182,17 @@ if (connectForm) {
 
             const message = payload.connection_ready
                 ? `
-                <strong>${payload.name}</strong> подключено.<br>
+                <strong>${payload.name}</strong> найдено в локальной сети.<br>
                 Тип: ${payload.device_kind_label}.<br>
                 Локальный IP: ${payload.ip_address}.<br>
                 Версия протокола: ${payload.version}.<br>
                 Определено возможностей: ${payload.capability_count}.
                 `
                 : `
-                <strong>${payload.name}</strong> добавлено в систему.<br>
+                <strong>${payload.name}</strong> не найдено в локальной сети.<br>
                 Тип: ${payload.device_kind_label}.<br>
                 Определено возможностей: ${payload.capability_count}.<br>
-                ${payload.connection_message || 'Локальное обнаружение пока не завершено.'}
+                ${payload.connection_message || 'Устройство останется доступным только через облако.'}
                 `;
 
             setFeedback(message, payload.connection_ready ? 'success' : 'pending');
@@ -245,43 +245,6 @@ if (connectForm) {
                 actionButton.disabled = false;
             }
             return;
-        }
-
-        if (action === 'retry-discovery') {
-            actionButton.disabled = true;
-            setFeedback(`Повторно ищу устройство ${deviceName} в локальной сети.`, 'pending');
-            showProgress(
-                'Повторный поиск локального IP',
-                `Проверяю устройство ${deviceName} в локальной сети и подбираю версию протокола.`
-            );
-            try {
-                const response = await fetch(`/api/devices/${deviceId}/retry-discovery`, {
-                    method: 'POST',
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Не удалось повторить локальное обнаружение.');
-                }
-
-                const message = payload.connection_ready
-                    ? `
-                    <strong>${payload.name}</strong> обнаружено в локальной сети.<br>
-                    Локальный IP: ${payload.ip_address}.<br>
-                    Версия протокола: ${payload.version}.<br>
-                    `
-                    : `
-                    <strong>${payload.name}</strong> пока не найдено в локальной сети.<br>
-                    ${payload.connection_message || 'Локальное обнаружение пока не завершено.'}
-                    `;
-
-                setFeedback(message, payload.connection_ready ? 'success' : 'pending');
-                setTimeout(() => window.location.reload(), payload.connection_ready ? 600 : 1200);
-            } catch (error) {
-                setFeedback(error.message, 'error');
-                actionButton.disabled = false;
-            } finally {
-                hideProgress();
-            }
         }
     });
 }

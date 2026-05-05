@@ -905,6 +905,32 @@ def update_device_summary_config(
         connection.commit()
 
 
+def update_device_connection_endpoint(
+    config: AppConfig,
+    device_id: str,
+    *,
+    ip_address: str,
+    version: float,
+) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE device_connections
+                SET ip_address = %s,
+                    version = %s,
+                    updated_at = NOW()
+                WHERE device_id = %s
+                """,
+                (
+                    ip_address,
+                    version,
+                    device_id,
+                ),
+            )
+        connection.commit()
+
+
 def delete_managed_device(config: AppConfig, device_id: str) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:

@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import tinytuya
 
-from app.device_registry import DEVICE_KIND_LABELS, connect_device
+from app.device_registry import DEVICE_KIND_LABELS, lookup_device_local_ip
 from config import AppConfig, load_app_config, load_cloud_config
 from app.storage import (
     DeviceSample,
@@ -46,13 +46,19 @@ from app.tuya_service import build_sample, request_dps_by_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260505-11"
+templates.env.globals["static_asset_version"] = "20260505-12"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
 SENSOR_CLOUD_STATUS_CACHE_SECONDS = 60.0
 SENSOR_CLOUD_OK_SECONDS = 90.0
 SENSOR_CLOUD_WARNING_SECONDS = 300.0
+
+TUYA_CATEGORY_LABELS = {
+    "cz": "Розетка",
+    "dlq": "Автомат / выключатель нагрузки",
+    "wsdcg": "Датчик температуры и влажности",
+}
 
 RUSSIAN_MONTHS = {
     1: "Январь",
@@ -68,6 +74,19 @@ RUSSIAN_MONTHS = {
     11: "Ноябрь",
     12: "Декабрь",
 }
+
+
+def format_tuya_category(category_code: Any) -> str:
+    code = str(category_code or "").strip().lower()
+    if not code:
+        return "не указана"
+    label = TUYA_CATEGORY_LABELS.get(code)
+    if not label:
+        return code
+    return f"{code} · {label}"
+
+
+templates.env.globals["format_tuya_category"] = format_tuya_category
 
 DPS_LABELS = {
     "switch": "Питание",
@@ -921,7 +940,7 @@ def _build_sensor_dashboard_entry(
     elif cloud_status_items:
         connection_label = cloud_source or "Tuya Cloud"
     else:
-        connection_label = "Ожидает локального обнаружения"
+        connection_label = "Облачное устройство"
 
     return {
         **device,
@@ -1271,25 +1290,7 @@ def live_summary_api(request: Request) -> JSONResponse:
 def connect_device_api(request: Request, payload: ConnectDevicePayload) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     try:
-        result = connect_device(config, payload.device_id)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-    device_row = get_device_row(config, result["device_id"])
-    if device_row:
-        request.app.state.device_rows_by_id[result["device_id"]] = device_row
-    _invalidate_aggregate_cache(request, device_id=result["device_id"])
-    return JSONResponse(jsonable_encoder(result))
-
-
-@app.post("/api/devices/{device_id}/retry-discovery")
-def retry_device_discovery_api(request: Request, device_id: str) -> JSONResponse:
-    config: AppConfig = request.app.state.app_config
-    if not get_device_row(config, device_id):
-        raise HTTPException(status_code=404, detail="Устройство не найдено")
-
-    try:
-        result = connect_device(config, device_id)
+        result = lookup_device_local_ip(config, payload.device_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
