@@ -835,10 +835,7 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
                 capabilities = _get_cached_device_capabilities(request, config, device_id)
                 current_power_w = _read_measurement_from_capabilities(sample.raw_dps, capabilities, "cur_power")
                 if current_power_w is None:
-                    _, breaker_power_w, _ = _read_breaker_fallback_measurements(sample.raw_dps)
-                    current_power_w = breaker_power_w
-                if current_power_w is None:
-                    current_power_w = sample.power_w
+                    current_power_w = 0.0
             total_power_w += float(current_power_w or 0.0)
             devices.append(
                 {
