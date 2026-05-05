@@ -892,8 +892,14 @@ button:hover {
     text-transform: none;
 }
 
+.detail-chart-card {
+    display: flex;
+    flex-direction: column;
+}
+
 .detail-device-visual {
     display: flex;
+    flex: 1 1 auto;
     align-items: center;
     justify-content: center;
     min-height: 220px;
