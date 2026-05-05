@@ -252,6 +252,12 @@ p {
 .auth-layout-single {
     grid-template-columns: minmax(320px, 460px);
     justify-content: center;
+    max-width: 460px;
+    margin: 0 auto;
+}
+
+.auth-layout-single .auth-card {
+    width: 100%;
 }
 
 .connect-card,
