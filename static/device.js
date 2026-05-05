@@ -3,6 +3,7 @@ const page = document.querySelector('[data-device-page]');
 if (page) {
     const LIVE_REFRESH_INTERVAL_MS = 1000;
     const AGGREGATE_REFRESH_INTERVAL_MS = 5000;
+    const HOUR_BUCKET_MS = 60 * 60 * 1000;
     const DAY_PERIOD = 'day';
     const MONTH_PERIOD = 'month';
     const YEAR_PERIOD = 'year';
@@ -46,6 +47,11 @@ if (page) {
         day: '2-digit',
         month: 'long',
         year: 'numeric',
+    });
+
+    const hourAxisFormatter = new Intl.DateTimeFormat('ru-RU', {
+        hour: '2-digit',
+        minute: '2-digit',
     });
 
     const formatValue = (value, suffix = '') => {
@@ -488,7 +494,11 @@ if (page) {
     const renderChart = (series, chartConfig) => {
         const values = series.map((item) => Number(item.chart_value ?? 0));
         const maxValue = Math.max(...values, 0);
-        const useFullBucketBars = chartConfig?.bucket === 'hour' && chartConfig?.period === DAY_PERIOD;
+        const useIntervalHourBars = (
+            chartConfig?.bucket === 'hour'
+            && chartConfig?.period === DAY_PERIOD
+            && series.every((item) => Number.isFinite(Date.parse(item.timestamp)))
+        );
         if (!series.length || maxValue <= 0) {
             chartEmpty.hidden = false;
             chartMeta.textContent = 'Потребление по интервалам';
@@ -498,6 +508,21 @@ if (page) {
 
         chartEmpty.hidden = true;
         chartMeta.textContent = `${chartConfig.label} по ${describeBucket(chartConfig.bucket)}`;
+        const intervalBarData = useIntervalHourBars
+            ? series.map((item) => {
+                const startMs = Date.parse(item.timestamp);
+                return {
+                    value: [startMs, startMs + HOUR_BUCKET_MS, Number(item.chart_value ?? 0)],
+                    timestamp: item.timestamp,
+                    tooltipLabel: item.tooltip_label,
+                };
+            })
+            : [];
+        const intervalChartEndMs = intervalBarData.length ? Number(intervalBarData[intervalBarData.length - 1].value[1]) : null;
+        const barGradient = new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: '#7fd0ff' },
+            { offset: 1, color: '#2d78b5' },
+        ]);
         chartInstance?.setOption({
             animation: false,
             grid: {
@@ -507,13 +532,15 @@ if (page) {
                 bottom: 48,
             },
             tooltip: {
-                trigger: 'axis',
-                axisPointer: {
-                    type: 'shadow',
-                    shadowStyle: {
-                        color: 'rgba(186, 91, 46, 0.08)',
+                trigger: useIntervalHourBars ? 'item' : 'axis',
+                axisPointer: useIntervalHourBars
+                    ? undefined
+                    : {
+                        type: 'shadow',
+                        shadowStyle: {
+                            color: 'rgba(186, 91, 46, 0.08)',
+                        },
                     },
-                },
                 backgroundColor: 'rgba(31, 32, 34, 0.92)',
                 borderWidth: 0,
                 textStyle: {
@@ -523,10 +550,34 @@ if (page) {
                 formatter: (params) => {
                     const payload = Array.isArray(params) ? params[0] : params;
                     const item = payload?.data || {};
-                    return `<strong>${item.tooltipLabel || ''}</strong><br/>${chartConfig.label}: ${formatNumber(Number(item.value || 0))} ${chartConfig.unit}`;
+                    const metricValue = Array.isArray(item.value) ? Number(item.value[2] || 0) : Number(item.value || 0);
+                    return `<strong>${item.tooltipLabel || ''}</strong><br/>${chartConfig.label}: ${formatNumber(metricValue)} ${chartConfig.unit}`;
                 },
             },
-            xAxis: {
+            xAxis: useIntervalHourBars ? {
+                type: 'time',
+                min: intervalBarData[0]?.value?.[0],
+                max: intervalChartEndMs,
+                boundaryGap: false,
+                interval: HOUR_BUCKET_MS,
+                minInterval: HOUR_BUCKET_MS,
+                maxInterval: HOUR_BUCKET_MS,
+                axisTick: { show: true },
+                axisLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.4)' } },
+                axisLabel: {
+                    hideOverlap: true,
+                    color: '#94cfff',
+                    fontSize: 12,
+                    fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
+                    formatter: (value) => {
+                        if (intervalChartEndMs !== null && Number(value) >= intervalChartEndMs) {
+                            return '';
+                        }
+                        return hourAxisFormatter.format(new Date(Number(value)));
+                    },
+                },
+                splitLine: { show: false },
+            } : {
                 type: 'category',
                 data: series.map((item) => item.axis_label),
                 boundaryGap: true,
@@ -555,17 +606,52 @@ if (page) {
                     },
                 },
             },
-            series: [
+            series: useIntervalHourBars ? [
+                {
+                    type: 'custom',
+                    renderItem: (params, api) => {
+                        const xStart = api.coord([api.value(0), 0])[0];
+                        const xEnd = api.coord([api.value(1), 0])[0];
+                        const yValue = api.coord([api.value(0), api.value(2)])[1];
+                        const yZero = api.coord([api.value(0), 0])[1];
+                        const shape = window.echarts.graphic.clipRectByRect({
+                            x: xStart,
+                            y: yValue,
+                            width: Math.max(xEnd - xStart, 1),
+                            height: Math.max(yZero - yValue, 1),
+                        }, {
+                            x: params.coordSys.x,
+                            y: params.coordSys.y,
+                            width: params.coordSys.width,
+                            height: params.coordSys.height,
+                        });
+                        if (!shape) {
+                            return null;
+                        }
+                        return {
+                            type: 'rect',
+                            shape,
+                            style: {
+                                fill: barGradient,
+                            },
+                        };
+                    },
+                    data: intervalBarData,
+                    encode: {
+                        x: [0, 1],
+                        y: 2,
+                        tooltip: 2,
+                    },
+                    cursor: 'default',
+                },
+            ] : [
                 {
                     type: 'bar',
-                    barWidth: useFullBucketBars ? '100%' : '42%',
-                    barCategoryGap: useFullBucketBars ? '0%' : '30%',
+                    barWidth: '42%',
+                    barCategoryGap: '30%',
                     barGap: '0%',
                     itemStyle: {
-                        color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                                { offset: 0, color: '#7fd0ff' },
-                                { offset: 1, color: '#2d78b5' },
-                        ]),
+                        color: barGradient,
                             borderRadius: [0, 0, 0, 0],
                     },
                     emphasis: {
