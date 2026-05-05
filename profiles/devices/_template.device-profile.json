@@ -1,0 +1,55 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "replace-with-device-id",
+    "name": "replace-with-device-name",
+    "room": "",
+    "device_kind": "meter",
+    "is_energy_meter": true,
+    "category_code": "",
+    "product_id": "",
+    "product_name": "",
+    "icon": ""
+  },
+  "connection": {
+    "local_key": "replace-with-local-key",
+    "local_ip": "",
+    "protocol_version": 3.3,
+    "ip_source": "manual",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "total",
+    "default_power_dps_key": "1",
+    "default_visualized_codes": [
+      "1"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "1",
+      "code": "total_forward_energy",
+      "name": "Total Forward Energy",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "kWh",
+      "scale_digits": 2,
+      "step": 1,
+      "min": 0,
+      "max": 999999,
+      "visualization_allowed": true,
+      "power_role": "total",
+      "display_label": "Energy",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    }
+  ],
+  "controls": []
+}

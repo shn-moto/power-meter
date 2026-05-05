@@ -14,7 +14,6 @@ from app.storage import (
     get_device_row,
     get_known_local_ips,
     refresh_managed_device_cloud_data,
-    save_cloud_artifact,
     upsert_managed_device,
 )
 from app.tuya_model import (
@@ -529,6 +528,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             recommended_total_power_dps_key,
         ) or recommended_total_power_scale
         saved_total_power_dps_key = str(control_device.total_power_dps_key or "").strip() or None if control_device else None
+        saved_power_type = str(control_device.power_type or "total").strip().lower() if control_device else "total"
         saved_total_power_scale = 1.0
         if saved_total_power_dps_key and control_device:
             saved_total_power_scale = _resolve_scale_divisor_for_dp(
@@ -559,12 +559,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             visualized_codes=saved_visualized_codes,
             capabilities=capabilities,
         )
-        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
-        if isinstance(device_v2, dict):
-            save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
-        if isinstance(device_model, dict):
-            save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_model", payload=device_model)
-        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
 
         stored = get_device_row(config, clean_device_id)
         power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
@@ -584,6 +578,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
             "summary_config": {
                 "total_power_dps_key": saved_total_power_dps_key or recommended_total_power_dps_key,
                 "visualized_codes": summary_visualized_codes,
+                "power_type": saved_power_type,
                 "power_options": power_options,
                 "visualization_options": visualization_options,
             },
@@ -650,13 +645,6 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         capabilities=capabilities,
     )
 
-    save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v1", payload=device_v1)
-    if isinstance(device_v2, dict):
-        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_device_v2", payload=device_v2)
-    if isinstance(device_model, dict):
-        save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_model", payload=device_model)
-    save_cloud_artifact(config, device_id=clean_device_id, artifact_type="onboard_dps", payload=dps_info)
-
     stored = get_device_row(config, clean_device_id)
     power_options, visualization_options = _build_summary_options(device_model if isinstance(device_model, dict) else {}, capabilities)
     return {
@@ -675,6 +663,7 @@ def connect_device(config: AppConfig, device_id: str) -> dict[str, Any]:
         "summary_config": {
             "total_power_dps_key": total_power_dps_key,
             "visualized_codes": default_visualized_codes,
+            "power_type": "total",
             "power_options": power_options,
             "visualization_options": visualization_options,
         },

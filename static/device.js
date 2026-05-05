@@ -24,12 +24,6 @@ if (page) {
     const timerCancel = document.querySelector('[data-timer-cancel]');
     const chartInstance = window.echarts ? window.echarts.init(chart) : null;
     const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
-    const liveMetrics = page.querySelector('[data-live-metrics]');
-    const summaryEnergy = summary.querySelector('[data-summary-energy]');
-    const summaryAveragePower = summary.querySelector('[data-summary-average-power]');
-    const summaryPeakPower = summary.querySelector('[data-summary-peak-power]');
-    const summarySampleCount = summary.querySelector('[data-summary-sample-count]');
-    const summaryLatestSample = summary.querySelector('[data-device-latest-sample]');
     let currentPeriod = 'day';
     let currentStart = null;
     let currentEnd = null;
@@ -40,6 +34,12 @@ if (page) {
     let pendingAggregateRequest = null;
     let latestAggregateRequestKey = null;
     let timerFunction = null;
+    const summaryState = {
+        metrics: [],
+        sampleCount: '--',
+        latestSample: '--',
+        latestSampleStatus: 'error',
+    };
 
     const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
         weekday: 'long',
@@ -201,6 +201,35 @@ if (page) {
         node.classList.add('reading-status', `is-${status || 'error'}`);
     };
 
+    const createSummaryRow = (label, value, status = null) => {
+        const item = document.createElement('div');
+        const term = document.createElement('dt');
+        const description = document.createElement('dd');
+        term.textContent = label;
+        description.textContent = value || '--';
+        if (status) {
+            applyReadingStatus(description, status);
+        }
+        item.append(term, description);
+        return item;
+    };
+
+    const renderSummaryPanel = () => {
+        summary.innerHTML = '';
+
+        const metricRows = Array.isArray(summaryState.metrics) ? summaryState.metrics : [];
+        if (metricRows.length) {
+            metricRows.forEach((metric) => {
+                summary.appendChild(createSummaryRow(metric.label || `DPS ${metric.code}`, metric.value || '--'));
+            });
+        } else {
+            summary.appendChild(createSummaryRow('Поля визуализации', 'Не выбраны'));
+        }
+
+        summary.appendChild(createSummaryRow('Замеров', String(summaryState.sampleCount ?? '--')));
+        summary.appendChild(createSummaryRow('Последний замер', summaryState.latestSample || '--', summaryState.latestSampleStatus));
+    };
+
     const describeBucket = (bucket) => {
         if (bucket === 'hour') {
             return 'часам';
@@ -346,37 +375,16 @@ if (page) {
 
     const renderAggregateSummary = (payload) => {
         const fields = payload.summary;
-        summaryEnergy.textContent = `${fields.energy_kwh} кВт·ч`;
-        summaryAveragePower.textContent = `${fields.average_power_kw} кВт`;
-        summaryPeakPower.textContent = `${fields.peak_power_kw} кВт`;
-        summarySampleCount.textContent = String(fields.sample_count);
-    };
-
-    const renderSelectedMetrics = (metrics) => {
-        liveMetrics.innerHTML = '';
-        if (!Array.isArray(metrics) || !metrics.length) {
-            const empty = document.createElement('div');
-            empty.innerHTML = '<dt>Live-поля</dt><dd>Не выбраны</dd>';
-            liveMetrics.appendChild(empty);
-            return;
-        }
-
-        metrics.forEach((metric) => {
-            const item = document.createElement('div');
-            const term = document.createElement('dt');
-            const description = document.createElement('dd');
-            term.textContent = metric.label || `DPS ${metric.code}`;
-            description.textContent = metric.value || '--';
-            item.append(term, description);
-            liveMetrics.appendChild(item);
-        });
+        summaryState.sampleCount = String(fields.sample_count ?? '--');
+        renderSummaryPanel();
     };
 
     const renderLiveSummary = (payload) => {
         const fields = payload.summary;
-        renderSelectedMetrics(payload.live_metrics || []);
-        summaryLatestSample.textContent = fields.latest_sample || '--';
-        applyReadingStatus(summaryLatestSample, fields.latest_sample_status);
+        summaryState.metrics = Array.isArray(payload.live_metrics) ? payload.live_metrics : [];
+        summaryState.latestSample = fields.latest_sample || '--';
+        summaryState.latestSampleStatus = fields.latest_sample_status || 'error';
+        renderSummaryPanel();
         syncFunctionStates(payload.device_functions || []);
     };
 

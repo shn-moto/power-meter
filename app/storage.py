@@ -1,4 +1,5 @@
 import calendar
+import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,7 +13,6 @@ from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.tuya_model import get_model_scale_divisor
 from config import AppConfig, TuyaDeviceConfig
 
 
@@ -29,6 +29,7 @@ RUSSIAN_MONTH_LABELS_FULL = {
 
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles" / "devices"
 
 
 @dataclass(slots=True)
@@ -137,8 +138,8 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
-                    total_power_dps_key, total_power_scale, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                    total_power_dps_key, total_power_scale, power_type, visualized_codes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = EXCLUDED.room,
@@ -148,6 +149,7 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                     updated_at = NOW(),
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
                     total_power_scale = EXCLUDED.total_power_scale,
+                    power_type = EXCLUDED.power_type,
                     visualized_codes = EXCLUDED.visualized_codes
                 """,
                 [
@@ -164,6 +166,7 @@ def sync_devices(config: AppConfig, devices: list[TuyaDeviceConfig]) -> None:
                         "config",
                         device.total_power_dps_key or None,
                         device.total_power_scale,
+                        device.power_type,
                         Jsonb(list(device.visualized_codes)),
                     )
                     for device in devices
@@ -221,6 +224,7 @@ def upsert_managed_device(
     version: float,
     total_power_dps_key: str | None,
     total_power_scale: float,
+    power_type: str = "total",
     visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
 ) -> None:
@@ -231,8 +235,8 @@ def upsert_managed_device(
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
                     is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
-                    total_power_dps_key, total_power_scale, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+                    total_power_dps_key, total_power_scale, power_type, visualized_codes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -249,6 +253,7 @@ def upsert_managed_device(
                     updated_at = NOW(),
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
                     total_power_scale = EXCLUDED.total_power_scale,
+                    power_type = EXCLUDED.power_type,
                     visualized_codes = EXCLUDED.visualized_codes
                 """,
                 (
@@ -264,6 +269,7 @@ def upsert_managed_device(
                     onboarding_source,
                     total_power_dps_key,
                     total_power_scale,
+                    power_type,
                     Jsonb(list(visualized_codes)),
                 ),
             )
@@ -335,6 +341,7 @@ def refresh_managed_device_cloud_data(
     onboarding_source: str,
     total_power_dps_key: str | None,
     total_power_scale: float,
+    power_type: str = "total",
     visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
 ) -> None:
@@ -355,6 +362,7 @@ def refresh_managed_device_cloud_data(
                     updated_at = NOW(),
                     total_power_dps_key = %s,
                     total_power_scale = %s,
+                    power_type = %s,
                     visualized_codes = %s
                 WHERE device_id = %s
                 """,
@@ -370,6 +378,7 @@ def refresh_managed_device_cloud_data(
                     onboarding_source,
                     total_power_dps_key,
                     total_power_scale,
+                    power_type,
                     Jsonb(list(visualized_codes)),
                     device_id,
                 ),
@@ -462,30 +471,253 @@ def save_samples_batch(config: AppConfig, samples: list[DeviceSample]) -> None:
         connection.commit()
 
 
-def save_cloud_artifact(
+def upsert_device_profile(
     config: AppConfig,
     *,
     device_id: str,
-    artifact_type: str,
+    profile_version: int,
+    source_path: str,
     payload: dict[str, Any],
+    content_hash: str,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO device_cloud_artifacts (device_id, artifact_type, payload, fetched_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (device_id, artifact_type) DO UPDATE SET
+                INSERT INTO device_profiles (
+                    device_id, profile_version, source_path, payload, content_hash, loaded_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (device_id) DO UPDATE SET
+                    profile_version = EXCLUDED.profile_version,
+                    source_path = EXCLUDED.source_path,
                     payload = EXCLUDED.payload,
-                    fetched_at = NOW()
+                    content_hash = EXCLUDED.content_hash,
+                    loaded_at = NOW(),
+                    updated_at = NOW()
                 """,
                 (
                     device_id,
-                    artifact_type,
+                    profile_version,
+                    source_path,
                     Jsonb(payload),
+                    content_hash,
                 ),
             )
         connection.commit()
+
+
+def get_device_profile(config: AppConfig, device_id: str) -> dict[str, Any] | None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id, profile_version, source_path, payload, content_hash, loaded_at, updated_at
+                FROM device_profiles
+                WHERE device_id = %s
+                """,
+                (device_id,),
+            )
+            return cursor.fetchone()
+
+
+def list_device_profiles(config: AppConfig) -> list[dict[str, Any]]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id, profile_version, source_path, payload, content_hash, loaded_at, updated_at
+                FROM device_profiles
+                ORDER BY device_id ASC
+                """
+            )
+            return cursor.fetchall()
+
+
+def _profile_file_paths(profiles_dir: Path) -> list[Path]:
+    if not profiles_dir.exists():
+        return []
+    return sorted(
+        path
+        for path in profiles_dir.glob("*.json")
+        if path.is_file() and not path.name.startswith("_")
+    )
+
+
+def _require_profile_object(value: Any, *, context: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    raise ValueError(f"{context} must be an object")
+
+
+def _require_profile_list(value: Any, *, context: str) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    raise ValueError(f"{context} must be a list")
+
+
+def _profile_power_scale(payload: dict[str, Any], dp_id: str | None) -> float:
+    if not dp_id:
+        return 1.0
+    for item in _require_profile_list(payload.get("dps"), context="dps"):
+        dps_item = _require_profile_object(item, context="dps entry")
+        if str(dps_item.get("dp_id") or "") != dp_id:
+            continue
+        scale_digits = int(dps_item.get("scale_digits", 0) or 0)
+        return float(10 ** scale_digits) if scale_digits > 0 else 1.0
+    return 1.0
+
+
+def _profile_capabilities(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    capabilities: list[dict[str, Any]] = []
+    for item in _require_profile_list(payload.get("dps"), context="dps"):
+        dps_item = _require_profile_object(item, context="dps entry")
+        values_json: dict[str, Any] = {}
+        for key in ("unit", "min", "max", "step"):
+            value = dps_item.get(key)
+            if value not in (None, ""):
+                values_json[key] = value
+        scale_digits = int(dps_item.get("scale_digits", 0) or 0)
+        if scale_digits > 0:
+            values_json["scale"] = scale_digits
+        enum_values = dps_item.get("enum_values")
+        if enum_values:
+            values_json["range"] = enum_values
+
+        dp_id_raw = str(dps_item.get("dp_id") or "")
+        capabilities.append(
+            {
+                "capability_source": str(dps_item.get("source_group") or "profile"),
+                "capability_code": str(dps_item.get("code") or dp_id_raw or "unknown"),
+                "capability_name": str(
+                    dps_item.get("display_label")
+                    or dps_item.get("name")
+                    or dps_item.get("code")
+                    or dp_id_raw
+                ),
+                "value_type": dps_item.get("value_type"),
+                "dp_id": int(dp_id_raw) if dp_id_raw.isdigit() else None,
+                "values_json": values_json,
+            }
+        )
+    return capabilities
+
+
+def _validate_profile_document(path: Path, payload: dict[str, Any]) -> tuple[str, int]:
+    profile_version = int(payload.get("profile_version", 0) or 0)
+    if profile_version <= 0:
+        raise ValueError(f"{path.name}: profile_version must be a positive integer")
+
+    device = _require_profile_object(payload.get("device"), context=f"{path.name} device")
+    connection = _require_profile_object(payload.get("connection"), context=f"{path.name} connection")
+    summary = _require_profile_object(payload.get("summary"), context=f"{path.name} summary")
+    _require_profile_list(payload.get("dps"), context=f"{path.name} dps")
+    _require_profile_list(payload.get("controls"), context=f"{path.name} controls")
+
+    device_id = str(device.get("device_id") or "").strip()
+    if not device_id:
+        raise ValueError(f"{path.name}: device.device_id is required")
+    if path.stem != device_id:
+        raise ValueError(f"{path.name}: file name must match device.device_id")
+
+    device_name = str(device.get("name") or "").strip()
+    if not device_name:
+        raise ValueError(f"{path.name}: device.name is required")
+
+    if "local_key" not in connection:
+        raise ValueError(f"{path.name}: connection.local_key is required")
+    if "local_ip" not in connection:
+        raise ValueError(f"{path.name}: connection.local_ip is required")
+    if "protocol_version" not in connection:
+        raise ValueError(f"{path.name}: connection.protocol_version is required")
+
+    default_power_mode = str(summary.get("default_power_mode") or "").strip().lower()
+    if default_power_mode not in {"total", "current"}:
+        raise ValueError(f"{path.name}: summary.default_power_mode must be 'total' or 'current'")
+
+    if summary.get("default_power_dps_key") in (None, ""):
+        raise ValueError(f"{path.name}: summary.default_power_dps_key is required")
+
+    visualized_codes = summary.get("default_visualized_codes")
+    if not isinstance(visualized_codes, list):
+        raise ValueError(f"{path.name}: summary.default_visualized_codes must be a list")
+
+    return device_id, profile_version
+
+
+def _load_profile_document(path: Path) -> tuple[str, int, dict[str, Any], str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path.name}: invalid JSON: {error}") from error
+
+    payload = _require_profile_object(payload, context=path.name)
+    device_id, profile_version = _validate_profile_document(path, payload)
+    canonical_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    content_hash = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
+    return device_id, profile_version, payload, content_hash
+
+
+def materialize_device_profile(
+    config: AppConfig,
+    *,
+    source_path: Path,
+    payload: dict[str, Any],
+) -> None:
+    device = _require_profile_object(payload.get("device"), context="device")
+    connection = _require_profile_object(payload.get("connection"), context="connection")
+    summary = _require_profile_object(payload.get("summary"), context="summary")
+
+    device_id = str(device.get("device_id") or "").strip()
+    visualized_codes = [str(code) for code in summary.get("default_visualized_codes") or []]
+    total_power_dps_key = str(summary.get("default_power_dps_key") or "").strip() or None
+    power_type = str(summary.get("default_power_mode") or "total").strip().lower() or "total"
+
+    upsert_managed_device(
+        config,
+        name=str(device.get("name") or "").strip(),
+        room=str(device.get("room") or ""),
+        device_id=device_id,
+        category_code=str(device.get("category_code") or "").strip() or None,
+        device_kind=str(device.get("device_kind") or "meter"),
+        is_energy_meter=bool(device.get("is_energy_meter", True)),
+        product_id=str(device.get("product_id") or "").strip() or None,
+        product_name=str(device.get("product_name") or "").strip() or None,
+        icon=str(device.get("icon") or "").strip() or None,
+        onboarding_source="profile",
+        local_key=str(connection.get("local_key") or ""),
+        ip_address=str(connection.get("local_ip") or ""),
+        version=float(connection.get("protocol_version") or 3.3),
+        total_power_dps_key=total_power_dps_key,
+        total_power_scale=_profile_power_scale(payload, total_power_dps_key),
+        power_type=power_type,
+        visualized_codes=visualized_codes,
+        capabilities=_profile_capabilities(payload),
+    )
+
+def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None = None) -> list[str]:
+    root = profiles_dir or PROFILES_DIR
+    loaded_device_ids: list[str] = []
+    seen_device_ids: set[str] = set()
+
+    for path in _profile_file_paths(root):
+        device_id, profile_version, payload, content_hash = _load_profile_document(path)
+        if device_id in seen_device_ids:
+            raise ValueError(f"Duplicate profile device_id detected: {device_id}")
+        seen_device_ids.add(device_id)
+
+        relative_path = path.relative_to(root.parent.parent).as_posix()
+        upsert_device_profile(
+            config,
+            device_id=device_id,
+            profile_version=profile_version,
+            source_path=relative_path,
+            payload=payload,
+            content_hash=content_hash,
+        )
+        materialize_device_profile(config, source_path=path, payload=payload)
+        loaded_device_ids.append(device_id)
+
+    return loaded_device_ids
 
 
 def _parse_dt(value: str) -> datetime:
@@ -598,7 +830,7 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
                 """
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
                         d.product_name, d.category_code, d.device_id,
-                        d.total_power_dps_key, d.visualized_codes,
+                        d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -616,7 +848,7 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
                 """
                                     SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter,
                         d.product_name, d.category_code, d.product_id, d.icon,
-                        d.total_power_dps_key, d.visualized_codes,
+                        d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
                        (COALESCE(c.ip_address, '') <> '') AS connection_ready
                 FROM devices d
@@ -635,6 +867,7 @@ def update_device_summary_config(
     total_power_dps_key: str | None,
     total_power_scale: float,
     visualized_codes: list[str] | tuple[str, ...],
+    power_type: str,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -643,12 +876,14 @@ def update_device_summary_config(
                 UPDATE devices
                 SET total_power_dps_key = %s,
                     visualized_codes = %s,
+                    power_type = %s,
                     updated_at = NOW()
                 WHERE device_id = %s
                 """,
                 (
                     total_power_dps_key,
                     Jsonb(list(visualized_codes)),
+                    power_type,
                     device_id,
                 ),
             )
@@ -674,20 +909,6 @@ def delete_managed_device(config: AppConfig, device_id: str) -> None:
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM devices WHERE device_id = %s", (device_id,))
         connection.commit()
-
-
-def get_cloud_artifact(config: AppConfig, device_id: str, artifact_type: str) -> dict[str, Any] | None:
-    with _connect(config.database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT artifact_type, payload, fetched_at
-                FROM device_cloud_artifacts
-                WHERE device_id = %s AND artifact_type = %s
-                """,
-                (device_id, artifact_type),
-            )
-            return cursor.fetchone()
 
 
 def get_device_capabilities(config: AppConfig, device_id: str) -> list[dict[str, Any]]:
@@ -738,9 +959,9 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                                    SELECT d.name, d.room, d.device_id,
-                        c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
-                      d.visualized_codes
+                SELECT d.name, d.room, d.device_id,
+                       c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
+                      d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
                 WHERE d.device_id = %s
@@ -762,6 +983,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         total_power_dps_key=str(row["total_power_dps_key"] or ""),
         total_power_scale=float(row["total_power_scale"] or 1),
         visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
+        power_type=str(row.get("power_type") or "total"),
     )
 
 
@@ -780,9 +1002,9 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                                    SELECT d.name, d.room, d.device_id,
-                        c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
-                      d.visualized_codes
+                SELECT d.name, d.room, d.device_id,
+                       c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
+                      d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
                 WHERE c.local_key <> '' AND c.ip_address <> ''
@@ -804,6 +1026,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 total_power_dps_key=str(row["total_power_dps_key"] or ""),
                 total_power_scale=float(row["total_power_scale"] or 1),
                 visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
+                power_type=str(row.get("power_type") or "total"),
             )
         )
     return devices
@@ -969,6 +1192,8 @@ def _get_energy_counter_meta(
     capabilities: list[dict[str, Any]] | None = None,
 ) -> tuple[str, float] | None:
     control_device = get_control_device(config, device_id)
+    if control_device and str(control_device.power_type or "total").strip().lower() == "current":
+        return None
     if control_device and control_device.total_power_dps_key:
         return control_device.total_power_dps_key, max(float(control_device.total_power_scale or 1.0), 1.0)
 
@@ -1196,6 +1421,8 @@ def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str
         device_id = str(row.get("device_id") or "")
         if not device_id or device_id in metadata:
             continue
+        if str(row.get("power_type") or "total").strip().lower() == "current":
+            continue
         dp_id = str(row.get("total_power_dps_key") or "").strip()
         if not dp_id:
             continue
@@ -1227,6 +1454,7 @@ def _get_dashboard_summary_context(
                 """
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
                     d.product_name, d.category_code, d.device_id,
+                      d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
                       (COALESCE(c.ip_address, '') <> '') AS connection_ready,
                       c.total_power_dps_key,

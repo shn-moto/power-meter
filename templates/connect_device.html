@@ -23,12 +23,24 @@
 
         <div class="connect-feedback" data-connect-config hidden>
             <form class="connect-form" data-connect-config-form>
-                <label>
-                    DPS код общего накопительного потребления
-                    <select name="total_power_dps_key" data-total-power-select>
-                        <option value="">Не выбран</option>
-                    </select>
-                </label>
+                <div class="summary-config-grid">
+                    <label>
+                        Режим мощности
+                        <select name="power_type" data-power-type-select>
+                            <option value="total">Накопленная</option>
+                            <option value="current">Мгновенная</option>
+                        </select>
+                    </label>
+                    <label>
+                        DPS код мощности
+                        <select name="total_power_dps_key" data-total-power-select>
+                            <option value="">Не выбран</option>
+                        </select>
+                    </label>
+                </div>
+                <p class="hero-copy field-note" data-power-config-hint>
+                    Выберите DPS накопленной энергии. При сохранении приложение проверит LAN-доступность и совместимость типа данных.
+                </p>
                 <div data-visualized-codes></div>
                 <button type="submit">Сохранить конфигурацию сводки</button>
             </form>

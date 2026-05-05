@@ -1,0 +1,158 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf47402ca7399b6eef6bw7",
+    "name": "bf47402ca7399b6eef6bw7",
+    "room": "",
+    "device_kind": "breaker",
+    "is_energy_meter": true,
+    "category_code": "",
+    "product_id": "",
+    "product_name": "",
+    "icon": ""
+  },
+  "connection": {
+    "local_key": "or.?zwbg/=-mwik@",
+    "local_ip": "192.168.1.59",
+    "protocol_version": 3.5,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "total",
+    "default_power_dps_key": "1",
+    "default_visualized_codes": [
+      "1",
+      "6",
+      "7",
+      "8"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "1",
+      "code": "total_forward_energy",
+      "name": "Total Forward Energy",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "kWh",
+      "scale_digits": 2,
+      "step": 1,
+      "min": 0,
+      "max": 999999,
+      "visualization_allowed": true,
+      "power_role": "total",
+      "display_label": "Energy",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "6",
+      "code": "phase_a",
+      "name": "Phase A Packet",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "raw",
+      "unit": "phase_packet",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Phase A",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": "phase_packets",
+        "required": false,
+        "decoder": {
+          "type": "tuya_phase_packet",
+          "packet_lengths": [
+            8,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "dp_id": "7",
+      "code": "phase_b",
+      "name": "Phase B Packet",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "raw",
+      "unit": "phase_packet",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Phase B",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": "phase_packets",
+        "required": false,
+        "decoder": {
+          "type": "tuya_phase_packet",
+          "packet_lengths": [
+            8,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "dp_id": "8",
+      "code": "phase_c",
+      "name": "Phase C Packet",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "raw",
+      "unit": "phase_packet",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Phase C",
+      "display_order": 40,
+      "poll_priority": 40,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": "phase_packets",
+        "required": false,
+        "decoder": {
+          "type": "tuya_phase_packet",
+          "packet_lengths": [
+            8,
+            10
+          ]
+        }
+      }
+    }
+  ],
+  "controls": [],
+  "computed_metrics": {
+    "total_instant_power_w": {
+      "type": "sum_phase_packet_power_w",
+      "sources": [
+        "6",
+        "7",
+        "8"
+      ]
+    }
+  }
+}

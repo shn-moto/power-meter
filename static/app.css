@@ -305,6 +305,17 @@ p {
     font-weight: 700;
 }
 
+.summary-config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    align-items: end;
+}
+
+.field-note {
+    margin: -4px 0 0;
+}
+
 .config-option-list {
     display: grid;
     gap: 10px;

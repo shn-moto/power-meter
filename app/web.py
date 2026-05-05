@@ -18,14 +18,12 @@ import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, connect_device
 from config import AppConfig, load_app_config, load_cloud_config
-from app.tuya_model import extract_model_properties, get_model_scale_divisor
 from app.storage import (
     DeviceSample,
     apply_migrations,
     close_connection_pool,
     delete_managed_device,
     get_control_device,
-    get_cloud_artifact,
     get_device_capabilities,
     get_device_context_and_stats,
     get_dashboard_summary,
@@ -38,16 +36,16 @@ from app.storage import (
     get_polling_devices,
     init_connection_pool,
     pick_bucket,
-    save_cloud_artifact,
     save_sample,
+    sync_device_profiles_from_disk,
     update_device_summary_config,
 )
-from app.tuya_service import build_sample
+from app.tuya_service import build_sample, request_dps_by_index
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260504-04"
+templates.env.globals["static_asset_version"] = "20260504-05"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -119,6 +117,7 @@ class ConnectDevicePayload(BaseModel):
 class DeviceSummaryConfigPayload(BaseModel):
     total_power_dps_key: str | None = None
     visualized_codes: list[str] = []
+    power_type: str = "total"
 
 
 class DeviceFunctionPayload(BaseModel):
@@ -188,9 +187,113 @@ def _format_duration(seconds: int) -> str:
     return " ".join(parts) or "0 с"
 
 
+def _normalize_power_type(value: str | None) -> str:
+    power_type = str(value or "").strip().lower() or "total"
+    if power_type not in {"total", "current"}:
+        raise HTTPException(status_code=400, detail="Неверный тип мощности")
+    return power_type
+
+
+def _normalize_unit_token(unit: str | None) -> str:
+    return str(unit or "").strip().lower().replace(" ", "")
+
+
+def _find_selected_power_metadata(
+    capabilities: list[dict[str, Any]],
+    dp_key: str,
+) -> dict[str, Any] | None:
+    preferred: dict[str, Any] | None = None
+    fallback: dict[str, Any] | None = None
+
+    for capability in capabilities:
+        if str(capability.get("dp_id") or "") != dp_key:
+            continue
+        values_json = capability.get("values_json") or {}
+        candidate = {
+            "code": str(capability.get("capability_code") or ""),
+            "name": str(capability.get("capability_name") or capability.get("capability_code") or ""),
+            "value_type": str(capability.get("value_type") or ""),
+            "unit": str(values_json.get("unit") or ""),
+        }
+        if capability.get("capability_source") == "status":
+            preferred = candidate
+            break
+        fallback = candidate
+
+    return preferred or fallback
+
+
+def _looks_like_phase_measurement_packet(raw_value: Any) -> bool:
+    if not isinstance(raw_value, str) or not raw_value:
+        return False
+    try:
+        payload = base64.b64decode(raw_value)
+    except Exception:
+        return False
+    return len(payload) in {8, 10}
+
+
+def _validate_selected_power_metadata(
+    metadata: dict[str, Any] | None,
+    power_type: str,
+    raw_value: Any,
+) -> None:
+    if not metadata:
+        raise HTTPException(status_code=400, detail="Не найдены метаданные выбранного DPS")
+
+    value_type = str(metadata.get("value_type") or "").strip().lower()
+    code = str(metadata.get("code") or "").strip().lower()
+    name = str(metadata.get("name") or "").strip().lower()
+    unit = _normalize_unit_token(metadata.get("unit"))
+    is_numeric = value_type in {"integer", "value", "number", ""}
+    is_energy_unit = any(token in unit for token in ("wh", "w·h", "kwh", "kw·h"))
+    is_power_unit = unit in {"w", "kw", "mw"}
+
+    if power_type == "total":
+        if is_numeric and is_energy_unit:
+            return
+        raise HTTPException(status_code=400, detail="Для накопленного режима нужен числовой DPS с единицей энергии")
+
+    if _looks_like_phase_measurement_packet(raw_value):
+        return
+
+    if is_numeric and (is_power_unit or "power" in code or "power" in name or "мощ" in name):
+        return
+
+    raise HTTPException(status_code=400, detail="Для мгновенного режима нужен DPS мощности или raw phase packet")
+
+
+def _validate_lan_power_dps(control_device: Any, dp_key: str, *, power_type: str) -> None:
+    if not dp_key or not str(dp_key).isdigit():
+        raise HTTPException(status_code=400, detail="Не задан DPS код мощности")
+    if not control_device or not control_device.ip_address or not control_device.local_key:
+        raise HTTPException(status_code=400, detail="Устройство не готово к LAN-проверке")
+
+    try:
+        payload, _ = request_dps_by_index(
+            device_id=control_device.device_id,
+            ip_address=control_device.ip_address,
+            local_key=control_device.local_key,
+            dps_indices=[int(dp_key)],
+            version=control_device.version,
+            dev_type="default",
+            timeout=5.0,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"LAN-проверка DPS завершилась ошибкой: {error}") from error
+
+    if str(dp_key) not in {str(key) for key in payload}:
+        raise HTTPException(status_code=400, detail="Выбранный DPS не читается по LAN")
+
+    return payload[str(dp_key)]
+
+
 def _format_dps_value(capability: dict[str, Any] | None, raw_value: Any) -> str:
     if raw_value is None:
         return "Нет данных"
+
+    if isinstance(raw_value, (dict, list)):
+        return json.dumps(raw_value, ensure_ascii=False, separators=(",", ":"))
 
     capability_code = str((capability or {}).get("capability_code") or "")
     value_type = str((capability or {}).get("value_type") or "")
@@ -435,10 +538,7 @@ def _build_live_metrics(
         else:
             rendered_value = _format_dps_value(capability, raw_value)
 
-        label = (
-            DPS_LABELS.get(capability_code)
-            or str((capability or {}).get("capability_name") or capability_code or f"DPS {key}")
-        )
+        label = str((capability or {}).get("capability_name") or capability_code or f"DPS {key}")
         metrics.append({
             "code": key,
             "label": label,
@@ -653,10 +753,21 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
         }
 
         if device.get("is_energy_meter"):
+            if str(device.get("power_type") or "total").strip().lower() == "current":
+                current_power_w = float(sample.power_w or 0.0)
+            else:
+                capabilities = _get_cached_device_capabilities(request, config, device_id)
+                current_power_w = _read_measurement_from_capabilities(sample.raw_dps, capabilities, "cur_power")
+                if current_power_w is None:
+                    _, breaker_power_w, _ = _read_breaker_fallback_measurements(sample.raw_dps)
+                    current_power_w = breaker_power_w
+                if current_power_w is None:
+                    current_power_w = sample.power_w
+            total_power_w += float(current_power_w or 0.0)
             devices.append(
                 {
                     **entry,
-                    "current_power_kw": 0.0,
+                    "current_power_kw": round(float(current_power_w or 0.0) / 1000.0, 3),
                 }
             )
             continue
@@ -684,15 +795,6 @@ def _extract_cloud_status_result(payload: dict[str, Any] | None) -> list[dict[st
 
 
 def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[dict[str, Any]], datetime | None, str | None]:
-    cached_live_artifact = get_cloud_artifact(config, device_id, "cloud_status_live")
-    if cached_live_artifact:
-        fetched_at = cached_live_artifact.get("fetched_at")
-        fetched_at_dt = _coerce_datetime(fetched_at)
-        if fetched_at_dt and (datetime.now(timezone.utc) - fetched_at_dt).total_seconds() <= SENSOR_CLOUD_STATUS_CACHE_SECONDS:
-            status_items = _extract_cloud_status_result(cached_live_artifact.get("payload"))
-            if status_items:
-                return status_items, fetched_at_dt, "Tuya Cloud"
-
     cloud_config = load_cloud_config(required=False)
     if cloud_config:
         try:
@@ -705,24 +807,9 @@ def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[
             payload = cloud.cloudrequest(f"/v1.0/devices/{device_id}/status")
             status_items = _extract_cloud_status_result(payload)
             if status_items:
-                save_cloud_artifact(
-                    config,
-                    device_id=device_id,
-                    artifact_type="cloud_status_live",
-                    payload=payload if isinstance(payload, dict) else {"result": status_items},
-                )
                 return status_items, datetime.now(timezone.utc), "Tuya Cloud"
         except Exception:
             pass
-
-    for artifact_type, source_name in (("cloud_status_live", "Tuya Cloud cache"), ("onboard_device_v1", "Cloud snapshot")):
-        artifact = get_cloud_artifact(config, device_id, artifact_type)
-        if not artifact:
-            continue
-        status_items = _extract_cloud_status_result(artifact.get("payload"))
-        if status_items:
-            fetched_at = artifact.get("fetched_at")
-            return status_items, _coerce_datetime(fetched_at), source_name
 
     return [], None, None
 
@@ -951,6 +1038,7 @@ async def lifespan(app: FastAPI):
     app.state.aggregate_cache = {}
     await asyncio.to_thread(apply_migrations, app.state.app_config.database_url)
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
+    await asyncio.to_thread(sync_device_profiles_from_disk, app.state.app_config)
     app.state.device_rows_by_id = {
         str(device["device_id"]): device
         for device in await asyncio.to_thread(get_device_rows, app.state.app_config)
@@ -1158,40 +1246,42 @@ def device_summary_config_api(
     device = get_device_row(config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
+    control_device = get_control_device(config, device_id)
 
     capabilities = get_device_capabilities(config, device_id)
-    model_artifact = get_cloud_artifact(config, device_id, "onboard_model")
-    model_payload = model_artifact.get("payload") if model_artifact else {}
-    model_allowed_codes = {
-        str(item.get("abilityId") or "")
-        for item in extract_model_properties(model_payload if isinstance(model_payload, dict) else {})
-        if item.get("abilityId") is not None
-    }
     allowed_codes = {
         str(capability.get("dp_id") or "")
         for capability in capabilities
         if capability.get("dp_id") is not None
-    } | model_allowed_codes
+    }
     visualized_codes = [str(code) for code in payload.visualized_codes if str(code) in allowed_codes]
+    power_type = _normalize_power_type(payload.power_type)
     total_power_dps_key = str(payload.total_power_dps_key or "").strip() or None
     if total_power_dps_key is not None and total_power_dps_key not in allowed_codes:
-        raise HTTPException(status_code=400, detail="Выбранный total power DPS отсутствует в спецификации устройства")
+        raise HTTPException(status_code=400, detail="Выбранный DPS отсутствует в спецификации устройства")
 
-    total_power_scale = 1.0
-    if total_power_dps_key is not None:
-        total_power_scale = get_model_scale_divisor(model_payload if isinstance(model_payload, dict) else {}, total_power_dps_key) or 0.0
+    if total_power_dps_key is None:
+        raise HTTPException(status_code=400, detail="Нужно выбрать DPS код мощности")
 
-        if total_power_scale <= 0.0:
-            for capability in capabilities:
-                if str(capability.get("dp_id") or "") != total_power_dps_key:
-                    continue
-                values_json = capability.get("values_json") or {}
-                scale = int(values_json.get("scale", 0) or 0)
-                total_power_scale = float(10 ** scale) if scale > 0 else 1.0
-                break
+    selected_metadata = _find_selected_power_metadata(
+        capabilities,
+        total_power_dps_key,
+    )
 
-        if total_power_scale <= 0.0:
-            raise HTTPException(status_code=400, detail="Не удалось определить scale для выбранного total power DPS")
+    total_power_scale = 0.0
+    for capability in capabilities:
+        if str(capability.get("dp_id") or "") != total_power_dps_key:
+            continue
+        values_json = capability.get("values_json") or {}
+        scale = int(values_json.get("scale", 0) or 0)
+        total_power_scale = float(10 ** scale) if scale > 0 else 1.0
+        break
+
+    if total_power_scale <= 0.0:
+        raise HTTPException(status_code=400, detail="Не удалось определить scale для выбранного DPS")
+
+    raw_value = _validate_lan_power_dps(control_device, total_power_dps_key, power_type=power_type)
+    _validate_selected_power_metadata(selected_metadata, power_type, raw_value)
 
     update_device_summary_config(
         config,
@@ -1199,6 +1289,7 @@ def device_summary_config_api(
         total_power_dps_key=total_power_dps_key,
         total_power_scale=total_power_scale,
         visualized_codes=visualized_codes,
+        power_type=power_type,
     )
     updated_device = get_device_row(config, device_id)
     if updated_device:
@@ -1209,6 +1300,7 @@ def device_summary_config_api(
             "status": "ok",
             "total_power_dps_key": total_power_dps_key,
             "visualized_codes": visualized_codes,
+            "power_type": power_type,
         }
     )
 

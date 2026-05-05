@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
+import base64
 from typing import Any, Optional, Tuple, Dict, List
 
 import tinytuya
 
 from config import TuyaDeviceConfig
+
+
+PHASE_VISUAL_DPS_GROUP = (6, 7, 8)
 
 
 def _normalize_voltage(raw_value: Any) -> float:
@@ -64,30 +68,96 @@ def _normalize_power_by_measurements(dps: dict[str, Any], power_w: float) -> flo
     return power_w
 
 
+def _extract_phase_packet_power_w(raw_value: Any) -> float | None:
+    if not isinstance(raw_value, str) or not raw_value:
+        return None
+
+    try:
+        payload = base64.b64decode(raw_value)
+    except Exception:
+        return None
+
+    if len(payload) not in {8, 10}:
+        return None
+
+    return float(int.from_bytes(payload[5:8], byteorder="big", signed=False))
+
+
+def _get_visualized_request_indices(
+    visualized_codes: tuple[str, ...],
+    dps: dict[str, Any] | None = None,
+) -> list[int]:
+    selected_indices = sorted({int(code) for code in visualized_codes if str(code).isdigit()})
+    if not selected_indices:
+        return []
+
+    present_keys = set(dps) if dps else set()
+    missing_indices = [index for index in selected_indices if str(index) not in present_keys]
+    if not missing_indices:
+        return []
+
+    selected_set = set(selected_indices)
+    if set(PHASE_VISUAL_DPS_GROUP).issubset(selected_set) and any(
+        index in PHASE_VISUAL_DPS_GROUP for index in missing_indices
+    ):
+        requested_indices = [
+            index for index in selected_indices if index not in PHASE_VISUAL_DPS_GROUP
+        ]
+        requested_indices.extend(PHASE_VISUAL_DPS_GROUP)
+        return requested_indices
+
+    return missing_indices
+
+
+def _uses_current_power(device_config: TuyaDeviceConfig) -> bool:
+    return str(device_config.power_type or "total").strip().lower() == "current"
+
+
 def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device = tinytuya.Device(
         device_config.device_id,
         device_config.ip_address,
         device_config.local_key,
+        connection_timeout=5.0,
     )
     device.set_version(device_config.version)
-    return device.status()
+    device.set_socketTimeout(5.0)
+    device.set_socketRetryLimit(2)
+    payload = device.status()
+    if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
+        return payload
+
+    requested_indices = set(_get_visualized_request_indices(device_config.visualized_codes))
+    if str(device_config.total_power_dps_key).isdigit():
+        requested_indices.add(int(device_config.total_power_dps_key))
+
+    if not requested_indices:
+        return payload
+
+    extra_dps, _ = request_dps_by_index(
+        device_id=device_config.device_id,
+        ip_address=device_config.ip_address,
+        local_key=device_config.local_key,
+        dps_indices=sorted(requested_indices),
+        version=device_config.version,
+        dev_type="default",
+        timeout=5.0,
+    )
+    if extra_dps:
+        return {"dps": {str(key): value for key, value in extra_dps.items()}}
+    return payload
 
 
 def _merge_missing_visualized_codes(device_config: TuyaDeviceConfig, dps: dict[str, Any]) -> dict[str, Any]:
-    selected_indices = sorted({int(code) for code in device_config.visualized_codes if str(code).isdigit()})
-    if not selected_indices:
-        return dps
-
-    missing_indices = [index for index in selected_indices if str(index) not in dps]
-    if not missing_indices:
+    requested_indices = _get_visualized_request_indices(device_config.visualized_codes, dps)
+    if not requested_indices:
         return dps
 
     extra_dps, _ = request_dps_by_index(
         device_id=device_config.device_id,
         ip_address=device_config.ip_address,
         local_key=device_config.local_key,
-        dps_indices=missing_indices,
+        dps_indices=requested_indices,
         version=device_config.version,
         dev_type="default",
         timeout=5.0,
@@ -105,13 +175,25 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
     dps = _merge_missing_visualized_codes(device_config, dps)
 
     if not device_config.total_power_dps_key:
-        raise ValueError("Total power DPS key is not configured")
+        raise ValueError("Power DPS key is not configured")
 
     if dps.get(device_config.total_power_dps_key) is None:
-        raise ValueError("Selected total power DPS key is missing in device payload")
+        raise ValueError("Selected power DPS key is missing in device payload")
 
     power_raw = dps.get(device_config.total_power_dps_key)
-    power_w = float(power_raw) / device_config.total_power_scale if power_raw is not None else 0.0
+    power_scale = max(float(device_config.total_power_scale or 1.0), 1.0)
+
+    if _uses_current_power(device_config):
+        phase_packet_power_w = _extract_phase_packet_power_w(power_raw)
+        if phase_packet_power_w is not None:
+            return phase_packet_power_w, dps
+
+        current_power_w = float(power_raw) / power_scale if power_raw is not None else 0.0
+        current_power_w = _normalize_power(current_power_w, dps)
+        current_power_w = _normalize_power_by_measurements(dps, current_power_w)
+        return current_power_w, dps
+
+    power_w = float(power_raw) / power_scale if power_raw is not None else 0.0
     return power_w, dps
 
 

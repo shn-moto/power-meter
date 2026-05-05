@@ -1,0 +1,126 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "33741346d8f15bcb2282",
+    "name": "Розетка",
+    "room": "",
+    "device_kind": "socket",
+    "is_energy_meter": true,
+    "category_code": "",
+    "product_id": "",
+    "product_name": "",
+    "icon": ""
+  },
+  "connection": {
+    "local_key": "'jFkG]0_zKfEu{GO",
+    "local_ip": "192.168.1.55",
+    "protocol_version": 3.3,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": "5",
+    "default_visualized_codes": [
+      "4",
+      "5",
+      "6"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "3",
+      "code": "add_ele",
+      "name": "Accumulated Energy",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "kWh",
+      "scale_digits": 3,
+      "step": 100,
+      "min": 0,
+      "max": 50000,
+      "visualization_allowed": true,
+      "power_role": "total",
+      "display_label": "Energy",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "4",
+      "code": "cur_current",
+      "name": "Current",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "mA",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 30000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Current",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "5",
+      "code": "cur_power",
+      "name": "Power",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "W",
+      "scale_digits": 1,
+      "step": 1,
+      "min": 0,
+      "max": 50000,
+      "visualization_allowed": true,
+      "power_role": "current",
+      "display_label": "Power",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "6",
+      "code": "cur_voltage",
+      "name": "Voltage",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "V",
+      "scale_digits": 1,
+      "step": 1,
+      "min": 0,
+      "max": 500,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Voltage",
+      "display_order": 40,
+      "poll_priority": 40,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    }
+  ],
+  "controls": []
+}

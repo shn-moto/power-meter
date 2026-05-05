@@ -4,7 +4,9 @@ if (connectForm) {
     const feedback = document.querySelector('[data-connect-feedback]');
     const configPanel = document.querySelector('[data-connect-config]');
     const configForm = document.querySelector('[data-connect-config-form]');
+    const powerTypeSelect = document.querySelector('[data-power-type-select]');
     const totalPowerSelect = document.querySelector('[data-total-power-select]');
+    const powerConfigHint = document.querySelector('[data-power-config-hint]');
     const visualizedCodesContainer = document.querySelector('[data-visualized-codes]');
     const progressDialog = document.querySelector('[data-connect-progress-dialog]');
     const progressTitle = document.querySelector('[data-connect-progress-title]');
@@ -56,8 +58,21 @@ if (connectForm) {
         event.preventDefault();
     });
 
+    const updatePowerConfigState = () => {
+        if (!powerTypeSelect || !totalPowerSelect) {
+            return;
+        }
+
+        const isCurrent = powerTypeSelect.value === 'current';
+        if (powerConfigHint) {
+            powerConfigHint.textContent = isCurrent
+                ? 'Выберите DPS мгновенной мощности. При сохранении приложение проверит LAN-доступность и совместимость типа данных.'
+                : 'Выберите DPS накопленной энергии. При сохранении приложение проверит LAN-доступность и совместимость типа данных.';
+        }
+    };
+
     const renderConfigOptions = (summaryConfig) => {
-        if (!configPanel || !configForm || !totalPowerSelect || !visualizedCodesContainer) {
+        if (!configPanel || !configForm || !powerTypeSelect || !totalPowerSelect || !visualizedCodesContainer) {
             return;
         }
 
@@ -65,6 +80,7 @@ if (connectForm) {
         const visualizationOptions = Array.isArray(summaryConfig?.visualization_options) ? summaryConfig.visualization_options : [];
         const selectedVisualizedCodes = new Set(summaryConfig?.visualized_codes || []);
 
+        powerTypeSelect.value = summaryConfig?.power_type === 'current' ? 'current' : 'total';
         totalPowerSelect.innerHTML = '<option value="">Не выбран</option>';
         powerOptions.forEach((option) => {
             const node = document.createElement('option');
@@ -75,6 +91,7 @@ if (connectForm) {
             }
             totalPowerSelect.appendChild(node);
         });
+        updatePowerConfigState();
 
         visualizedCodesContainer.innerHTML = '<p class="hero-copy">Выберите коды для live-сводки устройства.</p>';
         const optionsList = document.createElement('div');
@@ -115,7 +132,8 @@ if (connectForm) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    total_power_dps_key: String(formData.get('total_power_dps_key') || '').trim() || null,
+                    total_power_dps_key: String(totalPowerSelect?.value || '').trim() || null,
+                    power_type: String(powerTypeSelect?.value || 'total').trim() || 'total',
                     visualized_codes: visualizedCodes,
                 }),
             });
@@ -132,6 +150,8 @@ if (connectForm) {
             submitButton.disabled = false;
         }
     });
+
+    powerTypeSelect?.addEventListener('change', updatePowerConfigState);
 
     connectForm.addEventListener('submit', async (event) => {
         event.preventDefault();

@@ -18,6 +18,7 @@ class TuyaDeviceConfig:
     total_power_dps_key: str
     total_power_scale: float
     visualized_codes: tuple[str, ...]
+    power_type: str = "total"
 
 
 @dataclass(slots=True)
