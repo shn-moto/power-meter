@@ -2,22 +2,22 @@
   "profile_version": 1,
   "device": {
     "device_id": "bfa4267dfd42295d56x7zf",
-    "name": "Датчик T & H",
+    "name": "Датчик температуры и влажности",
     "room": "",
     "device_kind": "sensor",
     "is_energy_meter": false,
     "category_code": "wsdcg",
     "product_id": "7akwzwfwhukkdsib",
-    "product_name": "T & H Sensor",
+    "product_name": "Датчик температуры и влажности",
     "icon": "smart/icon/ay1525749833414yotNt/60d869bb20b0e1b0f0347a9fd8781a3c.png"
   },
   "connection": {
     "local_key": "XwuF<2ue`9H8~i![",
     "local_ip": "",
     "protocol_version": 3.3,
-    "ip_source": "cloud",
+    "ip_source": "cloud-status",
     "last_verified_at": null,
-    "discovery_required": true
+    "discovery_required": false
   },
   "summary": {
     "default_power_mode": "current",
@@ -54,7 +54,7 @@
     {
       "dp_id": "2",
       "code": "humidity_value",
-      "name": "Текущая влажность",
+      "name": "Влажность",
       "access": "ro",
       "source_group": "status",
       "value_type": "value",
