@@ -45,7 +45,7 @@ from app.tuya_service import build_sample, request_dps_by_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260504-05"
+templates.env.globals["static_asset_version"] = "20260505-01"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -496,54 +496,90 @@ def _format_metric_number(value: float, digits: int = 3) -> str:
     return f"{value:.{digits}f}".rstrip("0").rstrip(".")
 
 
-def _decode_phase_packet(raw_value: Any) -> str:
+def _decode_phase_packet_parts(raw_value: Any) -> list[dict[str, str]]:
+    parts = [
+        {"short_label": "I", "label": "Ток", "unit": "А", "value": "--"},
+        {"short_label": "U", "label": "Напряжение", "unit": "В", "value": "--"},
+        {"short_label": "P", "label": "Мощность", "unit": "кВт", "value": "--"},
+        {"short_label": "L", "label": "Утечка", "unit": "А", "value": "--"},
+    ]
     if not isinstance(raw_value, str) or not raw_value:
-        return "Нет данных"
+        return parts
 
     try:
         payload = base64.b64decode(raw_value)
     except Exception:
-        return str(raw_value)
+        return parts
 
     if len(payload) not in {8, 10}:
-        return str(raw_value)
+        return parts
 
     voltage_v = int.from_bytes(payload[0:2], byteorder="big", signed=False) / 10.0
     current_a = int.from_bytes(payload[2:5], byteorder="big", signed=False) / 1000.0
     power_kw = int.from_bytes(payload[5:8], byteorder="big", signed=False) / 1000.0
-    parts = [
-        f"U {_format_metric_number(voltage_v, 1)} В",
-        f"I {_format_metric_number(current_a)} А",
-        f"P {_format_metric_number(power_kw)} кВт",
-    ]
+    parts[0]["value"] = _format_metric_number(current_a)
+    parts[1]["value"] = _format_metric_number(voltage_v, 1)
+    parts[2]["value"] = _format_metric_number(power_kw)
     if len(payload) == 10:
         leakage_a = int.from_bytes(payload[8:10], byteorder="big", signed=False) / 1000.0
-        parts.append(f"Leak {_format_metric_number(leakage_a)} А")
-    return " · ".join(parts)
+        parts[3]["value"] = _format_metric_number(leakage_a)
+    return parts
+
+
+def _build_metric_tooltip(capability: dict[str, Any] | None, parts: list[dict[str, str]] | None = None) -> str:
+    capability_name = str((capability or {}).get("capability_name") or "").strip() or "Параметр"
+    value_type = str((capability or {}).get("value_type") or "").strip().lower()
+    values_json = (capability or {}).get("values_json") or {}
+    unit = str(values_json.get("unit") or "").strip()
+
+    if value_type == "raw" and unit == "phase_packet":
+        type_label = "raw phase packet"
+    elif value_type in {"value", "integer"}:
+        type_label = "число"
+    elif value_type == "boolean":
+        type_label = "логический"
+    else:
+        type_label = value_type or "не указан"
+
+    lines = [capability_name, f"Тип: {type_label}"]
+    if parts:
+        lines.extend(f"{part['label']} ({part['short_label']}): {part['unit']}" for part in parts)
+    elif unit:
+        lines.append(f"Единицы: {unit}")
+    return "\n".join(lines)
 
 
 def _build_live_metrics(
     visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
     raw_dps: dict[str, Any],
-) -> list[dict[str, str]]:
-    metrics: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    metrics: list[dict[str, Any]] = []
     for code in visualized_codes:
         key = str(code)
         capability = _get_capability_by_dp_id(capabilities, key)
         raw_value = raw_dps.get(key)
         capability_code = str((capability or {}).get("capability_code") or "")
-        if capability_code in {"phase_a", "phase_b", "phase_c"}:
-            rendered_value = _decode_phase_packet(raw_value)
-        else:
-            rendered_value = _format_dps_value(capability, raw_value)
-
-        label = str((capability or {}).get("capability_name") or capability_code or f"DPS {key}")
-        metrics.append({
+        tooltip = _build_metric_tooltip(capability)
+        metric: dict[str, Any] = {
             "code": key,
-            "label": label,
-            "value": rendered_value,
-        })
+            "label": str((capability or {}).get("capability_name") or capability_code or f"DPS {key}"),
+            "display_kind": "text",
+            "tooltip": tooltip,
+        }
+        if capability_code in {"phase_a", "phase_b", "phase_c"}:
+            parts = _decode_phase_packet_parts(raw_value)
+            metric.update(
+                {
+                    "display_kind": "phase_packet",
+                    "parts": parts,
+                    "value": " ".join(f"{part['short_label']} {part['value']} {part['unit']}" for part in parts if part["value"] != "--") or "Нет данных",
+                    "tooltip": _build_metric_tooltip(capability, parts),
+                }
+            )
+        else:
+            metric["value"] = _format_dps_value(capability, raw_value)
+        metrics.append(metric)
     return metrics
 
 

@@ -201,12 +201,54 @@ if (page) {
         node.classList.add('reading-status', `is-${status || 'error'}`);
     };
 
+    const createPhasePacketMetric = (metric) => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'raw-phase-chip';
+        wrapper.tabIndex = 0;
+        if (metric.tooltip) {
+            wrapper.dataset.tooltip = metric.tooltip;
+            wrapper.setAttribute('aria-label', metric.tooltip);
+        }
+
+        const parts = Array.isArray(metric.parts) ? metric.parts : [];
+        parts.forEach((part) => {
+            const key = document.createElement('span');
+            key.className = 'raw-phase-chip-key';
+            key.textContent = part.short_label || '?';
+
+            const value = document.createElement('span');
+            value.className = 'raw-phase-chip-value';
+            value.textContent = part.value || '--';
+
+            wrapper.append(key, value);
+        });
+
+        return wrapper;
+    };
+
+    const createMetricValueNode = (metric) => {
+        if (metric && metric.display_kind === 'phase_packet') {
+            return createPhasePacketMetric(metric);
+        }
+
+        const text = document.createElement('span');
+        text.textContent = metric?.value || '--';
+        if (metric?.tooltip) {
+            text.title = metric.tooltip;
+        }
+        return text;
+    };
+
     const createSummaryRow = (label, value, status = null) => {
         const item = document.createElement('div');
         const term = document.createElement('dt');
         const description = document.createElement('dd');
         term.textContent = label;
-        description.textContent = value || '--';
+        if (value instanceof Node) {
+            description.appendChild(value);
+        } else {
+            description.textContent = value || '--';
+        }
         if (status) {
             applyReadingStatus(description, status);
         }
@@ -220,7 +262,7 @@ if (page) {
         const metricRows = Array.isArray(summaryState.metrics) ? summaryState.metrics : [];
         if (metricRows.length) {
             metricRows.forEach((metric) => {
-                summary.appendChild(createSummaryRow(metric.label || `DPS ${metric.code}`, metric.value || '--'));
+                summary.appendChild(createSummaryRow(metric.label || `DPS ${metric.code}`, createMetricValueNode(metric)));
             });
         } else {
             summary.appendChild(createSummaryRow('Поля визуализации', 'Не выбраны'));
