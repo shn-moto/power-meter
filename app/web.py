@@ -1487,6 +1487,7 @@ def device_live_api(request: Request, device_id: str) -> JSONResponse:
     device = get_device_row(config, device_id)
     payload = _build_device_live_payload(
         config,
+        device_id,
         capabilities,
         tuple(str(code) for code in ((device or {}).get("visualized_codes") or [])),
         request.app.state.live_samples.get(device_id),
