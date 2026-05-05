@@ -27,6 +27,7 @@ from app.storage import (
     DeviceSample,
     apply_migrations,
     close_connection_pool,
+    create_user,
     delete_managed_device,
     get_control_device,
     get_device_capabilities,
