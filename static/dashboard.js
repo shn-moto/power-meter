@@ -2,7 +2,6 @@ const dashboardPage = document.querySelector('[data-dashboard]');
 
 if (dashboardPage) {
     const DASHBOARD_REFRESH_INTERVAL_MS = 1000;
-    const CLOCK_REFRESH_INTERVAL_MS = 1000;
     const currentPower = dashboardPage.querySelector('[data-summary-current-power]');
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
@@ -12,7 +11,6 @@ if (dashboardPage) {
     const sensorGrid = document.querySelector('[data-sensor-grid]');
     let isDashboardLoading = false;
     let dashboardTimerId = null;
-    let clockTimerId = null;
     let dashboardAbortController = null;
     let dashboardPollingStopped = false;
 
@@ -26,40 +24,6 @@ if (dashboardPage) {
     const applyReadingStatus = (node, status) => {
         node.classList.remove('is-ok', 'is-warning', 'is-error');
         node.classList.add('reading-status', `is-${status || 'error'}`);
-    };
-
-    const formatRelativeAgeLabel = (ageSeconds, fallback) => {
-        if (!Number.isFinite(ageSeconds)) {
-            return fallback || 'Пока нет данных';
-        }
-
-        const rounded = Math.max(0, Math.floor(ageSeconds));
-        if (rounded <= 0) {
-            return 'только что';
-        }
-        if (rounded < 60) {
-            return `${rounded} сек назад`;
-        }
-
-        const minutes = Math.floor(rounded / 60);
-        const seconds = rounded % 60;
-        if (minutes < 60) {
-            return seconds > 0
-                ? `${minutes} мин ${seconds} сек назад`
-                : `${minutes} мин назад`;
-        }
-
-        const hours = Math.floor(minutes / 60);
-        const remainMinutes = minutes % 60;
-        return remainMinutes > 0
-            ? `${hours} ч ${remainMinutes} мин назад`
-            : `${hours} ч назад`;
-    };
-
-    const buildRelativeTimeAttrs = (ageSeconds, fallback) => {
-        const fallbackValue = escapeHtml(fallback || 'Пока нет данных');
-        const ageValue = Number.isFinite(ageSeconds) ? String(Math.max(0, Math.floor(ageSeconds))) : '';
-        return `data-relative-age-seconds="${escapeHtml(ageValue)}" data-relative-age-fallback="${fallbackValue}" title="${fallbackValue}"`;
     };
 
     const renderDeviceMedia = (device) => {
@@ -89,7 +53,7 @@ if (dashboardPage) {
                 </div>
                 <div>
                     <dt>Последний замер</dt>
-                    <dd class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen ${buildRelativeTimeAttrs(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных')}>${escapeHtml(formatRelativeAgeLabel(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных'))}</dd>
+                    <dd class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen title="${escapeHtml(device.last_seen || 'Пока нет данных')}">${escapeHtml(device.last_seen || 'Пока нет данных')}</dd>
                 </div>
             </dl>
         </div>
@@ -117,7 +81,7 @@ if (dashboardPage) {
         </div>
         <div class="registry-meta sensor-summary-meta">
             <span data-sensor-connection>${escapeHtml(device.connection_label || 'Облачное устройство')}</span>
-            <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen ${buildRelativeTimeAttrs(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных')}>${escapeHtml(formatRelativeAgeLabel(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных'))}</span>
+            <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen title="${escapeHtml(device.last_seen || 'Пока нет данных')}">${escapeHtml(device.last_seen || 'Пока нет данных')}</span>
         </div>
     `;
 
@@ -186,18 +150,6 @@ if (dashboardPage) {
         syncSensorDevices(payload.sensor_devices || []);
     };
 
-    const tickRelativeAgeNodes = () => {
-        dashboardPage.querySelectorAll('[data-relative-age-seconds]').forEach((node) => {
-            const currentAge = Number(node.dataset.relativeAgeSeconds);
-            if (!Number.isFinite(currentAge)) {
-                return;
-            }
-            const nextAge = currentAge + 1;
-            node.dataset.relativeAgeSeconds = String(nextAge);
-            node.textContent = formatRelativeAgeLabel(nextAge, node.dataset.relativeAgeFallback || 'Пока нет данных');
-        });
-    };
-
     const clearDashboardTimer = () => {
         if (dashboardTimerId) {
             clearInterval(dashboardTimerId);
@@ -205,17 +157,9 @@ if (dashboardPage) {
         }
     };
 
-    const clearClockTimer = () => {
-        if (clockTimerId) {
-            clearInterval(clockTimerId);
-            clockTimerId = null;
-        }
-    };
-
     const stopDashboardPolling = () => {
         dashboardPollingStopped = true;
         clearDashboardTimer();
-        clearClockTimer();
         dashboardAbortController?.abort();
     };
 
@@ -230,14 +174,6 @@ if (dashboardPage) {
                     loadDashboard();
                 }
             }, DASHBOARD_REFRESH_INTERVAL_MS);
-        }
-
-        if (!clockTimerId) {
-            clockTimerId = setInterval(() => {
-                if (!document.hidden) {
-                    tickRelativeAgeNodes();
-                }
-            }, CLOCK_REFRESH_INTERVAL_MS);
         }
     };
 
@@ -273,7 +209,6 @@ if (dashboardPage) {
         }
         if (document.hidden) {
             clearDashboardTimer();
-            clearClockTimer();
             dashboardAbortController?.abort();
             return;
         }
