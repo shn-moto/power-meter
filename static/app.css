@@ -1000,9 +1000,10 @@ button:hover {
     width: 48px;
     height: 28px;
     border-radius: 0;
-    background: rgba(127, 208, 255, 0.14);
-    border: 1px solid rgba(127, 208, 255, 0.3);
-    transition: background 0.2s ease;
+    background: rgba(168, 57, 57, 0.24);
+    border: 1px solid rgba(210, 92, 92, 0.42);
+    box-shadow: inset 0 0 12px rgba(120, 18, 18, 0.18);
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .switch-slider::after {
@@ -1018,7 +1019,9 @@ button:hover {
 }
 
 .switch-control input:checked + .switch-slider {
-    background: rgba(127, 208, 255, 0.25);
+    background: rgba(47, 125, 50, 0.28);
+    border-color: rgba(108, 201, 112, 0.48);
+    box-shadow: inset 0 0 12px rgba(32, 96, 35, 0.22);
 }
 
 .switch-control input:checked + .switch-slider::after {
@@ -1027,6 +1030,12 @@ button:hover {
 
 .switch-caption {
     font-weight: 700;
+    color: #d76d6d;
+    transition: color 0.2s ease;
+}
+
+.switch-control input:checked ~ .switch-caption {
+    color: #7ed68a;
 }
 
 .timer-dialog {
