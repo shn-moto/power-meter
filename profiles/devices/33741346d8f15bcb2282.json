@@ -2,7 +2,7 @@
   "profile_version": 1,
   "device": {
     "device_id": "33741346d8f15bcb2282",
-    "name": "Розетка",
+    "name": "Холодильник и микроволновка",
     "room": "",
     "device_kind": "socket",
     "is_energy_meter": true,
@@ -115,6 +115,29 @@
       "display_label": "Voltage",
       "display_order": 40,
       "poll_priority": 40,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "1",
+      "code": "switch",
+      "name": "Power Switch",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Питание",
+      "display_order": 100,
+      "poll_priority": 100,
       "lan": {
         "read_strategy": "status",
         "batch_group": null,
