@@ -556,14 +556,21 @@ p {
     display: grid;
     grid-template-columns: repeat(4, var(--raw-chip-key-width) var(--raw-chip-value-width));
     align-items: stretch;
-    border: 2px solid rgba(18, 18, 18, 0.92);
-    background: #f8ea08;
+    gap: 0;
+    padding: 4px;
+    border: 1px solid rgba(113, 151, 188, 0.32);
+    background:
+        linear-gradient(180deg, rgba(24, 31, 40, 0.98), rgba(9, 13, 19, 0.98)),
+        linear-gradient(90deg, rgba(127, 208, 255, 0.05), rgba(127, 208, 255, 0));
     color: #111;
     cursor: help;
     width: calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
     flex: 0 0 calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
     overflow: visible;
-    box-shadow: inset 0 0 0 1px rgba(255, 247, 161, 0.3);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.42),
+        0 8px 18px rgba(0, 0, 0, 0.24);
 }
 
 .raw-phase-chip-key,
@@ -573,22 +580,37 @@ p {
     justify-content: center;
     min-height: 42px;
     padding: 0 8px;
-    border-right: 2px solid rgba(18, 18, 18, 0.92);
-    font-family: "Consolas", "Lucida Console", monospace;
     line-height: 1;
+    min-width: 0;
 }
 
 .raw-phase-chip-key {
-    background: #878787;
-    color: #050505;
-    font-size: 1.05rem;
+    background:
+        linear-gradient(180deg, rgba(55, 67, 81, 0.94), rgba(29, 38, 48, 0.96));
+    border-right: 1px solid rgba(104, 133, 163, 0.2);
+    color: #8fa8c0;
+    font-family: "Bahnschrift", "Segoe UI", sans-serif;
+    font-size: 0.76rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
 }
 
 .raw-phase-chip-value {
-    background: #ffea00;
-    color: #151515;
+    background:
+        linear-gradient(180deg, rgba(8, 24, 31, 0.97), rgba(5, 12, 18, 0.99)),
+        repeating-linear-gradient(180deg, rgba(139, 236, 255, 0.07) 0 1px, transparent 1px 4px);
+    border-right: 4px solid rgba(6, 11, 16, 0.98);
+    color: #98eeff;
+    font-family: "Consolas", "Lucida Console", monospace;
     font-size: 1rem;
-    min-width: 0;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(127, 208, 255, 0.22);
+    box-shadow:
+        inset 0 0 0 1px rgba(120, 213, 255, 0.14),
+        inset 0 0 16px rgba(45, 120, 181, 0.18);
 }
 
 .raw-phase-chip-key:last-child,
@@ -645,6 +667,16 @@ p {
     outline-offset: 2px;
 }
 
+.raw-phase-chip:hover,
+.raw-phase-chip:focus-visible {
+    border-color: rgba(127, 208, 255, 0.42);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.42),
+        0 0 0 1px rgba(127, 208, 255, 0.08),
+        0 10px 22px rgba(0, 0, 0, 0.3);
+}
+
 @media (max-width: 980px) {
     .raw-phase-chip {
         --raw-chip-key-width: 24px;
@@ -655,6 +687,14 @@ p {
     .raw-phase-chip-value {
         min-height: 36px;
         padding: 0 6px;
+    }
+
+    .raw-phase-chip-key {
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+    }
+
+    .raw-phase-chip-value {
         font-size: 0.88rem;
     }
 }
