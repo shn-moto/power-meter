@@ -168,6 +168,75 @@
         "batch_group": null,
         "required": true
       }
+    },
+    {
+      "dp_id": "107",
+      "code": "temp_a",
+      "name": "Температура фазы A",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "℃",
+      "scale_digits": 1,
+      "step": 1,
+      "min": -500,
+      "max": 990,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Температура A",
+      "display_order": 50,
+      "poll_priority": 50,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "108",
+      "code": "temp_b",
+      "name": "Температура фазы B",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "℃",
+      "scale_digits": 1,
+      "step": 1,
+      "min": -500,
+      "max": 990,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Температура B",
+      "display_order": 60,
+      "poll_priority": 60,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "109",
+      "code": "temp_c",
+      "name": "Температура фазы C",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "℃",
+      "scale_digits": 1,
+      "step": 1,
+      "min": -500,
+      "max": 990,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Температура C",
+      "display_order": 70,
+      "poll_priority": 70,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
     }
   ],
   "controls": [],
