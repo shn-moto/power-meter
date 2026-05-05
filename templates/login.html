@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="auth-layout">
+<section class="auth-layout auth-layout-single">
     <article class="connect-card auth-card">
         <div class="section-heading section-heading-stack">
             <div>
@@ -34,16 +34,6 @@
         {% if request.state.is_local_request %}
         <p class="hero-copy auth-inline-note">Новый пользователь создается только из локальной сети. <a class="topbar-link" href="/register">Открыть регистрацию</a>.</p>
         {% endif %}
-    </article>
-
-    <article class="detail-card auth-note-card">
-        <p class="eyebrow">Учетные записи</p>
-        <h2>Что изменилось</h2>
-        <div class="auth-note-list">
-            <p>Из локальной сети приложение открывается без логина, но через внешний домен вход обязателен.</p>
-            <p>Пароли хранятся только в виде bcrypt-хэшей.</p>
-            <p>Страница регистрации доступна только с локальных адресов: сначала создайте пользователя там, затем входите извне.</p>
-        </div>
     </article>
 </section>
 {% endblock %}

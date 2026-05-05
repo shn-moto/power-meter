@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi import Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -218,6 +219,34 @@ def _is_local_network_request(request: Request) -> bool:
 
 def _is_public_path(path: str) -> bool:
     return path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PATH_PREFIXES)
+
+
+class AuthGateMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.state.is_local_request = _is_local_network_request(request)
+        request.state.current_user = str(request.session.get("username") or "").strip().lower() or None
+
+        path = request.url.path
+        if path.startswith("/register") and not request.state.is_local_request:
+            return HTMLResponse("Регистрация доступна только из локальной сети", status_code=403)
+
+        if request.state.is_local_request:
+            return await call_next(request)
+
+        if _is_public_path(path) or (path.startswith("/register") and request.state.is_local_request):
+            return await call_next(request)
+
+        if request.state.current_user:
+            return await call_next(request)
+
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+
+        login_url = "/login"
+        next_path = _current_request_path(request)
+        if next_path and next_path != "/":
+            login_url = f"/login?{urlencode({'next': next_path})}"
+        return RedirectResponse(url=login_url, status_code=303)
 
 
 def _build_auth_template_context(
@@ -1360,6 +1389,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Учет электроэнергии", lifespan=lifespan)
+app.add_middleware(AuthGateMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=load_session_secret(),
@@ -1367,35 +1397,6 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 14,
 )
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-
-
-@app.middleware("http")
-async def authentication_guard(request: Request, call_next):
-    request.state.is_local_request = _is_local_network_request(request)
-    session = request.scope.get("session") or {}
-    request.state.current_user = str(session.get("username") or "").strip().lower() or None
-
-    path = request.url.path
-    if path.startswith("/register") and not request.state.is_local_request:
-        return HTMLResponse("Регистрация доступна только из локальной сети", status_code=403)
-
-    if request.state.is_local_request:
-        return await call_next(request)
-
-    if _is_public_path(path) or (path.startswith("/register") and request.state.is_local_request):
-        return await call_next(request)
-
-    if request.state.current_user:
-        return await call_next(request)
-
-    if path.startswith("/api/"):
-        return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
-
-    login_url = "/login"
-    next_path = _current_request_path(request)
-    if next_path and next_path != "/":
-        login_url = f"/login?{urlencode({'next': next_path})}"
-    return RedirectResponse(url=login_url, status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)

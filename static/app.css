@@ -249,6 +249,11 @@ p {
     gap: 20px;
 }
 
+.auth-layout-single {
+    grid-template-columns: minmax(320px, 460px);
+    justify-content: center;
+}
+
 .connect-card,
 .registry-item {
     background: var(--surface);
