@@ -1,0 +1,106 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bfa4267dfd42295d56x7zf",
+    "name": "Датчик T & H",
+    "room": "",
+    "device_kind": "sensor",
+    "is_energy_meter": false,
+    "category_code": "wsdcg",
+    "product_id": "7akwzwfwhukkdsib",
+    "product_name": "T & H Sensor",
+    "icon": "smart/icon/ay1525749833414yotNt/60d869bb20b0e1b0f0347a9fd8781a3c.png"
+  },
+  "connection": {
+    "local_key": "XwuF<2ue`9H8~i![",
+    "local_ip": "",
+    "protocol_version": 3.3,
+    "ip_source": "cloud",
+    "last_verified_at": null,
+    "discovery_required": true
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": "1",
+    "default_visualized_codes": [
+      "1",
+      "2"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "1",
+      "code": "va_temperature",
+      "name": "Температура",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "℃",
+      "scale_digits": 1,
+      "step": 1,
+      "min": -200,
+      "max": 600,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Температура",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "2",
+      "code": "humidity_value",
+      "name": "Текущая влажность",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "%",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 100,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Влажность",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "9",
+      "code": "temp_unit_convert",
+      "name": "Температурная шкала",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Enum",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "enum_values": [
+        "c",
+        "f"
+      ],
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Единицы температуры",
+      "display_order": 90,
+      "poll_priority": 90,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": []
+}
