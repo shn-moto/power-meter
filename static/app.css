@@ -552,6 +552,7 @@ p {
 .raw-phase-chip {
     --raw-chip-key-width: 28px;
     --raw-chip-value-width: 56px;
+    --raw-chip-frame-width: 10px;
     position: relative;
     display: grid;
     grid-template-columns: repeat(4, var(--raw-chip-key-width) var(--raw-chip-value-width));
@@ -564,8 +565,8 @@ p {
         linear-gradient(90deg, rgba(127, 208, 255, 0.05), rgba(127, 208, 255, 0));
     color: #111;
     cursor: help;
-    width: calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
-    flex: 0 0 calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)));
+    width: calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)) + var(--raw-chip-frame-width));
+    flex: 0 0 calc(4 * (var(--raw-chip-key-width) + var(--raw-chip-value-width)) + var(--raw-chip-frame-width));
     overflow: visible;
     box-shadow:
         inset 0 0 0 1px rgba(255, 255, 255, 0.03),
