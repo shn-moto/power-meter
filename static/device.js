@@ -488,6 +488,7 @@ if (page) {
     const renderChart = (series, chartConfig) => {
         const values = series.map((item) => Number(item.chart_value ?? 0));
         const maxValue = Math.max(...values, 0);
+        const useFullBucketBars = chartConfig?.bucket === 'hour' && chartConfig?.period === DAY_PERIOD;
         if (!series.length || maxValue <= 0) {
             chartEmpty.hidden = false;
             chartMeta.textContent = 'Потребление по интервалам';
@@ -557,7 +558,9 @@ if (page) {
             series: [
                 {
                     type: 'bar',
-                        barWidth: '42%',
+                    barWidth: useFullBucketBars ? '100%' : '42%',
+                    barCategoryGap: useFullBucketBars ? '0%' : '30%',
+                    barGap: '0%',
                     itemStyle: {
                         color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
                                 { offset: 0, color: '#7fd0ff' },
