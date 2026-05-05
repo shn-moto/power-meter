@@ -49,11 +49,6 @@ if (page) {
         year: 'numeric',
     });
 
-    const hourAxisFormatter = new Intl.DateTimeFormat('ru-RU', {
-        hour: '2-digit',
-        minute: '2-digit',
-    });
-
     const formatValue = (value, suffix = '') => {
         if (value === null || value === undefined || Number.isNaN(value)) {
             return '--';
@@ -518,7 +513,12 @@ if (page) {
                 };
             })
             : [];
+        const chartWidth = Math.max(chart?.clientWidth || 0, 1);
+        const intervalChartStartMs = intervalBarData.length ? Number(intervalBarData[0].value[0]) : null;
         const intervalChartEndMs = intervalBarData.length ? Number(intervalBarData[intervalBarData.length - 1].value[1]) : null;
+        const intervalLabelStep = useIntervalHourBars
+            ? Math.max(1, Math.ceil(((intervalBarData.length + 1) * 36) / chartWidth))
+            : 1;
         const barGradient = new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: '#7fd0ff' },
             { offset: 1, color: '#2d78b5' },
@@ -573,7 +573,13 @@ if (page) {
                         if (intervalChartEndMs !== null && Number(value) >= intervalChartEndMs) {
                             return '';
                         }
-                        return hourAxisFormatter.format(new Date(Number(value)));
+                        if (intervalChartStartMs !== null) {
+                            const offset = Math.round((Number(value) - intervalChartStartMs) / HOUR_BUCKET_MS);
+                            if (offset > 0 && offset % intervalLabelStep !== 0) {
+                                return '';
+                            }
+                        }
+                        return String(new Date(Number(value)).getHours());
                     },
                 },
                 splitLine: { show: false },
