@@ -1371,7 +1371,8 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 @app.middleware("http")
 async def authentication_guard(request: Request, call_next):
     request.state.is_local_request = _is_local_network_request(request)
-    request.state.current_user = str(request.session.get("username") or "").strip().lower() or None
+    session = request.scope.get("session") or {}
+    request.state.current_user = str(session.get("username") or "").strip().lower() or None
 
     path = request.url.path
     if path.startswith("/register") and not request.state.is_local_request:
