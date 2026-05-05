@@ -1072,6 +1072,22 @@ def get_latest_sample(config: AppConfig, device_id: str) -> dict[str, Any] | Non
             return cursor.fetchone()
 
 
+def get_recent_raw_dps_samples(config: AppConfig, device_id: str, limit: int = 12) -> list[dict[str, Any]]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT raw_dps
+                FROM samples
+                WHERE device_id = %s
+                ORDER BY captured_at DESC
+                LIMIT %s
+                """,
+                (device_id, max(int(limit or 1), 1)),
+            )
+            return cursor.fetchall()
+
+
 def _bucket_start(dt: datetime, bucket: str) -> datetime:
     if bucket == "hour":
         return dt.replace(minute=0, second=0, microsecond=0)

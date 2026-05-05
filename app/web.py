@@ -29,6 +29,7 @@ from app.storage import (
     get_dashboard_summary,
     get_device_row,
     get_device_rows,
+    get_recent_raw_dps_samples,
     get_device_stats,
     get_latest_sample,
     get_sample_age_seconds,
@@ -722,6 +723,37 @@ def _apply_live_stats(config: AppConfig, stats: dict, live_sample: DeviceSample 
     return stats
 
 
+def _hydrate_recent_visualized_dps(
+    config: AppConfig,
+    device_id: str,
+    raw_dps: dict[str, Any],
+    visualized_codes: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    required_keys = [str(code) for code in visualized_codes if str(code)]
+    if not required_keys:
+        return dict(raw_dps or {})
+
+    merged = dict(raw_dps or {})
+    missing = {key for key in required_keys if merged.get(key) in (None, "")}
+    if not missing:
+        return merged
+
+    for row in get_recent_raw_dps_samples(config, device_id, limit=16):
+        candidate = row.get("raw_dps") if isinstance(row, dict) else None
+        if not isinstance(candidate, dict):
+            continue
+        for key in list(missing):
+            value = candidate.get(key)
+            if value in (None, ""):
+                continue
+            merged[key] = value
+            missing.discard(key)
+        if not missing:
+            break
+
+    return merged
+
+
 def _get_cached_device_capabilities(request: Request, config: AppConfig, device_id: str) -> list[dict[str, Any]]:
     cache: dict[str, list[dict[str, Any]]] = request.app.state.device_capabilities_cache
     capabilities = cache.get(device_id)
@@ -733,6 +765,7 @@ def _get_cached_device_capabilities(request: Request, config: AppConfig, device_
 
 def _build_device_live_payload(
     config: AppConfig,
+    device_id: str,
     capabilities: list[dict[str, Any]],
     visualized_codes: list[str] | tuple[str, ...],
     live_sample: DeviceSample | None,
@@ -742,7 +775,7 @@ def _build_device_live_payload(
             "latest_sample": _format_live_timestamp(config, live_sample.captured_at),
             "latest_sample_age_seconds": get_sample_age_seconds(live_sample.captured_at, datetime.now(_get_timezone(config))),
             "latest_sample_status": get_sample_status(live_sample.captured_at, datetime.now(_get_timezone(config))),
-            "latest_raw_dps": live_sample.raw_dps,
+            "latest_raw_dps": _hydrate_recent_visualized_dps(config, device_id, live_sample.raw_dps, visualized_codes),
             "latest_power_w": round(live_sample.power_w, 1),
         }
     else:
@@ -753,6 +786,13 @@ def _build_device_live_payload(
             "latest_raw_dps": {},
             "latest_power_w": None,
         }
+
+    summary["latest_raw_dps"] = _hydrate_recent_visualized_dps(
+        config,
+        device_id,
+        summary.get("latest_raw_dps") or {},
+        visualized_codes,
+    )
 
     _augment_current_summary(summary, capabilities)
 
@@ -1050,6 +1090,12 @@ def _build_device_stats_payload(
     if not device:
         return None
     stats = _apply_live_stats(config, stats, live_sample)
+    stats["summary"]["latest_raw_dps"] = _hydrate_recent_visualized_dps(
+        config,
+        device_id,
+        stats["summary"].get("latest_raw_dps") or {},
+        device.get("visualized_codes") or [],
+    )
     _augment_current_summary(stats["summary"], capabilities)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
     stats["live_metrics"] = _build_live_metrics(device.get("visualized_codes") or [], capabilities, stats["summary"]["latest_raw_dps"])
