@@ -54,7 +54,7 @@ from app.tuya_service import build_sample, fetch_status, request_dps_by_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260506-01"
+templates.env.globals["static_asset_version"] = "20260506-02"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
