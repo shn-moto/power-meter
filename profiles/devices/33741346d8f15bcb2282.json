@@ -3,7 +3,7 @@
   "device": {
     "device_id": "33741346d8f15bcb2282",
     "name": "Холодильник и микроволновка",
-    "room": "",
+    "room": "Кухня",
     "device_kind": "socket",
     "is_energy_meter": true,
     "category_code": "",

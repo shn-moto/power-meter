@@ -3,7 +3,7 @@
   "device": {
     "device_id": "bfa4267dfd42295d56x7zf",
     "name": "Датчик температуры и влажности",
-    "room": "",
+    "room": "Детская",
     "device_kind": "sensor",
     "is_energy_meter": false,
     "category_code": "wsdcg",

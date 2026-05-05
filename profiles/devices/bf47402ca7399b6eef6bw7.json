@@ -3,7 +3,7 @@
   "device": {
     "device_id": "bf47402ca7399b6eef6bw7",
     "name": "Электроплита",
-    "room": "",
+    "room": "Кухня",
     "device_kind": "breaker",
     "is_energy_meter": true,
     "category_code": "",
