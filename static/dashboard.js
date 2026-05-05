@@ -1,9 +1,8 @@
 const dashboardPage = document.querySelector('[data-dashboard]');
 
 if (dashboardPage) {
-    const LIVE_REFRESH_INTERVAL_MS = 1000;
-    const SUMMARY_REFRESH_INTERVAL_MS = 5000;
-    const SENSOR_REFRESH_INTERVAL_MS = 60000;
+    const DASHBOARD_REFRESH_INTERVAL_MS = 1000;
+    const CLOCK_REFRESH_INTERVAL_MS = 1000;
     const currentPower = dashboardPage.querySelector('[data-summary-current-power]');
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
@@ -11,8 +10,11 @@ if (dashboardPage) {
     const deviceGrid = document.querySelector('[data-device-grid]');
     const sensorPanel = document.querySelector('[data-sensor-panel]');
     const sensorGrid = document.querySelector('[data-sensor-grid]');
-    let isAggregateLoading = false;
-    let isLiveLoading = false;
+    let isDashboardLoading = false;
+    let dashboardTimerId = null;
+    let clockTimerId = null;
+    let dashboardAbortController = null;
+    let dashboardPollingStopped = false;
 
     const escapeHtml = (value) => String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -24,6 +26,40 @@ if (dashboardPage) {
     const applyReadingStatus = (node, status) => {
         node.classList.remove('is-ok', 'is-warning', 'is-error');
         node.classList.add('reading-status', `is-${status || 'error'}`);
+    };
+
+    const formatRelativeAgeLabel = (ageSeconds, fallback) => {
+        if (!Number.isFinite(ageSeconds)) {
+            return fallback || 'Пока нет данных';
+        }
+
+        const rounded = Math.max(0, Math.floor(ageSeconds));
+        if (rounded <= 0) {
+            return 'только что';
+        }
+        if (rounded < 60) {
+            return `${rounded} сек назад`;
+        }
+
+        const minutes = Math.floor(rounded / 60);
+        const seconds = rounded % 60;
+        if (minutes < 60) {
+            return seconds > 0
+                ? `${minutes} мин ${seconds} сек назад`
+                : `${minutes} мин назад`;
+        }
+
+        const hours = Math.floor(minutes / 60);
+        const remainMinutes = minutes % 60;
+        return remainMinutes > 0
+            ? `${hours} ч ${remainMinutes} мин назад`
+            : `${hours} ч назад`;
+    };
+
+    const buildRelativeTimeAttrs = (ageSeconds, fallback) => {
+        const fallbackValue = escapeHtml(fallback || 'Пока нет данных');
+        const ageValue = Number.isFinite(ageSeconds) ? String(Math.max(0, Math.floor(ageSeconds))) : '';
+        return `data-relative-age-seconds="${escapeHtml(ageValue)}" data-relative-age-fallback="${fallbackValue}" title="${fallbackValue}"`;
     };
 
     const renderDeviceMedia = (device) => {
@@ -53,7 +89,7 @@ if (dashboardPage) {
                 </div>
                 <div>
                     <dt>Последний замер</dt>
-                    <dd class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</dd>
+                    <dd class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen ${buildRelativeTimeAttrs(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных')}>${escapeHtml(formatRelativeAgeLabel(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных'))}</dd>
                 </div>
             </dl>
         </div>
@@ -81,19 +117,12 @@ if (dashboardPage) {
         </div>
         <div class="registry-meta sensor-summary-meta">
             <span data-sensor-connection>${escapeHtml(device.connection_label || 'Облачное устройство')}</span>
-            <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen>${escapeHtml(device.last_seen || 'Пока нет данных')}</span>
+            <span class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-sensor-last-seen ${buildRelativeTimeAttrs(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных')}>${escapeHtml(formatRelativeAgeLabel(device.last_seen_age_seconds, device.last_seen || 'Пока нет данных'))}</span>
         </div>
     `;
 
     const updateCard = (card, device) => {
         card.innerHTML = renderCardMarkup(device);
-    };
-
-    const updateAggregateCard = (card, device) => {
-        const monthEnergyNode = card.querySelector('[data-device-month-energy]');
-        if (monthEnergyNode) {
-            monthEnergyNode.textContent = `${device.month_energy_kwh} кВт·ч`;
-        }
     };
 
     const syncSensorDevices = (devices) => {
@@ -145,128 +174,115 @@ if (dashboardPage) {
             return;
         }
 
-        devices.forEach((device) => updateAggregateCard(existingCards.get(device.device_id), device));
+        devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
-    const applyLiveDevices = (devices) => {
-        const existingCards = new Map(
-            [...deviceGrid.querySelectorAll('[data-device-card]')].map((card) => [card.dataset.deviceId, card])
-        );
+    const applyDashboardPayload = (payload) => {
+        currentPower.textContent = `${payload.current_power_kw} кВт`;
+        monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
+        estimatedCost.textContent = `${payload.estimated_cost}`;
+        deviceCount.textContent = `${payload.device_count}`;
+        syncDevices(payload.devices || []);
+        syncSensorDevices(payload.sensor_devices || []);
+    };
 
-        devices.forEach((device) => {
-            const card = existingCards.get(device.device_id);
-            if (!card) {
+    const tickRelativeAgeNodes = () => {
+        dashboardPage.querySelectorAll('[data-relative-age-seconds]').forEach((node) => {
+            const currentAge = Number(node.dataset.relativeAgeSeconds);
+            if (!Number.isFinite(currentAge)) {
                 return;
             }
-
-            const currentPowerNode = card.querySelector('[data-device-current-power]');
-            const lastSeenNode = card.querySelector('[data-device-last-seen]');
-            if (currentPowerNode) {
-                currentPowerNode.textContent = `${device.current_power_kw} кВт`;
-            }
-            if (lastSeenNode) {
-                lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
-                applyReadingStatus(lastSeenNode, device.last_seen_status);
-            }
+            const nextAge = currentAge + 1;
+            node.dataset.relativeAgeSeconds = String(nextAge);
+            node.textContent = formatRelativeAgeLabel(nextAge, node.dataset.relativeAgeFallback || 'Пока нет данных');
         });
     };
 
-    const applyLiveSensorDevices = (devices) => {
-        if (!sensorGrid) {
-            return;
+    const clearDashboardTimer = () => {
+        if (dashboardTimerId) {
+            clearInterval(dashboardTimerId);
+            dashboardTimerId = null;
         }
-
-        const existingCards = new Map(
-            [...sensorGrid.querySelectorAll('[data-sensor-card]')].map((card) => [card.dataset.deviceId, card])
-        );
-
-        devices.forEach((device) => {
-            const card = existingCards.get(device.device_id);
-            if (!card) {
-                return;
-            }
-
-            const lastSeenNode = card.querySelector('[data-sensor-last-seen]');
-            const connectionNode = card.querySelector('[data-sensor-connection]');
-            const primaryNode = card.querySelector('[data-sensor-primary]');
-            const secondaryNode = card.querySelector('[data-sensor-secondary]');
-            if (lastSeenNode) {
-                lastSeenNode.textContent = device.last_seen || 'Пока нет данных';
-                applyReadingStatus(lastSeenNode, device.last_seen_status);
-            }
-            if (connectionNode && device.connection_label) {
-                connectionNode.textContent = device.connection_label || 'Облачное устройство';
-            }
-            if (primaryNode && device.primary_metric) {
-                primaryNode.textContent = device.primary_metric?.value || 'Нет данных';
-            }
-            if (secondaryNode && (device.secondary_metric || device.connection_label)) {
-                secondaryNode.textContent = device.secondary_metric?.value || device.connection_label || 'Нет данных';
-            }
-        });
     };
 
-    const loadSummary = async () => {
-        if (isAggregateLoading) {
+    const clearClockTimer = () => {
+        if (clockTimerId) {
+            clearInterval(clockTimerId);
+            clockTimerId = null;
+        }
+    };
+
+    const stopDashboardPolling = () => {
+        dashboardPollingStopped = true;
+        clearDashboardTimer();
+        clearClockTimer();
+        dashboardAbortController?.abort();
+    };
+
+    const ensureDashboardTimers = () => {
+        if (dashboardPollingStopped) {
             return;
         }
-        isAggregateLoading = true;
+
+        if (!dashboardTimerId) {
+            dashboardTimerId = setInterval(() => {
+                if (!document.hidden) {
+                    loadDashboard();
+                }
+            }, DASHBOARD_REFRESH_INTERVAL_MS);
+        }
+
+        if (!clockTimerId) {
+            clockTimerId = setInterval(() => {
+                if (!document.hidden) {
+                    tickRelativeAgeNodes();
+                }
+            }, CLOCK_REFRESH_INTERVAL_MS);
+        }
+    };
+
+    const loadDashboard = async () => {
+        if (isDashboardLoading || dashboardPollingStopped) {
+            return;
+        }
+        isDashboardLoading = true;
+        const controller = new AbortController();
+        dashboardAbortController = controller;
         try {
-            const response = await fetch('/api/summary', { cache: 'no-store' });
+            const response = await fetch('/api/summary', { cache: 'no-store', signal: controller.signal });
+            if (!response.ok) {
+                throw new Error(`Dashboard request failed: ${response.status}`);
+            }
             const payload = await response.json();
-            monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
-            estimatedCost.textContent = `${payload.estimated_cost}`;
-            syncDevices(payload.devices || []);
+            applyDashboardPayload(payload);
+        } catch (error) {
+            if (error?.name !== 'AbortError') {
+                // Preserve the last rendered dashboard state if a refresh fails.
+            }
         } finally {
-            isAggregateLoading = false;
+            if (dashboardAbortController === controller) {
+                dashboardAbortController = null;
+            }
+            isDashboardLoading = false;
         }
     };
 
-    const loadSensorSummary = async () => {
-        try {
-            const response = await fetch('/api/sensors/summary', { cache: 'no-store' });
-            const payload = await response.json();
-            syncSensorDevices(payload.sensor_devices || []);
-        } catch {
-            // Preserve the last rendered sensor state if a cloud refresh fails.
+    document.addEventListener('visibilitychange', () => {
+        if (dashboardPollingStopped) {
+            return;
         }
-    };
+        if (document.hidden) {
+            clearDashboardTimer();
+            clearClockTimer();
+            dashboardAbortController?.abort();
+            return;
+        }
+        loadDashboard();
+        ensureDashboardTimers();
+    });
 
-    const loadLiveSummary = async () => {
-        if (isLiveLoading) {
-            return;
-        }
-        isLiveLoading = true;
-        try {
-            const response = await fetch('/api/live-summary', { cache: 'no-store' });
-            const payload = await response.json();
-            currentPower.textContent = `${payload.current_power_kw} кВт`;
-            deviceCount.textContent = `${payload.device_count}`;
-            applyLiveDevices(payload.devices || []);
-            applyLiveSensorDevices(payload.sensor_devices || []);
-        } finally {
-            isLiveLoading = false;
-        }
-    };
+    window.addEventListener('pagehide', stopDashboardPolling);
 
-    loadSummary();
-    loadSensorSummary();
-    setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-        loadLiveSummary();
-    }, LIVE_REFRESH_INTERVAL_MS);
-    setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-        loadSummary();
-    }, SUMMARY_REFRESH_INTERVAL_MS);
-    setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-        loadSensorSummary();
-    }, SENSOR_REFRESH_INTERVAL_MS);
+    loadDashboard();
+    ensureDashboardTimers();
 }

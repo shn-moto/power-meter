@@ -35,6 +35,11 @@ if (page) {
     let pendingAggregateRequest = null;
     let latestAggregateRequestKey = null;
     let timerFunction = null;
+    let refreshTimerId = null;
+    let liveAbortController = null;
+    let aggregateAbortController = null;
+    let pagePollingStopped = false;
+    let lastAggregateRefreshAt = 0;
     const summaryState = {
         metrics: [],
         sampleCount: '--',
@@ -682,6 +687,7 @@ if (page) {
 
     const loadCurrentPeriod = () => {
         const request = getAggregateRequest();
+        lastAggregateRefreshAt = Date.now();
         return loadPeriod(request.period, request.start, request.end);
     };
 
@@ -701,14 +707,27 @@ if (page) {
             query.set('end', end);
         }
         try {
-            const response = await fetch(`/api/devices/${deviceId}/stats?${query.toString()}`, { cache: 'no-store' });
+            const controller = new AbortController();
+            aggregateAbortController = controller;
+            const response = await fetch(`/api/devices/${deviceId}/stats?${query.toString()}`, {
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`Device stats request failed: ${response.status}`);
+            }
             const payload = await response.json();
             if (requestKey !== latestAggregateRequestKey) {
                 return;
             }
             renderAggregateSummary(payload);
             renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });
+        } catch (error) {
+            if (error?.name !== 'AbortError') {
+                console.error(error);
+            }
         } finally {
+            aggregateAbortController = null;
             isAggregateLoading = false;
             updateDayNav();
             if (pendingAggregateRequest && pendingAggregateRequest.key !== requestKey) {
@@ -725,12 +744,65 @@ if (page) {
         }
         isLiveLoading = true;
         try {
-            const response = await fetch(`/api/devices/${deviceId}/live`, { cache: 'no-store' });
+            const controller = new AbortController();
+            liveAbortController = controller;
+            const response = await fetch(`/api/devices/${deviceId}/live`, {
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`Device live request failed: ${response.status}`);
+            }
             const payload = await response.json();
             renderLiveSummary(payload);
+        } catch (error) {
+            if (error?.name !== 'AbortError') {
+                console.error(error);
+            }
         } finally {
+            liveAbortController = null;
             isLiveLoading = false;
         }
+    };
+
+    const clearRefreshTimer = () => {
+        if (refreshTimerId) {
+            clearTimeout(refreshTimerId);
+            refreshTimerId = null;
+        }
+    };
+
+    const stopPagePolling = () => {
+        pagePollingStopped = true;
+        clearRefreshTimer();
+        liveAbortController?.abort();
+        aggregateAbortController?.abort();
+    };
+
+    const scheduleNextRefresh = (delay = LIVE_REFRESH_INTERVAL_MS) => {
+        if (pagePollingStopped) {
+            return;
+        }
+        clearRefreshTimer();
+        refreshTimerId = setTimeout(() => {
+            refreshTimerId = null;
+            if (document.hidden) {
+                scheduleNextRefresh(delay);
+                return;
+            }
+            refreshPage();
+        }, delay);
+    };
+
+    const refreshPage = () => {
+        if (pagePollingStopped) {
+            return;
+        }
+        loadLive();
+        if (shouldRefreshAggregate() && Date.now() - lastAggregateRefreshAt >= AGGREGATE_REFRESH_INTERVAL_MS) {
+            loadCurrentPeriod();
+        }
+        scheduleNextRefresh();
     };
 
     periodInputs.forEach((input) => {
@@ -813,9 +885,9 @@ if (page) {
         renderLiveSummary(initialPayload);
         renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
         updateDayNav();
+        lastAggregateRefreshAt = Date.now();
     } else {
         loadCurrentPeriod();
-        loadLive();
     }
     chartInstance?.on('click', (params) => {
         const timestamp = params?.data?.timestamp;
@@ -833,19 +905,22 @@ if (page) {
     window.addEventListener('resize', () => {
         chartInstance?.resize();
     });
-    setInterval(() => {
+
+    document.addEventListener('visibilitychange', () => {
+        if (pagePollingStopped) {
+            return;
+        }
         if (document.hidden) {
+            clearRefreshTimer();
+            liveAbortController?.abort();
+            aggregateAbortController?.abort();
             return;
         }
-        loadLive();
-    }, LIVE_REFRESH_INTERVAL_MS);
-    setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-        if (!shouldRefreshAggregate()) {
-            return;
-        }
-        loadCurrentPeriod();
-    }, AGGREGATE_REFRESH_INTERVAL_MS);
+        refreshPage();
+    });
+
+    window.addEventListener('pagehide', stopPagePolling);
+
+    loadLive();
+    scheduleNextRefresh();
 }

@@ -41,18 +41,19 @@ from app.storage import (
     sync_device_profiles_from_disk,
     update_device_summary_config,
 )
-from app.tuya_service import build_sample, request_dps_by_index
+from app.tuya_service import build_sample, fetch_status, request_dps_by_index
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260505-14"
+templates.env.globals["static_asset_version"] = "20260505-15"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
 SENSOR_CLOUD_STATUS_CACHE_SECONDS = 60.0
 SENSOR_CLOUD_OK_SECONDS = 90.0
 SENSOR_CLOUD_WARNING_SECONDS = 300.0
+SENSOR_CLOUD_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 
 TUYA_CATEGORY_LABELS = {
     "cz": "Розетка",
@@ -704,6 +705,16 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _normalize_json_field(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
 def _get_sensor_cloud_status_style(fetched_at: datetime | None) -> str:
     if fetched_at is None:
         return "error"
@@ -887,6 +898,14 @@ def _extract_cloud_status_result(payload: dict[str, Any] | None) -> list[dict[st
 
 
 def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[dict[str, Any]], datetime | None, str | None]:
+    cached_entry = SENSOR_CLOUD_STATUS_CACHE.get(device_id)
+    if cached_entry and (monotonic() - float(cached_entry.get("cached_at") or 0.0) <= SENSOR_CLOUD_STATUS_CACHE_SECONDS):
+        return (
+            list(cached_entry.get("status_items") or []),
+            cached_entry.get("fetched_at"),
+            cached_entry.get("source"),
+        )
+
     cloud_config = load_cloud_config(required=False)
     if cloud_config:
         try:
@@ -899,9 +918,23 @@ def _fetch_sensor_cloud_status(config: AppConfig, device_id: str) -> tuple[list[
             payload = cloud.cloudrequest(f"/v1.0/devices/{device_id}/status")
             status_items = _extract_cloud_status_result(payload)
             if status_items:
-                return status_items, datetime.now(timezone.utc), "Tuya Cloud"
+                fetched_at = datetime.now(timezone.utc)
+                SENSOR_CLOUD_STATUS_CACHE[device_id] = {
+                    "cached_at": monotonic(),
+                    "status_items": list(status_items),
+                    "fetched_at": fetched_at,
+                    "source": "Tuya Cloud",
+                }
+                return status_items, fetched_at, "Tuya Cloud"
         except Exception:
             pass
+
+    if cached_entry:
+        return (
+            list(cached_entry.get("status_items") or []),
+            cached_entry.get("fetched_at"),
+            cached_entry.get("source"),
+        )
 
     return [], None, None
 
@@ -975,6 +1008,68 @@ def _get_dashboard_sensor_payload(request: Request, config: AppConfig) -> dict[s
     return {"sensor_devices": sensor_devices}
 
 
+def _copy_dashboard_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **summary,
+        "devices": [dict(device) for device in summary.get("devices", [])],
+        "sensor_devices": [dict(device) for device in summary.get("sensor_devices", [])],
+    }
+
+
+def _apply_live_dashboard_overlay(request: Request, config: AppConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    live_payload = _build_dashboard_live_payload(request, config)
+    live_samples: dict[str, DeviceSample] = request.app.state.live_samples
+    now = datetime.now(_get_timezone(config))
+
+    payload["current_power_kw"] = live_payload.get("current_power_kw", payload.get("current_power_kw", 0.0))
+    payload["device_count"] = live_payload.get("device_count", payload.get("device_count", 0))
+
+    live_devices_by_id = {
+        str(device.get("device_id") or ""): device
+        for device in live_payload.get("devices", [])
+        if device.get("device_id")
+    }
+    for device in payload.get("devices", []):
+        live_device = live_devices_by_id.get(str(device.get("device_id") or ""))
+        if not live_device:
+            continue
+        device["current_power_kw"] = live_device.get("current_power_kw", device.get("current_power_kw"))
+        device["last_seen"] = live_device.get("last_seen", device.get("last_seen"))
+        device["last_seen_status"] = live_device.get("last_seen_status", device.get("last_seen_status"))
+
+    for sensor in payload.get("sensor_devices", []):
+        device_id = str(sensor.get("device_id") or "")
+        live_sample = live_samples.get(device_id)
+        if not live_sample:
+            continue
+        sensor["raw_dps"] = live_sample.raw_dps
+        sensor["last_seen"] = _format_live_timestamp(config, live_sample.captured_at)
+        sensor["last_seen_status"] = get_sample_status(live_sample.captured_at, now)
+        sensor["last_seen_age_seconds"] = get_sample_age_seconds(live_sample.captured_at, now)
+        sensor["connection_ready"] = True
+
+    return payload
+
+
+def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[str, Any]:
+    summary_cache_key = _get_aggregate_cache_key("summary", "api")
+    summary = _get_cached_aggregate_payload(request, summary_cache_key)
+    if summary is None:
+        month_start, now = _month_window(config)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
+
+    payload = _copy_dashboard_summary_payload(summary)
+    payload = _apply_live_dashboard_overlay(request, config, payload)
+    payload["devices"] = _decorate_devices_media(payload.get("devices", []))
+    payload["sensor_devices"] = _decorate_sensor_dashboard_entries(
+        request,
+        config,
+        _decorate_devices_media(payload.get("sensor_devices", [])),
+    )
+    return payload
+
+
 def _build_sensor_metrics(
     capabilities: list[dict[str, Any]],
     raw_dps: dict[str, Any],
@@ -1020,23 +1115,45 @@ def _build_sensor_page_payload(
     capabilities: list[dict[str, Any]],
     live_sample: DeviceSample | None,
 ) -> dict[str, Any]:
+    direct_local_raw_dps: dict[str, Any] = {}
+    direct_local_captured_at: datetime | None = None
+    if device.get("connection_ready") and device.get("ip_address"):
+        control_device = get_control_device(config, str(device.get("device_id") or ""))
+        if control_device:
+            try:
+                local_payload = fetch_status(control_device)
+                direct_local_raw_dps = _normalize_json_field(local_payload.get("dps")) if isinstance(local_payload, dict) else {}
+                if direct_local_raw_dps:
+                    direct_local_captured_at = datetime.now(timezone.utc)
+            except Exception:
+                direct_local_raw_dps = {}
+                direct_local_captured_at = None
+
     latest_sample = live_sample
     latest_sample_row = None
     if latest_sample is None:
         latest_sample_row = get_latest_sample(config, str(device.get("device_id") or ""))
 
     local_raw_dps = (
-        latest_sample.raw_dps
+        direct_local_raw_dps
+        if direct_local_raw_dps
+        else latest_sample.raw_dps
         if latest_sample is not None
         else _normalize_json_field(latest_sample_row.get("raw_dps")) if latest_sample_row else {}
     )
     local_captured_at = (
-        latest_sample.captured_at
+        direct_local_captured_at
+        if direct_local_captured_at is not None
+        else latest_sample.captured_at
         if latest_sample is not None
         else _parse_dt(latest_sample_row.get("captured_at")) if latest_sample_row and latest_sample_row.get("captured_at") else None
     )
 
-    cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, str(device.get("device_id") or ""))
+    cloud_status_items: list[dict[str, Any]] = []
+    cloud_fetched_at: datetime | None = None
+    cloud_source: str | None = None
+    if not local_raw_dps:
+        cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, str(device.get("device_id") or ""))
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
     last_update = local_captured_at or cloud_fetched_at
     last_update_status = (
@@ -1049,6 +1166,7 @@ def _build_sensor_page_payload(
         "metrics": metrics,
         "state_source": "Локальное устройство" if local_raw_dps else (cloud_source or "Нет данных"),
         "last_update": _format_live_timestamp(config, last_update) if last_update else None,
+        "last_update_age_seconds": get_sample_age_seconds(last_update, datetime.now(_get_timezone(config))) if last_update else None,
         "last_update_status": last_update_status,
         "connection_ready": bool(device.get("connection_ready")),
         "ip_address": str(device.get("ip_address") or "").strip() or None,
@@ -1257,19 +1375,8 @@ async def healthcheck() -> JSONResponse:
 @app.get("/api/summary")
 def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
-    summary_cache_key = _get_aggregate_cache_key("summary", "api")
-    summary = _get_cached_aggregate_payload(request, summary_cache_key)
-    if summary is None:
-        month_start, now = _month_window(config)
-        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
-        summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
-    summary["devices"] = _decorate_devices_media(summary.get("devices", []))
-    summary["sensor_devices"] = _decorate_sensor_dashboard_entries(
-        request,
-        config,
-        _decorate_devices_media(summary.get("sensor_devices", [])),
-    )
-    return JSONResponse(jsonable_encoder(summary))
+    payload = _build_dashboard_page_payload(request, config)
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @app.get("/api/sensors/summary")
