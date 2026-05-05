@@ -287,8 +287,11 @@ if (page) {
     };
 
     const mergeLiveMetrics = (previousMetrics, nextMetrics) => {
+        if (!Array.isArray(nextMetrics) || !nextMetrics.length) {
+            return Array.isArray(previousMetrics) ? previousMetrics : [];
+        }
         const previousByCode = new Map((Array.isArray(previousMetrics) ? previousMetrics : []).map((metric) => [metric.code, metric]));
-        return (Array.isArray(nextMetrics) ? nextMetrics : []).map((metric) => mergeMetricWithPrevious(previousByCode.get(metric.code), metric));
+        return nextMetrics.map((metric) => mergeMetricWithPrevious(previousByCode.get(metric.code), metric));
     };
 
     const createSummaryRow = (label, value, status = null) => {

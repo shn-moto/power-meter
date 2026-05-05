@@ -521,11 +521,13 @@ p {
 
 .device-metrics div,
 .summary-grid div {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(110px, 138px) minmax(0, 1fr);
+    align-items: center;
     gap: 20px;
     border-top: 1px solid var(--line);
     padding-top: 12px;
+    min-height: 54px;
 }
 
 .device-metrics dd,
@@ -539,6 +541,11 @@ p {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+    min-width: 0;
+    justify-self: end;
+}
+
+.summary-grid dt {
     min-width: 0;
 }
 

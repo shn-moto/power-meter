@@ -2,7 +2,7 @@
   "profile_version": 1,
   "device": {
     "device_id": "bf47402ca7399b6eef6bw7",
-    "name": "bf47402ca7399b6eef6bw7",
+    "name": "Электроплита",
     "room": "",
     "device_kind": "breaker",
     "is_energy_meter": true,
@@ -44,7 +44,7 @@
       "max": 999999,
       "visualization_allowed": true,
       "power_role": "total",
-      "display_label": "Energy",
+      "display_label": "Энергия",
       "display_order": 10,
       "poll_priority": 10,
       "lan": {
@@ -67,7 +67,7 @@
       "max": 0,
       "visualization_allowed": true,
       "power_role": null,
-      "display_label": "Phase A",
+      "display_label": "Фаза A",
       "display_order": 20,
       "poll_priority": 20,
       "lan": {
@@ -97,7 +97,7 @@
       "max": 0,
       "visualization_allowed": true,
       "power_role": null,
-      "display_label": "Phase B",
+      "display_label": "Фаза B",
       "display_order": 30,
       "poll_priority": 30,
       "lan": {
@@ -127,7 +127,7 @@
       "max": 0,
       "visualization_allowed": true,
       "power_role": null,
-      "display_label": "Phase C",
+      "display_label": "Фаза C",
       "display_order": 40,
       "poll_priority": 40,
       "lan": {
