@@ -1267,17 +1267,12 @@ def _estimate_bucket_energy_kwh(
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
 ) -> float:
+    if energy_counter_meta:
+        counter_kwh = _bucket_counter_energy_kwh(row, energy_counter_meta)
+        return counter_kwh if counter_kwh is not None else 0.0
+
     integrated_kwh = _bucket_energy_wh(row, bucket) / 1000.0
-    counter_kwh = _bucket_counter_energy_kwh(row, energy_counter_meta)
-    if counter_kwh is None:
-        return integrated_kwh
-
-    # Some devices update cumulative energy in sparse jumps, which collapses
-    # multi-bucket charts to a single visible bar despite steady power samples.
-    if integrated_kwh > 0.0 and counter_kwh < (integrated_kwh * 0.5):
-        return integrated_kwh
-
-    return counter_kwh
+    return integrated_kwh
 
 
 def _aggregate_energy_wh(
@@ -1339,6 +1334,8 @@ def _prepare_chart_series(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     base_series = _build_chart_series_from_aggregate(rows_by_device, bucket, energy_counter_meta)
     use_power_chart = (
+        energy_counter_meta is None
+        and
         any(float(item.get("avg_power_kw") or 0.0) > 0.0 for item in base_series)
         and not any(float(item.get("energy_kwh") or 0.0) > 0.0 for item in base_series)
     )
