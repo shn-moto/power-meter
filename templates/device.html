@@ -50,6 +50,13 @@
             <div class="chart-day-nav-label" data-day-nav-label>--</div>
             <button type="button" class="chart-day-nav-button" data-day-nav-next>Вперед</button>
         </div>
+        <div class="detail-device-visual">
+            {% if device.image_url %}
+            <img class="device-photo detail-device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
+            {% else %}
+            <div class="device-placeholder detail-device-placeholder" aria-hidden="true"></div>
+            {% endif %}
+        </div>
     </article>
 
     <aside class="detail-sidebar">

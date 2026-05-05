@@ -892,6 +892,28 @@ button:hover {
     text-transform: none;
 }
 
+.detail-device-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 220px;
+    margin-top: 18px;
+    padding: 18px;
+    background:
+        linear-gradient(180deg, rgba(19, 28, 39, 0.62), rgba(7, 12, 18, 0.96)),
+        repeating-linear-gradient(0deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 22px),
+        repeating-linear-gradient(90deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 22px);
+    border: 1px solid rgba(127, 208, 255, 0.12);
+}
+
+.detail-device-photo {
+    max-height: 220px;
+}
+
+.detail-device-placeholder {
+    max-width: 420px;
+}
+
 .chart-canvas {
     width: 100%;
     height: 320px;
@@ -1179,6 +1201,10 @@ button:hover {
 
     .stats-grid {
         grid-template-columns: 1fr 1fr;
+    }
+
+    .detail-device-visual {
+        min-height: 180px;
     }
 }
 
