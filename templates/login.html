@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="auth-layout">
+    <article class="connect-card auth-card">
+        <div class="section-heading section-heading-stack">
+            <div>
+                <p class="eyebrow">Защищенный доступ</p>
+                <h1>Вход</h1>
+                <p class="hero-copy">Доступ к панели теперь только после авторизации.</p>
+            </div>
+        </div>
+
+        {% if success_message %}
+        <div class="connect-feedback is-success">{{ success_message }}</div>
+        {% endif %}
+        {% if error_message %}
+        <div class="connect-feedback is-error">{{ error_message }}</div>
+        {% endif %}
+
+        <form class="connect-form auth-form" method="post" action="/login">
+            <input type="hidden" name="next" value="{{ next_path }}">
+            <label>
+                Пользователь
+                <input type="text" name="username" value="{{ username }}" autocomplete="username" required>
+            </label>
+            <label>
+                Пароль
+                <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+            <button type="submit">Войти</button>
+        </form>
+
+        {% if request.state.is_local_request %}
+        <p class="hero-copy auth-inline-note">Новый пользователь создается только из локальной сети. <a class="topbar-link" href="/register">Открыть регистрацию</a>.</p>
+        {% endif %}
+    </article>
+
+    <article class="detail-card auth-note-card">
+        <p class="eyebrow">Учетные записи</p>
+        <h2>Что изменилось</h2>
+        <div class="auth-note-list">
+            <p>Из локальной сети приложение открывается без логина, но через внешний домен вход обязателен.</p>
+            <p>Пароли хранятся только в виде bcrypt-хэшей.</p>
+            <p>Страница регистрации доступна только с локальных адресов: сначала создайте пользователя там, затем входите извне.</p>
+        </div>
+    </article>
+</section>
+{% endblock %}

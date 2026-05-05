@@ -3,21 +3,26 @@ import base64
 import json
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
+from ipaddress import ip_address
 from pathlib import Path
 from time import monotonic
 from typing import Any
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import bcrypt
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Form
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, lookup_device_local_ip
-from config import AppConfig, load_app_config, load_cloud_config
+from config import AppConfig, load_app_config, load_cloud_config, load_session_secret
 from app.storage import (
     DeviceSample,
     apply_migrations,
@@ -29,6 +34,7 @@ from app.storage import (
     get_dashboard_summary,
     get_device_row,
     get_device_rows,
+    get_user_by_username,
     get_recent_raw_dps_samples,
     get_device_stats,
     get_latest_sample,
@@ -46,7 +52,7 @@ from app.tuya_service import build_sample, fetch_status, request_dps_by_index
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260505-16"
+templates.env.globals["static_asset_version"] = "20260506-01"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -54,6 +60,8 @@ SENSOR_CLOUD_STATUS_CACHE_SECONDS = 60.0
 SENSOR_CLOUD_OK_SECONDS = 90.0
 SENSOR_CLOUD_WARNING_SECONDS = 300.0
 SENSOR_CLOUD_STATUS_CACHE: dict[str, dict[str, Any]] = {}
+PUBLIC_PATHS = {"/health", "/login", "/logout"}
+PUBLIC_PATH_PREFIXES = ("/static",)
 
 TUYA_CATEGORY_LABELS = {
     "cz": "Розетка",
@@ -143,6 +151,89 @@ class DeviceSummaryConfigPayload(BaseModel):
 
 class DeviceFunctionPayload(BaseModel):
     value: Any
+
+
+def _hash_password(password: str) -> str:
+    normalized_password = str(password or "")
+    if not normalized_password:
+        raise ValueError("Пароль не может быть пустым")
+    return bcrypt.hashpw(normalized_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    if not password or not password_hash:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
+        return False
+
+
+def _safe_redirect_target(next_path: str | None) -> str:
+    candidate = str(next_path or "").strip()
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return "/"
+    if candidate in {"/login", "/logout", "/register"}:
+        return "/"
+    return candidate
+
+
+def _current_request_path(request: Request) -> str:
+    if request.url.query:
+        return f"{request.url.path}?{request.url.query}"
+    return request.url.path
+
+
+def _is_local_address(host: str | None) -> bool:
+    normalized_host = str(host or "").strip()
+    if not normalized_host:
+        return False
+    if normalized_host == "localhost":
+        return True
+    try:
+        address = ip_address(normalized_host.split("%", 1)[0])
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def _resolve_client_host(request: Request) -> str:
+    peer_host = request.client.host if request.client else ""
+    if _is_local_address(peer_host):
+        forwarded_for = str(request.headers.get("x-forwarded-for") or "").strip()
+        if forwarded_for:
+            first_host = forwarded_for.split(",", 1)[0].strip()
+            if first_host:
+                return first_host
+        real_ip = str(request.headers.get("x-real-ip") or "").strip()
+        if real_ip:
+            return real_ip
+    return peer_host
+
+
+def _is_local_network_request(request: Request) -> bool:
+    return _is_local_address(_resolve_client_host(request))
+
+
+def _is_public_path(path: str) -> bool:
+    return path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PATH_PREFIXES)
+
+
+def _build_auth_template_context(
+    *,
+    page_title: str,
+    username: str = "",
+    error_message: str | None = None,
+    success_message: str | None = None,
+    next_path: str = "/",
+) -> dict[str, Any]:
+    return {
+        "page_title": page_title,
+        "username": username,
+        "error_message": error_message,
+        "success_message": success_message,
+        "next_path": _safe_redirect_target(next_path),
+    }
 
 
 def _get_timezone(config: AppConfig) -> ZoneInfo:
@@ -1268,7 +1359,160 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Учет электроэнергии", lifespan=lifespan)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=load_session_secret(),
+    same_site="lax",
+    max_age=60 * 60 * 24 * 14,
+)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+@app.middleware("http")
+async def authentication_guard(request: Request, call_next):
+    request.state.is_local_request = _is_local_network_request(request)
+    request.state.current_user = str(request.session.get("username") or "").strip().lower() or None
+
+    path = request.url.path
+    if path.startswith("/register") and not request.state.is_local_request:
+        return HTMLResponse("Регистрация доступна только из локальной сети", status_code=403)
+
+    if request.state.is_local_request:
+        return await call_next(request)
+
+    if _is_public_path(path) or (path.startswith("/register") and request.state.is_local_request):
+        return await call_next(request)
+
+    if request.state.current_user:
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+
+    login_url = "/login"
+    next_path = _current_request_path(request)
+    if next_path and next_path != "/":
+        login_url = f"/login?{urlencode({'next': next_path})}"
+    return RedirectResponse(url=login_url, status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(
+    request: Request,
+    next_path: str | None = Query(default=None, alias="next"),
+    registered: int = Query(default=0),
+) -> HTMLResponse:
+    if request.state.current_user:
+        return RedirectResponse(url=_safe_redirect_target(next_path), status_code=303)
+
+    success_message = "Пользователь создан. Теперь можно войти." if registered else None
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context=_build_auth_template_context(
+            page_title="Вход",
+            next_path=next_path or "/",
+            success_message=success_message,
+        ),
+    )
+
+
+@app.post("/login")
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next_path: str = Form(default="/", alias="next"),
+) -> Response:
+    config: AppConfig = request.app.state.app_config
+    user = get_user_by_username(config, username)
+    if not user or not _verify_password(password, str(user.get("password_hash") or "")):
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context=_build_auth_template_context(
+                page_title="Вход",
+                username=str(username or "").strip(),
+                error_message="Неверный логин или пароль",
+                next_path=next_path,
+            ),
+            status_code=400,
+        )
+
+    request.session.clear()
+    request.session["username"] = str(user["username"])
+    return RedirectResponse(url=_safe_redirect_target(next_path), status_code=303)
+
+
+@app.post("/logout")
+def logout_submit(request: Request) -> RedirectResponse:
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/register", response_class=HTMLResponse)
+def register_page(request: Request) -> HTMLResponse:
+    if not request.state.is_local_request:
+        raise HTTPException(status_code=403, detail="Регистрация доступна только из локальной сети")
+
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context=_build_auth_template_context(page_title="Регистрация"),
+    )
+
+
+@app.post("/register")
+def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> Response:
+    if not request.state.is_local_request:
+        raise HTTPException(status_code=403, detail="Регистрация доступна только из локальной сети")
+
+    config: AppConfig = request.app.state.app_config
+    normalized_username = str(username or "").strip().lower()
+    if not normalized_username:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context=_build_auth_template_context(
+                page_title="Регистрация",
+                error_message="Укажите имя пользователя",
+            ),
+            status_code=400,
+        )
+    if not password:
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context=_build_auth_template_context(
+                page_title="Регистрация",
+                username=normalized_username,
+                error_message="Пароль не может быть пустым",
+            ),
+            status_code=400,
+        )
+    if get_user_by_username(config, normalized_username):
+        return templates.TemplateResponse(
+            request=request,
+            name="register.html",
+            context=_build_auth_template_context(
+                page_title="Регистрация",
+                username=normalized_username,
+                error_message="Пользователь уже существует",
+            ),
+            status_code=400,
+        )
+
+    create_user(
+        config,
+        username=normalized_username,
+        password_hash=_hash_password(password),
+        is_admin=False,
+    )
+    return RedirectResponse(url="/login?registered=1", status_code=303)
 
 
 @app.get("/", response_class=HTMLResponse)

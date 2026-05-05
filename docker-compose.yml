@@ -32,7 +32,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8484:8484"
+      - "8484:8484"
     networks:
       - power-meter
 

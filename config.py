@@ -79,6 +79,11 @@ def _read_value(dotenv_values: dict[str, str], name: str, default: str = "") -> 
     return value or default
 
 
+def load_session_secret() -> str:
+    dotenv_values = _load_dotenv_file()
+    return _read_value(dotenv_values, "APP_SESSION_SECRET", "change-me-home-power-meter")
+
+
 def load_app_config() -> AppConfig:
     dotenv_values = _load_dotenv_file()
 

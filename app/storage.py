@@ -78,6 +78,58 @@ def _connect(database_url: str):
     return psycopg.connect(database_url, row_factory=dict_row)
 
 
+def _normalize_username(username: str) -> str:
+    return str(username or "").strip().lower()
+
+
+def get_user_by_username(config: AppConfig, username: str) -> dict[str, Any] | None:
+    normalized_username = _normalize_username(username)
+    if not normalized_username:
+        return None
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, username, password_hash, is_admin, created_at, updated_at
+                FROM app_users
+                WHERE username = %s
+                """,
+                (normalized_username,),
+            )
+            return cursor.fetchone()
+
+
+def create_user(
+    config: AppConfig,
+    *,
+    username: str,
+    password_hash: str,
+    is_admin: bool = False,
+) -> dict[str, Any] | None:
+    normalized_username = _normalize_username(username)
+    if not normalized_username:
+        raise ValueError("Username is required")
+    if not password_hash:
+        raise ValueError("Password hash is required")
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO app_users (username, password_hash, is_admin, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT DO NOTHING
+                RETURNING id, username, password_hash, is_admin, created_at, updated_at
+                """,
+                (normalized_username, password_hash, is_admin),
+            )
+            user = cursor.fetchone()
+        connection.commit()
+
+    return user
+
+
 def _split_sql_statements(text: str) -> list[str]:
     statements: list[str] = []
     current: list[str] = []

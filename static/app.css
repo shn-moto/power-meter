@@ -67,6 +67,17 @@ body {
     flex-wrap: wrap;
 }
 
+.topbar-inline-form {
+    margin: 0;
+}
+
+.topbar-user {
+    color: var(--muted);
+    font-size: 0.84rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
 .topbar-button {
     border: 1px solid rgba(127, 208, 255, 0.28);
     border-radius: 0;
@@ -232,6 +243,12 @@ p {
     gap: 20px;
 }
 
+.auth-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 460px) minmax(0, 1fr);
+    gap: 20px;
+}
+
 .connect-card,
 .registry-item {
     background: var(--surface);
@@ -242,6 +259,30 @@ p {
 
 .connect-card {
     padding: 24px;
+}
+
+.auth-card,
+.auth-note-card {
+    min-height: 100%;
+}
+
+.auth-form {
+    margin-top: 4px;
+}
+
+.auth-inline-note {
+    margin-top: 18px;
+}
+
+.auth-note-list {
+    display: grid;
+    gap: 14px;
+}
+
+.auth-note-list p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.6;
 }
 
 .section-heading-stack {
@@ -1184,6 +1225,7 @@ button:hover {
 
 @media (max-width: 900px) {
     .topbar,
+    .auth-layout,
     .connect-layout,
     .hero-panel,
     .detail-header,
