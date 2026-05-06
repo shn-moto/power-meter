@@ -1660,7 +1660,11 @@ def get_dashboard_summary(
                 "day",
                 energy_counter_meta_by_device.get(device_id),
             )
-            current_power_w = 0.0
+            current_power_w = (
+                _normalize_sample_power_w(float(latest["power_w"]), latest.get("raw_dps"))
+                if latest and latest.get("power_w") is not None
+                else 0.0
+            )
             total_energy_wh += device_energy_wh
             total_power_w += current_power_w
             devices.append(

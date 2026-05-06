@@ -1106,9 +1106,56 @@ def _build_sensor_dashboard_entry(
     }
 
 
+def _build_sensor_dashboard_entry_from_cache(
+    request: Request,
+    config: AppConfig,
+    device: dict[str, Any],
+) -> dict[str, Any]:
+    device_id = str(device.get("device_id") or "")
+    capabilities = _get_cached_device_capabilities(request, config, device_id)
+    raw_dps = device.get("raw_dps")
+    local_raw_dps = raw_dps if isinstance(raw_dps, dict) else {}
+    metrics = _build_sensor_metrics(capabilities, local_raw_dps, [])
+
+    preview_metrics = [
+        metric for metric in metrics
+        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_battery"}
+    ]
+    if not preview_metrics:
+        preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
+
+    primary_metric = preview_metrics[0] if preview_metrics else None
+    secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
+
+    if device.get("connection_ready") and device.get("ip_address"):
+        connection_label = f"LAN: {device['ip_address']}"
+    else:
+        connection_label = "Облачное устройство"
+
+    return {
+        **device,
+        "primary_metric": primary_metric,
+        "secondary_metric": secondary_metric,
+        "connection_label": connection_label,
+        "last_seen": device.get("last_seen"),
+        "last_seen_status": device.get("last_seen_status") or "error",
+    }
+
+
 def _decorate_sensor_dashboard_entries(request: Request, config: AppConfig, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         _build_sensor_dashboard_entry(request, config, device)
+        for device in devices
+    ]
+
+
+def _decorate_sensor_dashboard_entries_from_cache(
+    request: Request,
+    config: AppConfig,
+    devices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        _build_sensor_dashboard_entry_from_cache(request, config, device)
         for device in devices
     ]
 
@@ -1118,10 +1165,10 @@ def _get_dashboard_sensor_payload(request: Request, config: AppConfig) -> dict[s
     summary = _get_cached_aggregate_payload(request, summary_cache_key)
     if summary is None:
         month_start, now = _month_window(config)
-        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = get_dashboard_summary(config, month_start, now)
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
 
-    sensor_devices = _decorate_sensor_dashboard_entries(
+    sensor_devices = _decorate_sensor_dashboard_entries_from_cache(
         request,
         config,
         _decorate_devices_media(summary.get("sensor_devices", [])),
@@ -1177,13 +1224,12 @@ def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[s
     summary = _get_cached_aggregate_payload(request, summary_cache_key)
     if summary is None:
         month_start, now = _month_window(config)
-        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
+        summary = get_dashboard_summary(config, month_start, now)
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
 
     payload = _copy_dashboard_summary_payload(summary)
-    payload = _apply_live_dashboard_overlay(request, config, payload)
     payload["devices"] = _decorate_devices_media(payload.get("devices", []))
-    payload["sensor_devices"] = _decorate_sensor_dashboard_entries(
+    payload["sensor_devices"] = _decorate_sensor_dashboard_entries_from_cache(
         request,
         config,
         _decorate_devices_media(payload.get("sensor_devices", [])),
