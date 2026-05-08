@@ -816,6 +816,7 @@ async def _poll_loop(app: FastAPI) -> None:
                         await asyncio.to_thread(save_sample, config, sample)
                         app.state.last_saved_at[device.device_id] = captured_at
                 except Exception:
+                    LOGGER.exception("Polling device %s failed", device.device_id)
                     continue
         except Exception:
             LOGGER.exception("Polling loop iteration failed")
