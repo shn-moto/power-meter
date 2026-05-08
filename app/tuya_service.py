@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import base64
+import socket
 from typing import Any, Optional, Tuple, Dict, List
 
 import tinytuya
@@ -8,6 +9,16 @@ from config import TuyaDeviceConfig
 
 
 PHASE_VISUAL_DPS_GROUP = (6, 7, 8)
+PRIVATE_TUYA_PORTS = (6668, 6669, 7000)
+
+
+def _is_tuya_host_reachable(ip_address: str, timeout: float = 0.15) -> bool:
+    for port in PRIVATE_TUYA_PORTS:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            if sock.connect_ex((ip_address, port)) == 0:
+                return True
+    return False
 
 
 def _normalize_voltage(raw_value: Any) -> float:
@@ -114,6 +125,9 @@ def _uses_current_power(device_config: TuyaDeviceConfig) -> bool:
 
 
 def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
+    if not device_config.ip_address or not _is_tuya_host_reachable(device_config.ip_address):
+        raise RuntimeError(f"Device {device_config.device_id} is offline")
+
     device = tinytuya.Device(
         device_config.device_id,
         device_config.ip_address,
@@ -125,6 +139,12 @@ def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device.set_socketRetryLimit(2)
     payload = device.status()
     if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
+        return payload
+
+    # If the primary status call did not return DPS data, fail fast.
+    # The slower DPS recovery path is only useful for augmenting partial DPS,
+    # not for offline/unreachable devices that would otherwise stall the whole poll loop.
+    if payload is not None:
         return payload
 
     requested_indices = set(_get_visualized_request_indices(device_config.visualized_codes))
