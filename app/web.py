@@ -534,11 +534,19 @@ def _read_breaker_fallback_measurements(raw_dps: dict[str, Any]) -> tuple[float 
     except (TypeError, ValueError):
         power_w = None
 
-    voltage_values = [
-        float(raw_dps.get(key)) / 10.0 if float(raw_dps.get(key)) >= 1000 else float(raw_dps.get(key))
-        for key in ("107", "108", "109")
-        if raw_dps.get(key) is not None
-    ]
+    voltage_values: list[float] = []
+    for key in ("107", "108", "109"):
+        raw_value = raw_dps.get(key)
+        if raw_value is None:
+            continue
+        try:
+            voltage_value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if voltage_value >= 1000:
+            voltage_value /= 10.0
+        voltage_values.append(voltage_value)
+
     voltage_values = [value for value in voltage_values if value is not None and value > 0]
     voltage_v = sum(voltage_values) / len(voltage_values) if voltage_values else None
 
