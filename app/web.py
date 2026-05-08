@@ -50,7 +50,7 @@ from app.storage import (
     sync_device_profiles_from_disk,
     update_device_summary_config,
 )
-from app.tuya_service import build_sample, fetch_status, request_dps_by_index
+from app.tuya_service import build_live_sample, build_sample, fetch_status, request_dps_by_index
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -919,6 +919,58 @@ def _hydrate_recent_visualized_dps(
     return merged
 
 
+def _merge_live_visualized_cache(
+    raw_dps: dict[str, Any] | None,
+    visualized_codes: list[str] | tuple[str, ...],
+    cached_visualized_dps: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(cached_visualized_dps or {})
+    merged.update(raw_dps or {})
+    return merged
+
+
+def _missing_visualized_codes(raw_dps: dict[str, Any], visualized_codes: list[str] | tuple[str, ...]) -> list[int]:
+    missing: list[int] = []
+    for code in visualized_codes:
+        key = str(code).strip()
+        if not key or not key.isdigit():
+            continue
+        if raw_dps.get(key) in (None, ""):
+            missing.append(int(key))
+    return missing
+
+
+async def _refresh_live_visualized_dps(app: FastAPI, device: TuyaDeviceConfig, requested_indices: list[int]) -> None:
+    if not requested_indices:
+        app.state.live_visualized_tasks.pop(device.device_id, None)
+        return
+
+    try:
+        extra_dps, _ = await asyncio.to_thread(
+            request_dps_by_index,
+            device.device_id,
+            device.ip_address,
+            device.local_key,
+            requested_indices,
+            device.version,
+            "default",
+            5.0,
+        )
+        exact_matches = {
+            str(index): extra_dps.get(str(index))
+            for index in requested_indices
+            if extra_dps.get(str(index)) not in (None, "")
+        }
+        if exact_matches:
+            cached = dict(app.state.live_visualized_cache.get(device.device_id) or {})
+            cached.update(exact_matches)
+            app.state.live_visualized_cache[device.device_id] = cached
+    except Exception:
+        LOGGER.exception("Live visualized DPS refresh for device %s failed", device.device_id)
+    finally:
+        app.state.live_visualized_tasks.pop(device.device_id, None)
+
+
 def _get_cached_device_capabilities(request: Request, config: AppConfig, device_id: str) -> list[dict[str, Any]]:
     cache: dict[str, list[dict[str, Any]]] = request.app.state.device_capabilities_cache
     capabilities = cache.get(device_id)
@@ -1430,6 +1482,8 @@ def _build_device_stats_payload(
 async def lifespan(app: FastAPI):
     app.state.app_config = load_app_config()
     app.state.live_samples = {}
+    app.state.live_visualized_cache = {}
+    app.state.live_visualized_tasks = {}
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
     app.state.aggregate_cache = {}
@@ -1896,15 +1950,45 @@ def device_stats_api(
 
 
 @app.get("/api/devices/{device_id}/live")
-def device_live_api(request: Request, device_id: str) -> JSONResponse:
+async def device_live_api(request: Request, device_id: str) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     capabilities = _get_cached_device_capabilities(request, config, device_id)
     device = get_device_row(config, device_id)
+    live_sample = request.app.state.live_samples.get(device_id)
+    visualized_codes = tuple(str(code) for code in ((device or {}).get("visualized_codes") or []))
+
+    control_device = get_control_device(config, device_id)
+    if control_device:
+        try:
+            captured_at, power_w, raw_dps = build_live_sample(control_device)
+            raw_dps = _merge_live_visualized_cache(
+                raw_dps,
+                visualized_codes,
+                request.app.state.live_visualized_cache.get(control_device.device_id),
+            )
+            live_sample = DeviceSample(
+                device_id=control_device.device_id,
+                captured_at=captured_at,
+                power_w=power_w,
+                raw_dps=raw_dps,
+            )
+            request.app.state.live_samples[control_device.device_id] = live_sample
+
+            missing_indices = _missing_visualized_codes(raw_dps, visualized_codes)
+            if missing_indices:
+                tasks: dict[str, asyncio.Task[Any]] = request.app.state.live_visualized_tasks
+                if device_id not in tasks or tasks[device_id].done():
+                    tasks[device_id] = asyncio.create_task(
+                        _refresh_live_visualized_dps(request.app, control_device, missing_indices)
+                    )
+        except Exception:
+            LOGGER.exception("Live fetch for device %s failed", device_id)
+
     payload = _build_device_live_payload(
         config,
         device_id,
         capabilities,
-        tuple(str(code) for code in ((device or {}).get("visualized_codes") or [])),
-        request.app.state.live_samples.get(device_id),
+        visualized_codes,
+        live_sample,
     )
     return JSONResponse(jsonable_encoder(payload))

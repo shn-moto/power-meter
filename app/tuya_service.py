@@ -124,7 +124,39 @@ def _uses_current_power(device_config: TuyaDeviceConfig) -> bool:
     return str(device_config.power_type or "total").strip().lower() == "current"
 
 
-def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
+def _merge_missing_visualized_codes_once(
+    device: tinytuya.Device,
+    device_config: TuyaDeviceConfig,
+    dps: dict[str, Any],
+) -> dict[str, Any]:
+    requested_indices = _get_visualized_request_indices(device_config.visualized_codes, dps)
+    if not requested_indices:
+        return dps
+
+    try:
+        device.set_socketTimeout(0.25)
+        device.set_socketRetryLimit(0)
+        payload = device.updatedps(index=requested_indices, nowait=False)
+    except Exception:
+        return dps
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("dps"), dict):
+        return dps
+
+    exact_matches = {
+        str(index): payload["dps"].get(str(index))
+        for index in requested_indices
+        if payload["dps"].get(str(index)) is not None
+    }
+    if not exact_matches:
+        return dps
+
+    merged = dict(dps)
+    merged.update(exact_matches)
+    return merged
+
+
+def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: bool = False) -> dict[str, Any]:
     if not device_config.ip_address or not _is_tuya_host_reachable(device_config.ip_address):
         raise RuntimeError(f"Device {device_config.device_id} is offline")
 
@@ -139,82 +171,20 @@ def fetch_status(device_config: TuyaDeviceConfig) -> dict[str, Any]:
     device.set_socketRetryLimit(2)
     payload = device.status()
     if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
+        if include_visualized_codes:
+            payload = {
+                **payload,
+                "dps": _merge_missing_visualized_codes_once(device, device_config, payload.get("dps") or {}),
+            }
         return payload
 
-    # If the primary status call did not return DPS data, fail fast.
-    # The slower DPS recovery path is only useful for augmenting partial DPS,
-    # not for offline/unreachable devices that would otherwise stall the whole poll loop.
-    if payload is not None:
-        return payload
-
-    requested_indices = set(_get_visualized_request_indices(device_config.visualized_codes))
-    if str(device_config.total_power_dps_key).isdigit():
-        requested_indices.add(int(device_config.total_power_dps_key))
-
-    if not requested_indices:
-        return payload
-
-    extra_dps, _ = request_dps_by_index(
-        device_id=device_config.device_id,
-        ip_address=device_config.ip_address,
-        local_key=device_config.local_key,
-        dps_indices=sorted(requested_indices),
-        version=device_config.version,
-        dev_type="default",
-        timeout=5.0,
-    )
-    if extra_dps:
-        return {"dps": {str(key): value for key, value in extra_dps.items()}}
     return payload
-
-
-def _merge_missing_visualized_codes(device_config: TuyaDeviceConfig, dps: dict[str, Any]) -> dict[str, Any]:
-    requested_indices = _get_visualized_request_indices(device_config.visualized_codes, dps)
-    if not requested_indices:
-        return dps
-
-    extra_dps, _ = request_dps_by_index(
-        device_id=device_config.device_id,
-        ip_address=device_config.ip_address,
-        local_key=device_config.local_key,
-        dps_indices=requested_indices,
-        version=device_config.version,
-        dev_type="default",
-        timeout=5.0,
-    )
-    merged = dict(dps)
-    merged.update({str(key): value for key, value in extra_dps.items()})
-    return merged
-
-
-def _merge_missing_power_dps(device_config: TuyaDeviceConfig, dps: dict[str, Any]) -> dict[str, Any]:
-    power_key = str(device_config.total_power_dps_key or "").strip()
-    if not power_key or not power_key.isdigit() or dps.get(power_key) is not None:
-        return dps
-
-    extra_dps, _ = request_dps_by_index(
-        device_id=device_config.device_id,
-        ip_address=device_config.ip_address,
-        local_key=device_config.local_key,
-        dps_indices=[int(power_key)],
-        version=device_config.version,
-        dev_type="default",
-        timeout=0.5,
-    )
-    if not extra_dps:
-        return dps
-
-    merged = dict(dps)
-    merged.update({str(key): value for key, value in extra_dps.items()})
-    return merged
 
 
 def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     dps = payload.get("dps")
     if not isinstance(dps, dict):
         raise ValueError("Device payload does not contain DPS data")
-
-    dps = _merge_missing_power_dps(device_config, dps)
 
     if not device_config.total_power_dps_key:
         raise ValueError("Power DPS key is not configured")
@@ -240,7 +210,13 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
 
 
 def build_sample(device_config: TuyaDeviceConfig) -> tuple[datetime, float, dict[str, Any]]:
-    payload = fetch_status(device_config)
+    payload = fetch_status(device_config, include_visualized_codes=False)
+    power_w, raw_dps = extract_metrics(device_config, payload)
+    return datetime.now(timezone.utc), power_w, raw_dps
+
+
+def build_live_sample(device_config: TuyaDeviceConfig) -> tuple[datetime, float, dict[str, Any]]:
+    payload = fetch_status(device_config, include_visualized_codes=True)
     power_w, raw_dps = extract_metrics(device_config, payload)
     return datetime.now(timezone.utc), power_w, raw_dps
 
