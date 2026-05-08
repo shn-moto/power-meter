@@ -24,7 +24,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import tinytuya
 
 from app.device_registry import DEVICE_KIND_LABELS, lookup_device_local_ip
-from config import AppConfig, load_app_config, load_cloud_config, load_session_secret
+from config import AppConfig, TuyaDeviceConfig, load_app_config, load_cloud_config, load_session_secret
 from app.storage import (
     DeviceSample,
     apply_migrations,
