@@ -1,0 +1,205 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf3684bb946b0462e7pf7q",
+    "name": "Зарядка TESLA",
+    "room": "Балкон",
+    "device_kind": "breaker",
+    "is_energy_meter": true,
+    "category_code": "dlq",
+    "product_id": "z3jngbyubvwgfrcv",
+    "product_name": "Breaker",
+    "icon": ""
+  },
+  "connection": {
+    "local_key": "hR=bdQb}5>@{QBH+",
+    "local_ip": "192.168.1.127",
+    "protocol_version": 3.5,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "total",
+    "default_power_dps_key": "1",
+    "default_visualized_codes": ["1", "6", "103"]
+  },
+  "dps": [
+    {
+      "dp_id": "1",
+      "code": "total_forward_energy",
+      "name": "Total Forward Energy",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "kWh",
+      "scale_digits": 2,
+      "step": 1,
+      "min": 0,
+      "max": 99999999,
+      "visualization_allowed": true,
+      "power_role": "total",
+      "display_label": "Энергия",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "9",
+      "code": "fault",
+      "name": "Fault Alarm",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "bitmap",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Аварии",
+      "display_order": 40,
+      "poll_priority": 40,
+      "bitmap_labels": [
+        "short_circuit_alarm",
+        "surge_alarm",
+        "overload_alarm",
+        "leakagecurr_alarm",
+        "temp_dif_fault",
+        "fire_alarm",
+        "high_power_alarm",
+        "self_test_alarm",
+        "ov_cr",
+        "unbalance_alarm",
+        "ov_vol",
+        "undervoltage_alarm",
+        "miss_phase_alarm",
+        "outage_alarm",
+        "magnetism_alarm",
+        "credit_alarm",
+        "no_balance_alarm",
+        "phase_seq_err_alarm",
+        "vol_unbalance_alarm",
+        "low_current_alarm"
+      ],
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "6",
+      "code": "phase_a",
+      "name": "Phase A Packet",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "raw",
+      "unit": "phase_packet",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Фаза A",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": "phase_packets",
+        "required": false,
+        "decoder": {
+          "type": "tuya_phase_packet",
+          "packet_lengths": [
+            8,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "dp_id": "16",
+      "code": "switch",
+      "name": "Power Switch",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Питание",
+      "display_order": 100,
+      "poll_priority": 100,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "103",
+      "code": "temp_current",
+      "name": "Current Temperature",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "℃",
+      "scale_digits": 0,
+      "step": 1,
+      "min": -20,
+      "max": 200,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Температура",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "105",
+      "code": "countdown_1",
+      "name": "Countdown Timer",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "value",
+      "unit": "s",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 86400,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Таймер",
+      "display_order": 110,
+      "poll_priority": 110,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": [],
+  "computed_metrics": {
+    "total_instant_power_w": {
+      "type": "sum_phase_packet_power_w",
+      "sources": [
+        "6"
+      ]
+    }
+  }
+}

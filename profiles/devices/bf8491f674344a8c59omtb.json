@@ -2,7 +2,7 @@
   "profile_version": 1,
   "device": {
     "device_id": "bf8491f674344a8c59omtb",
-    "name": "Зарядка хонды",
+    "name": "Зарядка HONDA",
     "room": "Балкон",
     "device_kind": "meter",
     "is_energy_meter": true,
