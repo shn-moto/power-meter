@@ -2,14 +2,14 @@
   "profile_version": 1,
   "device": {
     "device_id": "bf8491f674344a8c59omtb",
-    "name": "Двухфазный выключатель",
-    "room": "",
+    "name": "Зарядка хонды",
+    "room": "Балкон",
     "device_kind": "meter",
     "is_energy_meter": true,
     "category_code": "dlq",
     "product_id": "rh8slxo4otrhaqx8",
     "product_name": "AT-SY1-TSW",
-    "icon": "smart/icon/bay1669029815179KHCV/cf2d9bc8c6a34df072461ca19456585c.jpg"
+    "icon": ""
   },
   "connection": {
     "local_key": "~0=qi~2NnZL+'I'b",
@@ -20,9 +20,9 @@
     "discovery_required": false
   },
   "summary": {
-    "default_power_mode": "total",
-    "default_power_dps_key": "17",
-    "default_visualized_codes": ["17", "18", "19", "20", "47"]
+    "default_power_mode": "current",
+    "default_power_dps_key": "19",
+    "default_visualized_codes": ["18", "19", "20", "47"]
   },
   "dps": [
     {
