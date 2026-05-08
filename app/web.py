@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
@@ -64,6 +65,7 @@ SENSOR_CLOUD_WARNING_SECONDS = 300.0
 SENSOR_CLOUD_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 PUBLIC_PATHS = {"/health", "/login", "/logout"}
 PUBLIC_PATH_PREFIXES = ("/static",)
+LOGGER = logging.getLogger(__name__)
 
 TUYA_CATEGORY_LABELS = {
     "cz": "Розетка",
@@ -795,25 +797,28 @@ async def _poll_loop(app: FastAPI) -> None:
 
     while True:
         started_at = monotonic()
-        devices = await asyncio.to_thread(get_polling_devices, config)
-        for device in devices:
-            try:
-                captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
-                sample = DeviceSample(
-                    device_id=device.device_id,
-                    captured_at=captured_at,
-                    power_w=power_w,
-                    raw_dps=raw_dps,
-                )
-                app.state.live_samples[device.device_id] = sample
+        try:
+            devices = await asyncio.to_thread(get_polling_devices, config)
+            for device in devices:
+                try:
+                    captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
+                    sample = DeviceSample(
+                        device_id=device.device_id,
+                        captured_at=captured_at,
+                        power_w=power_w,
+                        raw_dps=raw_dps,
+                    )
+                    app.state.live_samples[device.device_id] = sample
 
-                last_saved_at = app.state.last_saved_at.get(device.device_id)
-                should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
-                if should_save:
-                    await asyncio.to_thread(save_sample, config, sample)
-                    app.state.last_saved_at[device.device_id] = captured_at
-            except Exception:
-                continue
+                    last_saved_at = app.state.last_saved_at.get(device.device_id)
+                    should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
+                    if should_save:
+                        await asyncio.to_thread(save_sample, config, sample)
+                        app.state.last_saved_at[device.device_id] = captured_at
+                except Exception:
+                    continue
+        except Exception:
+            LOGGER.exception("Polling loop iteration failed")
 
         elapsed = monotonic() - started_at
         await asyncio.sleep(max(config.poll_interval_seconds - elapsed, 0.0))
