@@ -495,6 +495,7 @@ def save_sample(config: AppConfig, sample: DeviceSample) -> None:
                 ),
             )
         connection.commit()
+    _refresh_aggregate_windows(config.database_url, sample.captured_at)
 
 
 def save_samples_batch(config: AppConfig, samples: list[DeviceSample]) -> None:
@@ -522,6 +523,43 @@ def save_samples_batch(config: AppConfig, samples: list[DeviceSample]) -> None:
                 ],
             )
         connection.commit()
+    captured_at_values = [sample.captured_at for sample in samples]
+    _refresh_aggregate_windows(config.database_url, min(captured_at_values), max(captured_at_values))
+
+
+def _start_of_hour(value: datetime) -> datetime:
+    return value.replace(minute=0, second=0, microsecond=0)
+
+
+def _start_of_day(value: datetime) -> datetime:
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _start_of_month(value: datetime) -> datetime:
+    return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _start_of_next_month(value: datetime) -> datetime:
+    month_start = _start_of_month(value)
+    if month_start.month == 12:
+        return month_start.replace(year=month_start.year + 1, month=1)
+    return month_start.replace(month=month_start.month + 1)
+
+
+def _refresh_aggregate_windows(database_url: str, captured_at_start: datetime, captured_at_end: datetime | None = None) -> None:
+    end_value = captured_at_end or captured_at_start
+    hourly_start = _start_of_hour(captured_at_start)
+    hourly_end = _start_of_hour(end_value) + timedelta(hours=1)
+    daily_start = _start_of_day(captured_at_start)
+    daily_end = _start_of_day(end_value) + timedelta(days=1)
+    monthly_start = _start_of_month(captured_at_start)
+    monthly_end = _start_of_next_month(end_value)
+
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("CALL refresh_continuous_aggregate('samples_hourly', %s, %s)", (hourly_start, hourly_end))
+            cursor.execute("CALL refresh_continuous_aggregate('samples_daily', %s, %s)", (daily_start, daily_end))
+            cursor.execute("CALL refresh_continuous_aggregate('samples_monthly', %s, %s)", (monthly_start, monthly_end))
 
 
 def upsert_device_profile(
