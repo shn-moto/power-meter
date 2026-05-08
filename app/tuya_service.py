@@ -187,12 +187,34 @@ def _merge_missing_visualized_codes(device_config: TuyaDeviceConfig, dps: dict[s
     return merged
 
 
+def _merge_missing_power_dps(device_config: TuyaDeviceConfig, dps: dict[str, Any]) -> dict[str, Any]:
+    power_key = str(device_config.total_power_dps_key or "").strip()
+    if not power_key or not power_key.isdigit() or dps.get(power_key) is not None:
+        return dps
+
+    extra_dps, _ = request_dps_by_index(
+        device_id=device_config.device_id,
+        ip_address=device_config.ip_address,
+        local_key=device_config.local_key,
+        dps_indices=[int(power_key)],
+        version=device_config.version,
+        dev_type="default",
+        timeout=0.5,
+    )
+    if not extra_dps:
+        return dps
+
+    merged = dict(dps)
+    merged.update({str(key): value for key, value in extra_dps.items()})
+    return merged
+
+
 def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     dps = payload.get("dps")
     if not isinstance(dps, dict):
         raise ValueError("Device payload does not contain DPS data")
 
-    dps = _merge_missing_visualized_codes(device_config, dps)
+    dps = _merge_missing_power_dps(device_config, dps)
 
     if not device_config.total_power_dps_key:
         raise ValueError("Power DPS key is not configured")
