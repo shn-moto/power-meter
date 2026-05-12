@@ -1,0 +1,200 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf1bd578076c64ff7cjl6p",
+    "name": "Linux Server",
+    "room": "Детская",
+    "device_kind": "socket",
+    "is_energy_meter": true,
+    "category_code": "cz",
+    "product_id": "wv7sdupzj13kxc6b",
+    "product_name": "Smart Plug"
+  },
+  "connection": {
+    "local_key": "jA~pWhjg;Y8iP5]H",
+    "local_ip": "192.168.1.134",
+    "protocol_version": 3.5,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": "19",
+    "default_visualized_codes": [
+      "18",
+      "19",
+      "20"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "17",
+      "code": "add_ele",
+      "name": "Accumulated Energy",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "kWh",
+      "scale_digits": 3,
+      "step": 100,
+      "min": 0,
+      "max": 50000,
+      "visualization_allowed": true,
+      "power_role": "total",
+      "display_label": "Energy",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "updatedps",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "18",
+      "code": "cur_current",
+      "name": "Current",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "mA",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 80000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Current",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "19",
+      "code": "cur_power",
+      "name": "Power",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "W",
+      "scale_digits": 1,
+      "step": 1,
+      "min": 0,
+      "max": 200000,
+      "visualization_allowed": true,
+      "power_role": "current",
+      "display_label": "Power",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "20",
+      "code": "cur_voltage",
+      "name": "Voltage",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "V",
+      "scale_digits": 1,
+      "step": 1,
+      "min": 0,
+      "max": 5000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Voltage",
+      "display_order": 40,
+      "poll_priority": 40,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "26",
+      "code": "fault",
+      "name": "Fault Alarm",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "bitmap",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Аварии",
+      "display_order": 50,
+      "poll_priority": 50,
+      "bitmap_labels": [
+        "ov_cr",
+        "ov_vol",
+        "ov_pwr",
+        "ls_vol"
+      ],
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "1",
+      "code": "switch",
+      "name": "Power Switch",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Питание",
+      "display_order": 100,
+      "poll_priority": 100,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "9",
+      "code": "countdown_1",
+      "name": "Countdown Timer",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Integer",
+      "unit": "s",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 86400,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Таймер",
+      "display_order": 110,
+      "poll_priority": 110,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": []
+}
