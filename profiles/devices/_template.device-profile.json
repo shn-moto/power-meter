@@ -8,8 +8,7 @@
     "is_energy_meter": true,
     "category_code": "",
     "product_id": "",
-    "product_name": "",
-    "icon": ""
+    "product_name": ""
   },
   "connection": {
     "local_key": "replace-with-local-key",

@@ -8,11 +8,10 @@
     "is_energy_meter": true,
     "category_code": "cz",
     "product_id": "wv7sdupzj13kxc6b",
-    "product_name": "Smart Plug",
-    "icon": "smart/icon/bay1694233345821bdjU/42a3fb57bf0bbff08fd4d210f55b511c.png"
+    "product_name": "Smart Plug"
   },
   "connection": {
-    "local_key": "Rh<bi$DR)8Tyk|T)",
+    "local_key": "'Ma+L7X5=^)Kq)`;",
     "local_ip": "192.168.1.130",
     "protocol_version": 3.5,
     "ip_source": "manual-seed",
