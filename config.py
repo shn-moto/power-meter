@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -19,6 +19,7 @@ class TuyaDeviceConfig:
     total_power_scale: float
     visualized_codes: tuple[str, ...]
     power_type: str = "total"
+    dps_request_modes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

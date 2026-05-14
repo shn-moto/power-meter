@@ -674,6 +674,11 @@ def _profile_capabilities(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if enum_values:
             values_json["range"] = enum_values
 
+        lan_section = dps_item.get("lan") if isinstance(dps_item.get("lan"), dict) else {}
+        request_mode = lan_section.get("request_mode")
+        if isinstance(request_mode, str) and request_mode:
+            values_json["request_mode"] = request_mode
+
         dp_id_raw = str(dps_item.get("dp_id") or "")
         capabilities.append(
             {
@@ -1071,6 +1076,30 @@ def replace_device_capabilities(config: AppConfig, device_id: str, capabilities:
         connection.commit()
 
 
+def _load_dps_request_modes(cursor, device_ids: list[str]) -> dict[str, dict[str, str]]:
+    if not device_ids:
+        return {}
+    cursor.execute(
+        """
+        SELECT device_id, dp_id, values_json
+        FROM device_capabilities
+        WHERE device_id = ANY(%s) AND dp_id IS NOT NULL
+        """,
+        (device_ids,),
+    )
+    result: dict[str, dict[str, str]] = {}
+    for row in cursor.fetchall():
+        request_mode = (row.get("values_json") or {}).get("request_mode")
+        if not isinstance(request_mode, str) or not request_mode:
+            continue
+        device_id = str(row.get("device_id") or "")
+        dp_id = str(row.get("dp_id") or "")
+        if not device_id or not dp_id:
+            continue
+        result.setdefault(device_id, {})[dp_id] = request_mode
+    return result
+
+
 def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -1086,6 +1115,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
                 (device_id,),
             )
             row = cursor.fetchone()
+            request_modes = _load_dps_request_modes(cursor, [device_id]).get(device_id, {})
 
     if not row:
         return None
@@ -1101,6 +1131,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         total_power_scale=float(row["total_power_scale"] or 1),
         visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
         power_type=str(row.get("power_type") or "total"),
+        dps_request_modes=request_modes,
     )
 
 
@@ -1129,6 +1160,9 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 """
             )
             rows = cursor.fetchall()
+            request_modes_by_device = _load_dps_request_modes(
+                cursor, [row["device_id"] for row in rows]
+            )
 
     devices: list[TuyaDeviceConfig] = []
     for row in rows:
@@ -1144,6 +1178,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 total_power_scale=float(row["total_power_scale"] or 1),
                 visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
                 power_type=str(row.get("power_type") or "total"),
+                dps_request_modes=request_modes_by_device.get(row["device_id"], {}),
             )
         )
     return devices
@@ -1568,6 +1603,28 @@ def _group_aggregate_rows_by_device(rows: list[dict[str, Any]]) -> dict[str, lis
     return grouped
 
 
+COUNTER_DELTA_WINDOW = timedelta(minutes=2)
+
+
+def _compute_instant_power_from_window(
+    window_rows: list[dict[str, Any]],
+) -> float | None:
+    """Compute instantaneous power (W) from a rolling window of counter samples.
+    `power_w` for counter devices stores counter_value / scale (kWh).
+    Delta kWh / delta hours * 1000 = instant W."""
+    if len(window_rows) < 2:
+        return None
+    first = window_rows[0]
+    last = window_rows[-1]
+    delta_t_seconds = (last["captured_at"] - first["captured_at"]).total_seconds()
+    if delta_t_seconds < 30:
+        return None
+    delta_kwh = float(last["power_w"]) - float(first["power_w"])
+    if delta_kwh < 0:
+        return 0.0
+    return delta_kwh * 1000.0 * 3600.0 / delta_t_seconds
+
+
 def _get_dashboard_summary_context(
     config: AppConfig,
     month_start: datetime,
@@ -1577,6 +1634,7 @@ def _get_dashboard_summary_context(
     dict[str, dict[str, Any]],
     dict[str, list[dict[str, Any]]],
     dict[str, tuple[str, float]],
+    dict[str, float],
 ]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -1602,7 +1660,7 @@ def _get_dashboard_summary_context(
                 if row.get("device_id") and row.get("is_energy_meter")
             ]
             if not device_ids:
-                return [], {}, {}, {}
+                return [], {}, {}, {}, {}
 
             cursor.execute(
                 """
@@ -1616,7 +1674,7 @@ def _get_dashboard_summary_context(
             latest_rows = cursor.fetchall()
 
             if not energy_device_ids:
-                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}
+                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}, {}
 
             cursor.execute(
                 """
@@ -1633,11 +1691,36 @@ def _get_dashboard_summary_context(
             )
             daily_rows = cursor.fetchall()
 
+            energy_counter_meta_by_device = _build_energy_counter_meta_by_device(device_rows)
+            counter_device_ids = [
+                device_id for device_id in energy_device_ids
+                if device_id in energy_counter_meta_by_device
+            ]
+            instant_power_w_by_device: dict[str, float] = {}
+            if counter_device_ids:
+                cursor.execute(
+                    """
+                    SELECT device_id, captured_at, power_w
+                    FROM samples
+                    WHERE device_id = ANY(%s) AND captured_at >= %s
+                    ORDER BY device_id ASC, captured_at ASC
+                    """,
+                    (counter_device_ids, now - COUNTER_DELTA_WINDOW),
+                )
+                window_rows_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                for row in cursor.fetchall():
+                    window_rows_by_device[str(row.get("device_id") or "")].append(row)
+                for device_id, window_rows in window_rows_by_device.items():
+                    instant = _compute_instant_power_from_window(window_rows)
+                    if instant is not None:
+                        instant_power_w_by_device[device_id] = instant
+
     return (
         device_rows,
         {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
         _group_aggregate_rows_by_device(daily_rows),
-        _build_energy_counter_meta_by_device(device_rows),
+        energy_counter_meta_by_device,
+        instant_power_w_by_device,
     )
 
 
@@ -1654,9 +1737,13 @@ def get_dashboard_summary(
     online_device_count = 0
     live_samples = live_samples or {}
 
-    device_rows, latest_by_device, daily_rows_by_device, energy_counter_meta_by_device = _get_dashboard_summary_context(
-        config, month_start, now
-    )
+    (
+        device_rows,
+        latest_by_device,
+        daily_rows_by_device,
+        energy_counter_meta_by_device,
+        instant_power_w_by_device,
+    ) = _get_dashboard_summary_context(config, month_start, now)
 
     for device in device_rows:
         device_id = str(device.get("device_id") or "")
@@ -1693,16 +1780,20 @@ def get_dashboard_summary(
 
         if device.get("is_energy_meter"):
             bucket_rows = daily_rows_by_device.get(device_id, [])
+            energy_counter_meta = energy_counter_meta_by_device.get(device_id)
             device_energy_wh = _aggregate_energy_wh(
                 bucket_rows,
                 "day",
-                energy_counter_meta_by_device.get(device_id),
+                energy_counter_meta,
             )
-            current_power_w = (
-                _normalize_sample_power_w(float(latest["power_w"]), latest.get("raw_dps"))
-                if latest and latest.get("power_w") is not None
-                else 0.0
-            )
+            if energy_counter_meta is not None:
+                current_power_w = instant_power_w_by_device.get(device_id, 0.0)
+            else:
+                current_power_w = (
+                    _normalize_sample_power_w(float(latest["power_w"]), latest.get("raw_dps"))
+                    if latest and latest.get("power_w") is not None
+                    else 0.0
+                )
             total_energy_wh += device_energy_wh
             total_power_w += current_power_w
             devices.append(

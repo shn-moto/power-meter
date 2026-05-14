@@ -103,21 +103,50 @@ def _get_visualized_request_indices(
         return []
 
     present_keys = set(dps) if dps else set()
-    missing_indices = [index for index in selected_indices if str(index) not in present_keys]
-    if not missing_indices:
-        return []
+    return [index for index in selected_indices if str(index) not in present_keys]
 
-    selected_set = set(selected_indices)
-    if set(PHASE_VISUAL_DPS_GROUP).issubset(selected_set) and any(
-        index in PHASE_VISUAL_DPS_GROUP for index in missing_indices
-    ):
-        requested_indices = [
-            index for index in selected_indices if index not in PHASE_VISUAL_DPS_GROUP
-        ]
-        requested_indices.extend(PHASE_VISUAL_DPS_GROUP)
-        return requested_indices
 
-    return missing_indices
+def _trick678_1P(device: tinytuya.Device, requested_code: int) -> Any | None:
+    """Probe DPS 6/7/8 sequentially; return the value of `requested_code`
+    from whichever response carries it. Used for single-phase breakers
+    whose phase A packet only updates when DPS 7 or 8 is queried."""
+    for probe_code in PHASE_VISUAL_DPS_GROUP:
+        try:
+            payload = device.updatedps(index=[probe_code], nowait=False)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        dps = payload.get("dps")
+        if not isinstance(dps, dict):
+            continue
+        value = dps.get(str(requested_code))
+        if value is not None:
+            return value
+    return None
+
+
+def _trick678_3P(device: tinytuya.Device, requested_codes: list[int]) -> dict[str, Any]:
+    """Probe DPS 6/7/8 in three sequential queries; collect whatever DPS keys
+    each response carries and return values for codes in `requested_codes`."""
+    collected: dict[str, Any] = {}
+    targets = {str(code) for code in requested_codes}
+    for probe_code in PHASE_VISUAL_DPS_GROUP:
+        try:
+            payload = device.updatedps(index=[probe_code], nowait=False)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        dps = payload.get("dps")
+        if not isinstance(dps, dict):
+            continue
+        for key, value in dps.items():
+            if value is None:
+                continue
+            if str(key) in targets and str(key) not in collected:
+                collected[str(key)] = value
+    return collected
 
 
 def _uses_current_power(device_config: TuyaDeviceConfig) -> bool:
@@ -129,30 +158,43 @@ def _merge_missing_visualized_codes_once(
     device_config: TuyaDeviceConfig,
     dps: dict[str, Any],
 ) -> dict[str, Any]:
-    requested_indices = _get_visualized_request_indices(device_config.visualized_codes, dps)
-    if not requested_indices:
+    missing_indices = _get_visualized_request_indices(device_config.visualized_codes, dps)
+    if not missing_indices:
         return dps
 
-    try:
-        device.set_socketTimeout(0.25)
-        device.set_socketRetryLimit(0)
-        payload = device.updatedps(index=requested_indices, nowait=False)
-    except Exception:
-        return dps
-
-    if not isinstance(payload, dict) or not isinstance(payload.get("dps"), dict):
-        return dps
-
-    exact_matches = {
-        str(index): payload["dps"].get(str(index))
-        for index in requested_indices
-        if payload["dps"].get(str(index)) is not None
-    }
-    if not exact_matches:
-        return dps
+    device.set_socketTimeout(0.25)
+    device.set_socketRetryLimit(0)
 
     merged = dict(dps)
-    merged.update(exact_matches)
+    request_modes = device_config.dps_request_modes or {}
+
+    # Group missing visualized codes by their request_mode (or "default")
+    by_mode: dict[str, list[int]] = {}
+    for index in missing_indices:
+        mode = request_modes.get(str(index), "default")
+        by_mode.setdefault(mode, []).append(index)
+
+    for mode, indices in by_mode.items():
+        if mode == "trick678_1P":
+            for code in indices:
+                value = _trick678_1P(device, code)
+                if value is not None:
+                    merged[str(code)] = value
+        elif mode == "trick678_3P":
+            collected = _trick678_3P(device, indices)
+            merged.update(collected)
+        else:
+            try:
+                payload = device.updatedps(index=indices, nowait=False)
+            except Exception:
+                continue
+            if not isinstance(payload, dict) or not isinstance(payload.get("dps"), dict):
+                continue
+            for index in indices:
+                value = payload["dps"].get(str(index))
+                if value is not None:
+                    merged[str(index)] = value
+
     return merged
 
 

@@ -74,6 +74,7 @@
       "poll_priority": 20,
       "lan": {
         "read_strategy": "updatedps",
+        "request_mode": "trick678_3P",
         "batch_group": "phase_packets",
         "required": false,
         "decoder": {
@@ -104,6 +105,7 @@
       "poll_priority": 30,
       "lan": {
         "read_strategy": "updatedps",
+        "request_mode": "trick678_3P",
         "batch_group": "phase_packets",
         "required": false,
         "decoder": {
@@ -134,6 +136,7 @@
       "poll_priority": 40,
       "lan": {
         "read_strategy": "updatedps",
+        "request_mode": "trick678_3P",
         "batch_group": "phase_packets",
         "required": false,
         "decoder": {

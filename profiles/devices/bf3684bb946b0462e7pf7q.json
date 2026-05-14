@@ -111,6 +111,7 @@
       "poll_priority": 20,
       "lan": {
         "read_strategy": "updatedps",
+        "request_mode": "trick678_1P",
         "batch_group": "phase_packets",
         "required": false,
         "decoder": {
