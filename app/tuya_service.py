@@ -106,19 +106,39 @@ def _get_visualized_request_indices(
     return [index for index in selected_indices if str(index) not in present_keys]
 
 
-def _trick678_1P(device: tinytuya.Device, requested_code: int) -> Any | None:
+def _fresh_tinytuya_device(device_config: TuyaDeviceConfig, timeout: float) -> tinytuya.Device:
+    d = tinytuya.Device(
+        device_config.device_id,
+        device_config.ip_address,
+        device_config.local_key,
+        connection_timeout=timeout,
+    )
+    d.set_version(device_config.version)
+    d.set_socketTimeout(timeout)
+    d.set_socketRetryLimit(0)
+    return d
+
+
+def _probe_dps(device_config: TuyaDeviceConfig, probe_code: int, timeout: float) -> dict[str, Any] | None:
+    """Open a fresh tinytuya session per probe to avoid Err 914 from a stale session."""
+    d = _fresh_tinytuya_device(device_config, timeout)
+    try:
+        payload = d.updatedps(index=[probe_code], nowait=False)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    dps = payload.get("dps")
+    return dps if isinstance(dps, dict) else None
+
+
+def _trick678_1P(device_config: TuyaDeviceConfig, requested_code: int, timeout: float = 3.0) -> Any | None:
     """Probe DPS 6/7/8 sequentially; return the value of `requested_code`
     from whichever response carries it. Used for single-phase breakers
     whose phase A packet only updates when DPS 7 or 8 is queried."""
     for probe_code in PHASE_VISUAL_DPS_GROUP:
-        try:
-            payload = device.updatedps(index=[probe_code], nowait=False)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        dps = payload.get("dps")
-        if not isinstance(dps, dict):
+        dps = _probe_dps(device_config, probe_code, timeout)
+        if not dps:
             continue
         value = dps.get(str(requested_code))
         if value is not None:
@@ -126,20 +146,14 @@ def _trick678_1P(device: tinytuya.Device, requested_code: int) -> Any | None:
     return None
 
 
-def _trick678_3P(device: tinytuya.Device, requested_codes: list[int]) -> dict[str, Any]:
+def _trick678_3P(device_config: TuyaDeviceConfig, requested_codes: list[int], timeout: float = 3.0) -> dict[str, Any]:
     """Probe DPS 6/7/8 in three sequential queries; collect whatever DPS keys
     each response carries and return values for codes in `requested_codes`."""
     collected: dict[str, Any] = {}
     targets = {str(code) for code in requested_codes}
     for probe_code in PHASE_VISUAL_DPS_GROUP:
-        try:
-            payload = device.updatedps(index=[probe_code], nowait=False)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        dps = payload.get("dps")
-        if not isinstance(dps, dict):
+        dps = _probe_dps(device_config, probe_code, timeout)
+        if not dps:
             continue
         for key, value in dps.items():
             if value is None:
@@ -171,21 +185,18 @@ def _merge_missing_visualized_codes_once(
         mode = request_modes.get(str(index), "default")
         by_mode.setdefault(mode, []).append(index)
 
-    device.set_socketRetryLimit(0)
-
     for mode, indices in by_mode.items():
         if mode == "trick678_1P":
-            device.set_socketTimeout(3.0)
             for code in indices:
-                value = _trick678_1P(device, code)
+                value = _trick678_1P(device_config, code)
                 if value is not None:
                     merged[str(code)] = value
         elif mode == "trick678_3P":
-            device.set_socketTimeout(3.0)
-            collected = _trick678_3P(device, indices)
+            collected = _trick678_3P(device_config, indices)
             merged.update(collected)
         else:
             device.set_socketTimeout(0.25)
+            device.set_socketRetryLimit(0)
             try:
                 payload = device.updatedps(index=indices, nowait=False)
             except Exception:
