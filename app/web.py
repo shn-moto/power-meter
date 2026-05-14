@@ -792,6 +792,15 @@ def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_r
     return month_start, now
 
 
+def _device_lan_lock(app: FastAPI, device_id: str) -> asyncio.Lock:
+    locks: dict[str, asyncio.Lock] = app.state.device_lan_locks
+    lock = locks.get(device_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[device_id] = lock
+    return lock
+
+
 async def _poll_loop(app: FastAPI) -> None:
     config: AppConfig = app.state.app_config
 
@@ -801,7 +810,8 @@ async def _poll_loop(app: FastAPI) -> None:
             devices = await asyncio.to_thread(get_polling_devices, config)
             for device in devices:
                 try:
-                    captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
+                    async with _device_lan_lock(app, device.device_id):
+                        captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
                     sample = DeviceSample(
                         device_id=device.device_id,
                         captured_at=captured_at,
@@ -942,16 +952,17 @@ async def _refresh_live_visualized_dps(app: FastAPI, device: TuyaDeviceConfig, r
         return
 
     try:
-        extra_dps, _ = await asyncio.to_thread(
-            request_dps_by_index,
-            device.device_id,
-            device.ip_address,
-            device.local_key,
-            requested_indices,
-            device.version,
-            "default",
-            5.0,
-        )
+        async with _device_lan_lock(app, device.device_id):
+            extra_dps, _ = await asyncio.to_thread(
+                request_dps_by_index,
+                device.device_id,
+                device.ip_address,
+                device.local_key,
+                requested_indices,
+                device.version,
+                "default",
+                5.0,
+            )
         exact_matches = {
             str(index): extra_dps.get(str(index))
             for index in requested_indices
@@ -1480,6 +1491,7 @@ async def lifespan(app: FastAPI):
     app.state.live_samples = {}
     app.state.live_visualized_cache = {}
     app.state.live_visualized_tasks = {}
+    app.state.device_lan_locks = {}
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
     app.state.aggregate_cache = {}
@@ -1956,7 +1968,10 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
     control_device = get_control_device(config, device_id)
     if control_device:
         try:
-            captured_at, power_w, raw_dps = build_live_sample(control_device)
+            async with _device_lan_lock(request.app, control_device.device_id):
+                captured_at, power_w, raw_dps = await asyncio.to_thread(
+                    build_live_sample, control_device
+                )
             raw_dps = _merge_live_visualized_cache(
                 raw_dps,
                 visualized_codes,
