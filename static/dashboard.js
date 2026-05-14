@@ -2,7 +2,6 @@ const dashboardPage = document.querySelector('[data-dashboard]');
 
 if (dashboardPage) {
     const DASHBOARD_REFRESH_INTERVAL_MS = 1000;
-    const currentPower = dashboardPage.querySelector('[data-summary-current-power]');
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
@@ -33,7 +32,14 @@ if (dashboardPage) {
         return `<div class="device-placeholder device-placeholder-${escapeHtml(device.device_kind || 'switch')}" aria-hidden="true"></div>`;
     };
 
-    const renderCardMarkup = (device) => `
+    const renderCardMarkup = (device) => {
+        const currentPowerRow = (device.current_power_kw !== undefined && device.current_power_kw !== null)
+            ? `<div>
+                    <dt>Текущая мощность</dt>
+                    <dd data-device-current-power>${escapeHtml(device.current_power_kw)} кВт</dd>
+                </div>`
+            : '';
+        return `
         <a class="device-image" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
             ${renderDeviceMedia(device)}
         </a>
@@ -43,10 +49,7 @@ if (dashboardPage) {
                 <h3 data-device-name>${escapeHtml(device.name)}</h3>
             </div>
             <dl class="device-metrics">
-                <div>
-                    <dt>Текущая мощность</dt>
-                    <dd data-device-current-power>${escapeHtml(device.current_power_kw)} кВт</dd>
-                </div>
+                ${currentPowerRow}
                 <div>
                     <dt>Энергия за месяц</dt>
                     <dd data-device-month-energy>${escapeHtml(device.month_energy_kwh)} кВт·ч</dd>
@@ -58,6 +61,7 @@ if (dashboardPage) {
             </dl>
         </div>
     `;
+    };
 
     const renderSensorMarkup = (device) => `
         <a class="sensor-summary-media" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть страницу датчика ${escapeHtml(device.name)}">
@@ -142,7 +146,6 @@ if (dashboardPage) {
     };
 
     const applyDashboardPayload = (payload) => {
-        currentPower.textContent = `${payload.current_power_kw} кВт`;
         monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
         estimatedCost.textContent = `${payload.estimated_cost}`;
         deviceCount.textContent = `${payload.device_count}`;

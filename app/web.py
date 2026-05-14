@@ -863,15 +863,11 @@ def _get_sensor_cloud_status_style(fetched_at: datetime | None) -> str:
 
 
 def _apply_live_summary(config: AppConfig, summary: dict, live_samples: dict[str, DeviceSample]) -> dict:
-    total_power_w = 0.0
     for device in summary.get("devices", []):
         live_sample = live_samples.get(device["device_id"])
         if live_sample:
             device["last_seen"] = _format_live_timestamp(config, live_sample.captured_at)
             device["raw_dps"] = live_sample.raw_dps
-        total_power_w += float(device.get("current_power_kw") or 0.0) * 1000.0
-
-    summary["current_power_kw"] = round(total_power_w / 1000.0, 3)
     return summary
 
 

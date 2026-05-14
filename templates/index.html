@@ -50,10 +50,6 @@
     </div>
     <div class="hero-grid stats-grid">
         <article class="stat-card lcd-panel">
-            <span class="stat-label">Текущая нагрузка дома</span>
-            <strong class="stat-value" data-summary-current-power>{{ summary.current_power_kw }} кВт</strong>
-        </article>
-        <article class="stat-card lcd-panel">
             <span class="stat-label">Энергия за месяц</span>
             <strong class="stat-value" data-summary-month-energy>{{ summary.month_energy_kwh }} кВт·ч</strong>
         </article>
@@ -88,10 +84,12 @@
                     <h3 data-device-name>{{ device.name }}</h3>
                 </div>
                 <dl class="device-metrics">
+                    {% if device.current_power_kw is defined and device.current_power_kw is not none %}
                     <div>
                         <dt>Текущая мощность</dt>
                         <dd data-device-current-power>{{ device.current_power_kw }} кВт</dd>
                     </div>
+                    {% endif %}
                     <div>
                         <dt>Энергия за месяц</dt>
                         <dd data-device-month-energy>{{ device.month_energy_kwh }} кВт·ч</dd>

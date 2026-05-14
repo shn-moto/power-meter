@@ -1603,28 +1603,6 @@ def _group_aggregate_rows_by_device(rows: list[dict[str, Any]]) -> dict[str, lis
     return grouped
 
 
-COUNTER_DELTA_WINDOW = timedelta(minutes=2)
-
-
-def _compute_instant_power_from_window(
-    window_rows: list[dict[str, Any]],
-) -> float | None:
-    """Compute instantaneous power (W) from a rolling window of counter samples.
-    `power_w` for counter devices stores counter_value / scale (kWh).
-    Delta kWh / delta hours * 1000 = instant W."""
-    if len(window_rows) < 2:
-        return None
-    first = window_rows[0]
-    last = window_rows[-1]
-    delta_t_seconds = (last["captured_at"] - first["captured_at"]).total_seconds()
-    if delta_t_seconds < 30:
-        return None
-    delta_kwh = float(last["power_w"]) - float(first["power_w"])
-    if delta_kwh < 0:
-        return 0.0
-    return delta_kwh * 1000.0 * 3600.0 / delta_t_seconds
-
-
 def _get_dashboard_summary_context(
     config: AppConfig,
     month_start: datetime,
@@ -1634,7 +1612,6 @@ def _get_dashboard_summary_context(
     dict[str, dict[str, Any]],
     dict[str, list[dict[str, Any]]],
     dict[str, tuple[str, float]],
-    dict[str, float],
 ]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -1660,7 +1637,7 @@ def _get_dashboard_summary_context(
                 if row.get("device_id") and row.get("is_energy_meter")
             ]
             if not device_ids:
-                return [], {}, {}, {}, {}
+                return [], {}, {}, {}
 
             cursor.execute(
                 """
@@ -1674,7 +1651,7 @@ def _get_dashboard_summary_context(
             latest_rows = cursor.fetchall()
 
             if not energy_device_ids:
-                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}, {}
+                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}
 
             cursor.execute(
                 """
@@ -1691,36 +1668,11 @@ def _get_dashboard_summary_context(
             )
             daily_rows = cursor.fetchall()
 
-            energy_counter_meta_by_device = _build_energy_counter_meta_by_device(device_rows)
-            counter_device_ids = [
-                device_id for device_id in energy_device_ids
-                if device_id in energy_counter_meta_by_device
-            ]
-            instant_power_w_by_device: dict[str, float] = {}
-            if counter_device_ids:
-                cursor.execute(
-                    """
-                    SELECT device_id, captured_at, power_w
-                    FROM samples
-                    WHERE device_id = ANY(%s) AND captured_at >= %s
-                    ORDER BY device_id ASC, captured_at ASC
-                    """,
-                    (counter_device_ids, now - COUNTER_DELTA_WINDOW),
-                )
-                window_rows_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
-                for row in cursor.fetchall():
-                    window_rows_by_device[str(row.get("device_id") or "")].append(row)
-                for device_id, window_rows in window_rows_by_device.items():
-                    instant = _compute_instant_power_from_window(window_rows)
-                    if instant is not None:
-                        instant_power_w_by_device[device_id] = instant
-
     return (
         device_rows,
         {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
         _group_aggregate_rows_by_device(daily_rows),
-        energy_counter_meta_by_device,
-        instant_power_w_by_device,
+        _build_energy_counter_meta_by_device(device_rows),
     )
 
 
@@ -1742,7 +1694,6 @@ def get_dashboard_summary(
         latest_by_device,
         daily_rows_by_device,
         energy_counter_meta_by_device,
-        instant_power_w_by_device,
     ) = _get_dashboard_summary_context(config, month_start, now)
 
     for device in device_rows:
@@ -1786,23 +1737,20 @@ def get_dashboard_summary(
                 "day",
                 energy_counter_meta,
             )
-            if energy_counter_meta is not None:
-                current_power_w = instant_power_w_by_device.get(device_id, 0.0)
-            else:
+            total_energy_wh += device_energy_wh
+            device_entry: dict[str, Any] = {
+                **base_entry,
+                "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
+            }
+            if energy_counter_meta is None:
                 current_power_w = (
                     _normalize_sample_power_w(float(latest["power_w"]), latest.get("raw_dps"))
                     if latest and latest.get("power_w") is not None
                     else 0.0
                 )
-            total_energy_wh += device_energy_wh
-            total_power_w += current_power_w
-            devices.append(
-                {
-                    **base_entry,
-                    "current_power_kw": round(current_power_w / 1000.0, 3),
-                    "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
-                }
-            )
+                device_entry["current_power_kw"] = round(current_power_w / 1000.0, 3)
+                total_power_w += current_power_w
+            devices.append(device_entry)
             continue
 
         sensor_devices.append(base_entry)
@@ -1810,7 +1758,6 @@ def get_dashboard_summary(
     return {
         "home_name": config.home_name,
         "month_energy_kwh": round(total_energy_wh / 1000.0, 3),
-        "current_power_kw": round(total_power_w / 1000.0, 3),
         "estimated_cost": round((total_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
         "device_count": online_device_count,
         "devices": devices,
