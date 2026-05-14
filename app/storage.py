@@ -1415,32 +1415,35 @@ def _bucket_energy_wh(row: dict[str, Any], bucket: str) -> float:
     return avg_power_w * _bucket_duration_hours(bucket)
 
 
-def _bucket_counter_energy_kwh(
-    row: dict[str, Any],
-    energy_counter_meta: tuple[str, float] | None,
-) -> float | None:
-    if not energy_counter_meta:
-        return None
-
+def _counter_bar_energies_kwh(
+    bucket_rows: list[dict[str, Any]],
+    energy_counter_meta: tuple[str, float],
+) -> list[float]:
+    """For counter devices, per-bucket energy = last_kwh - prev_bucket_last_kwh.
+    Anchoring on the previous bucket's last counter (instead of this bucket's
+    first counter) makes the bars telescope: sum equals last_of_last_bucket
+    minus first_of_first_bucket. Inter-bucket counter increments are no longer
+    lost between adjacent buckets."""
     dp_key, scale_divisor = energy_counter_meta
-    first_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("first_raw_dps")), dp_key, scale_divisor)
-    last_kwh = _read_energy_counter_kwh(_normalize_json_field(row.get("last_raw_dps")), dp_key, scale_divisor)
-    if first_kwh is None or last_kwh is None or last_kwh < first_kwh:
-        return None
-    return max(last_kwh - first_kwh, 0.0)
-
-
-def _estimate_bucket_energy_kwh(
-    row: dict[str, Any],
-    bucket: str,
-    energy_counter_meta: tuple[str, float] | None,
-) -> float:
-    if energy_counter_meta:
-        counter_kwh = _bucket_counter_energy_kwh(row, energy_counter_meta)
-        return counter_kwh if counter_kwh is not None else 0.0
-
-    integrated_kwh = _bucket_energy_wh(row, bucket) / 1000.0
-    return integrated_kwh
+    energies: list[float] = []
+    prev_last_kwh: float | None = None
+    for row in bucket_rows:
+        last_kwh = _read_energy_counter_kwh(
+            _normalize_json_field(row.get("last_raw_dps")), dp_key, scale_divisor
+        )
+        first_kwh = _read_energy_counter_kwh(
+            _normalize_json_field(row.get("first_raw_dps")), dp_key, scale_divisor
+        )
+        if last_kwh is None:
+            energies.append(0.0)
+            continue
+        anchor_kwh = prev_last_kwh if prev_last_kwh is not None else first_kwh
+        if anchor_kwh is None or last_kwh < anchor_kwh:
+            energies.append(0.0)
+        else:
+            energies.append(last_kwh - anchor_kwh)
+        prev_last_kwh = last_kwh
+    return energies
 
 
 def _aggregate_energy_wh(
@@ -1451,10 +1454,10 @@ def _aggregate_energy_wh(
     if not bucket_rows:
         return 0.0
 
-    return sum(
-        _estimate_bucket_energy_kwh(row, bucket, energy_counter_meta) * 1000.0
-        for row in bucket_rows
-    )
+    if energy_counter_meta:
+        return sum(_counter_bar_energies_kwh(bucket_rows, energy_counter_meta)) * 1000.0
+
+    return sum(_bucket_energy_wh(row, bucket) for row in bucket_rows)
 
 
 def _build_chart_series_from_aggregate(
@@ -1463,9 +1466,16 @@ def _build_chart_series_from_aggregate(
     energy_counter_meta: tuple[str, float] | None,
 ) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
+    if energy_counter_meta:
+        counter_energies = _counter_bar_energies_kwh(bucket_rows, energy_counter_meta)
+    else:
+        counter_energies = []
 
-    for row in bucket_rows:
-        energy_kwh = _estimate_bucket_energy_kwh(row, bucket, energy_counter_meta)
+    for index, row in enumerate(bucket_rows):
+        if energy_counter_meta:
+            energy_kwh = counter_energies[index]
+        else:
+            energy_kwh = _bucket_energy_wh(row, bucket) / 1000.0
 
         avg_power_kw = (_coerce_float(row.get("avg_power_w")) or 0.0) / 1000.0
         timestamp_dt = _parse_dt(row["bucket"]) if not isinstance(row["bucket"], datetime) else row["bucket"]
