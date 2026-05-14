@@ -162,9 +162,6 @@ def _merge_missing_visualized_codes_once(
     if not missing_indices:
         return dps
 
-    device.set_socketTimeout(0.25)
-    device.set_socketRetryLimit(0)
-
     merged = dict(dps)
     request_modes = device_config.dps_request_modes or {}
 
@@ -174,16 +171,21 @@ def _merge_missing_visualized_codes_once(
         mode = request_modes.get(str(index), "default")
         by_mode.setdefault(mode, []).append(index)
 
+    device.set_socketRetryLimit(0)
+
     for mode, indices in by_mode.items():
         if mode == "trick678_1P":
+            device.set_socketTimeout(3.0)
             for code in indices:
                 value = _trick678_1P(device, code)
                 if value is not None:
                     merged[str(code)] = value
         elif mode == "trick678_3P":
+            device.set_socketTimeout(3.0)
             collected = _trick678_3P(device, indices)
             merged.update(collected)
         else:
+            device.set_socketTimeout(0.25)
             try:
                 payload = device.updatedps(index=indices, nowait=False)
             except Exception:
