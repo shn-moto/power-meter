@@ -1972,6 +1972,19 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
                 captured_at, power_w, raw_dps = await asyncio.to_thread(
                     build_live_sample, control_device
                 )
+            # Cache any freshly-obtained visualized DPS values for subsequent
+            # calls — Tuya breakers sometimes refuse rapid queries.
+            cache_updates = {
+                str(code): raw_dps.get(str(code))
+                for code in visualized_codes
+                if raw_dps.get(str(code)) not in (None, "")
+            }
+            if cache_updates:
+                cached = dict(
+                    request.app.state.live_visualized_cache.get(control_device.device_id) or {}
+                )
+                cached.update(cache_updates)
+                request.app.state.live_visualized_cache[control_device.device_id] = cached
             raw_dps = _merge_live_visualized_cache(
                 raw_dps,
                 visualized_codes,
