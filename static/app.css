@@ -946,6 +946,86 @@ button:hover {
     text-transform: none;
 }
 
+.charger-sessions {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(112, 183, 255, 0.18);
+}
+
+.charger-sessions[hidden] {
+    display: none;
+}
+
+.charger-sessions h3 {
+    margin: 0 0 10px 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7cbcff;
+}
+
+.charger-session-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.charger-session-row {
+    display: grid;
+    grid-template-columns: 28px 110px 60px 1fr auto;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(112, 183, 255, 0.06);
+    font-family: Bahnschrift, Segoe UI, sans-serif;
+    font-size: 0.92rem;
+    color: #d7ecff;
+}
+
+.charger-session-index {
+    color: #7cbcff;
+    font-weight: 500;
+}
+
+.charger-session-time {
+    color: #d7ecff;
+    font-feature-settings: "tnum";
+}
+
+.charger-session-duration {
+    color: #94cfff;
+    text-align: right;
+    font-feature-settings: "tnum";
+}
+
+.charger-session-energy {
+    color: #ffffff;
+    font-weight: 500;
+    font-feature-settings: "tnum";
+}
+
+.charger-session-avg {
+    color: #94cfff;
+    font-size: 0.85rem;
+    text-align: right;
+    font-feature-settings: "tnum";
+}
+
+.charger-session-total {
+    margin-top: 10px;
+    padding: 6px 8px;
+    text-align: right;
+    color: #ffffff;
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.03em;
+}
+
 .detail-chart-card {
     display: flex;
     flex-direction: column;

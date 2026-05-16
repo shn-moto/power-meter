@@ -20,6 +20,9 @@ if (page) {
     const dayNavLabel = page.querySelector('[data-day-nav-label]');
     const dayNavPrev = page.querySelector('[data-day-nav-prev]');
     const dayNavNext = page.querySelector('[data-day-nav-next]');
+    const chargerSessions = page.querySelector('[data-charger-sessions]');
+    const chargerSessionList = page.querySelector('[data-charger-session-list]');
+    const chargerSessionTotal = page.querySelector('[data-charger-session-total]');
     const timerDialog = document.querySelector('[data-timer-dialog]');
     const timerForm = document.querySelector('[data-timer-form]');
     const timerCancel = document.querySelector('[data-timer-cancel]');
@@ -495,7 +498,131 @@ if (page) {
         syncFunctionStates(payload.device_functions || []);
     };
 
-    const renderChart = (series, chartConfig) => {
+    const formatClock = (date) => {
+        const h = String(date.getHours()).padStart(2, '0');
+        const m = String(date.getMinutes()).padStart(2, '0');
+        return `${h}:${m}`;
+    };
+
+    const formatDuration = (seconds) => {
+        const total = Math.max(0, Math.round(seconds));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        if (h > 0) {
+            return `${h}ч ${String(m).padStart(2, '0')}м`;
+        }
+        return `${m}м`;
+    };
+
+    const renderChargerSessions = (sessions) => {
+        if (!chargerSessions || !chargerSessionList || !chargerSessionTotal) {
+            return;
+        }
+        if (!sessions || !sessions.length) {
+            chargerSessions.hidden = true;
+            chargerSessionList.innerHTML = '';
+            chargerSessionTotal.textContent = '';
+            return;
+        }
+        chargerSessions.hidden = false;
+        chargerSessionList.innerHTML = sessions.map((s, i) => {
+            const start = new Date(s.start);
+            const end = new Date(s.end);
+            const range = `${formatClock(start)} – ${formatClock(end)}`;
+            const duration = formatDuration(s.duration_seconds);
+            const energy = `${formatNumber(s.energy_kwh)} кВт·ч`;
+            const avg = s.avg_power_kw ? `avg ${formatNumber(s.avg_power_kw)} кВт` : '';
+            return `<li class="charger-session-row">
+                <span class="charger-session-index">${i + 1}</span>
+                <span class="charger-session-time">${range}</span>
+                <span class="charger-session-duration">${duration}</span>
+                <span class="charger-session-energy">${energy}</span>
+                <span class="charger-session-avg">${avg}</span>
+            </li>`;
+        }).join('');
+        const totalEnergy = sessions.reduce((a, s) => a + Number(s.energy_kwh || 0), 0);
+        chargerSessionTotal.textContent = `Итого: ${formatNumber(totalEnergy)} кВт·ч за ${sessions.length} ${sessions.length === 1 ? 'сессию' : 'сессии'}`;
+    };
+
+    const renderLineChart = (series, chartConfig, sessions) => {
+        const points = series
+            .map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0)])
+            .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+        if (!points.length) {
+            chartEmpty.hidden = false;
+            chartMeta.textContent = chartConfig.label || 'Мгновенная мощность';
+            chartInstance?.clear();
+            renderChargerSessions(sessions);
+            return;
+        }
+        chartEmpty.hidden = true;
+        chartMeta.textContent = `${chartConfig.label || 'Мгновенная мощность'}, ${chartConfig.unit || 'кВт'}`;
+        const dayStart = new Date(points[0][0]);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = dayStart.getTime() + 24 * 60 * 60 * 1000;
+        chartInstance?.setOption({
+            animation: false,
+            grid: { left: 60, right: 20, top: 18, bottom: 40 },
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: 'rgba(31, 32, 34, 0.92)',
+                borderWidth: 0,
+                textStyle: { color: '#d7ecff', fontFamily: 'Bahnschrift, Segoe UI, sans-serif' },
+                formatter: (params) => {
+                    const p = Array.isArray(params) ? params[0] : params;
+                    const ts = new Date(p.value[0]);
+                    return `<strong>${formatClock(ts)}:${String(ts.getSeconds()).padStart(2,'0')}</strong><br/>${formatNumber(p.value[1])} ${chartConfig.unit || 'кВт'}`;
+                },
+            },
+            xAxis: {
+                type: 'time',
+                min: dayStart.getTime(),
+                max: dayEnd,
+                axisLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.4)' } },
+                axisLabel: {
+                    color: '#94cfff',
+                    fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
+                    formatter: (value) => String(new Date(Number(value)).getHours()),
+                },
+                splitLine: { show: false },
+            },
+            yAxis: {
+                type: 'value',
+                min: 0,
+                splitNumber: 4,
+                axisLabel: {
+                    color: '#7cbcff',
+                    fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
+                    formatter: (value) => `${formatNumber(Number(value))} ${chartConfig.unit || 'кВт'}`,
+                },
+                splitLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.12)' } },
+            },
+            series: [{
+                type: 'line',
+                data: points,
+                showSymbol: false,
+                smooth: false,
+                step: 'end',
+                lineStyle: { width: 1.5, color: '#7fd0ff' },
+                areaStyle: {
+                    color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(127, 208, 255, 0.45)' },
+                        { offset: 1, color: 'rgba(45, 120, 181, 0.05)' },
+                    ]),
+                },
+            }],
+        }, true);
+        renderChargerSessions(sessions);
+    };
+
+    const renderChart = (series, chartConfig, extra) => {
+        if (chartConfig?.kind === 'line') {
+            renderLineChart(series, chartConfig, extra?.sessions || []);
+            return;
+        }
+        if (chargerSessions) {
+            chargerSessions.hidden = true;
+        }
         const values = series.map((item) => Number(item.chart_value ?? 0));
         const maxValue = Math.max(...values, 0);
         const useIntervalHourBars = (
@@ -721,7 +848,7 @@ if (page) {
                 return;
             }
             renderAggregateSummary(payload);
-            renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' });
+            renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' }, { sessions: payload.sessions });
         } catch (error) {
             if (error?.name !== 'AbortError') {
                 console.error(error);
@@ -883,7 +1010,7 @@ if (page) {
     if (initialPayload) {
         renderAggregateSummary(initialPayload);
         renderLiveSummary(initialPayload);
-        renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' });
+        renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' }, { sessions: initialPayload.sessions });
         updateDayNav();
         lastAggregateRefreshAt = Date.now();
     } else {

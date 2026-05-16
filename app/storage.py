@@ -267,6 +267,7 @@ def upsert_managed_device(
     category_code: str | None,
     device_kind: str,
     is_energy_meter: bool,
+    is_charger: bool,
     product_id: str | None,
     product_name: str | None,
     icon: str | None,
@@ -286,9 +287,9 @@ def upsert_managed_device(
                 """
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
-                    is_energy_meter, product_id, product_name, icon, onboarding_source, updated_at,
+                    is_energy_meter, is_charger, product_id, product_name, icon, onboarding_source, updated_at,
                     total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -299,6 +300,7 @@ def upsert_managed_device(
                     category_code = EXCLUDED.category_code,
                     device_kind = EXCLUDED.device_kind,
                     is_energy_meter = EXCLUDED.is_energy_meter,
+                    is_charger = EXCLUDED.is_charger,
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -316,6 +318,7 @@ def upsert_managed_device(
                     category_code,
                     device_kind,
                     is_energy_meter,
+                    is_charger,
                     product_id,
                     product_name,
                     icon,
@@ -776,6 +779,7 @@ def materialize_device_profile(
         category_code=str(device.get("category_code") or "").strip() or None,
         device_kind=str(device.get("device_kind") or "meter"),
         is_energy_meter=bool(device.get("is_energy_meter", True)),
+        is_charger=bool(device.get("is_charger", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
         icon=str(device.get("icon") or "").strip() or None,
@@ -924,7 +928,7 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
+                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger,
                         d.product_name, d.category_code, d.device_id,
                         d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -942,7 +946,7 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                                    SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter,
+                                    SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter, d.is_charger,
                         d.product_name, d.category_code, d.product_id, d.icon,
                         d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -1627,7 +1631,7 @@ def _get_dashboard_summary_context(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_kind, d.is_energy_meter,
+                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger,
                     d.product_name, d.category_code, d.device_id,
                       d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -1858,7 +1862,7 @@ def get_device_context_and_stats(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT name, room, device_id, device_kind, is_energy_meter,
+                SELECT name, room, device_id, device_kind, is_energy_meter, is_charger,
                       product_name, category_code, product_id, icon,
                       total_power_dps_key, visualized_codes
                 FROM devices
@@ -1910,6 +1914,177 @@ def get_device_context_and_stats(
 
     stats = _build_device_stats_result(config, device_id, bucket_rows, latest, start, end, period, bucket, capabilities)
     return device, capabilities, stats
+
+
+CHARGER_IDLE_THRESHOLD_W = 50.0      # below this is treated as "not charging"
+CHARGER_SESSION_GAP_SECONDS = 300.0  # idle gap above this splits sessions
+CHARGER_SAMPLE_GAP_SECONDS = 60.0    # consecutive samples wider than this are not integrated
+CHARGER_DELTA_MIN_DT = 1.0           # ignore zero/tiny dt when computing delta power
+CHARGER_DELTA_MAX_DT = 600.0         # don't compute delta over gaps wider than this
+
+
+def _charger_power_series_from_samples(
+    samples: list[dict[str, Any]],
+    energy_counter_meta: tuple[str, float] | None,
+) -> list[tuple[datetime, float]]:
+    """Build instantaneous power (W) time series.
+    For current-type devices: power_w as-is from each sample.
+    For counter-type: delta(counter)/delta(t) between consecutive samples, timestamped at the END of each interval."""
+    if not samples:
+        return []
+    if energy_counter_meta is None:
+        return [(row["captured_at"], float(row["power_w"] or 0)) for row in samples]
+
+    dp_key, scale_divisor = energy_counter_meta
+    series: list[tuple[datetime, float]] = []
+    prev_counter: float | None = None
+    prev_ts: datetime | None = None
+    for row in samples:
+        raw_dps = _normalize_json_field(row.get("raw_dps"))
+        counter_kwh = _read_energy_counter_kwh(raw_dps, dp_key, scale_divisor)
+        ts = row["captured_at"]
+        if counter_kwh is None:
+            continue
+        if prev_counter is not None and prev_ts is not None:
+            dt_s = (ts - prev_ts).total_seconds()
+            if CHARGER_DELTA_MIN_DT <= dt_s <= CHARGER_DELTA_MAX_DT:
+                d_kwh = counter_kwh - prev_counter
+                if d_kwh < 0:
+                    d_kwh = 0.0
+                power_w = d_kwh * 3600.0 * 1000.0 / dt_s
+                series.append((ts, power_w))
+        prev_counter = counter_kwh
+        prev_ts = ts
+    return series
+
+
+def _detect_charger_sessions(
+    power_series: list[tuple[datetime, float]],
+) -> list[dict[str, Any]]:
+    """Split the power series into sessions separated by idle gaps."""
+    sessions: list[dict[str, Any]] = []
+    current_points: list[tuple[datetime, float]] = []
+    last_active_ts: datetime | None = None
+
+    def flush() -> None:
+        if len(current_points) < 2:
+            current_points.clear()
+            return
+        start_ts = current_points[0][0]
+        end_ts = current_points[-1][0]
+        energy_wh = 0.0
+        peak_w = 0.0
+        for (t1, p1), (t2, p2) in zip(current_points, current_points[1:]):
+            dt_s = (t2 - t1).total_seconds()
+            if 0 < dt_s <= CHARGER_SAMPLE_GAP_SECONDS:
+                energy_wh += (p1 + p2) / 2.0 * dt_s / 3600.0
+            peak_w = max(peak_w, p1, p2)
+        duration_s = (end_ts - start_ts).total_seconds()
+        sessions.append(
+            {
+                "start": start_ts,
+                "end": end_ts,
+                "duration_seconds": duration_s,
+                "energy_kwh": round(energy_wh / 1000.0, 3),
+                "peak_power_kw": round(peak_w / 1000.0, 3),
+                "avg_power_kw": round(energy_wh / max(duration_s / 3600.0, 1e-6) / 1000.0, 3) if duration_s > 0 else 0.0,
+            }
+        )
+        current_points.clear()
+
+    for ts, power_w in power_series:
+        if power_w >= CHARGER_IDLE_THRESHOLD_W:
+            if last_active_ts is not None and (ts - last_active_ts).total_seconds() > CHARGER_SESSION_GAP_SECONDS:
+                flush()
+            current_points.append((ts, power_w))
+            last_active_ts = ts
+        else:
+            if last_active_ts is not None and (ts - last_active_ts).total_seconds() > CHARGER_SESSION_GAP_SECONDS:
+                flush()
+                last_active_ts = None
+    flush()
+    return sessions
+
+
+def get_charger_day_stats(
+    config: AppConfig,
+    device_id: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    """For is_charger devices, build a line-style series of instantaneous power
+    over the period plus a per-session breakdown."""
+    capabilities = get_device_capabilities(config, device_id)
+    energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            if energy_counter_meta is not None:
+                # Need raw_dps to read counter for delta computation
+                cursor.execute(
+                    """
+                    SELECT captured_at, power_w, raw_dps
+                    FROM samples
+                    WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                    ORDER BY captured_at ASC
+                    """,
+                    (device_id, start, end),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT captured_at, power_w
+                    FROM samples
+                    WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                    ORDER BY captured_at ASC
+                    """,
+                    (device_id, start, end),
+                )
+            sample_rows = cursor.fetchall()
+
+    power_series = _charger_power_series_from_samples(sample_rows, energy_counter_meta)
+    sessions = _detect_charger_sessions(power_series)
+
+    series_points = [
+        {
+            "timestamp": ts.isoformat(),
+            "power_kw": round(power_w / 1000.0, 3),
+        }
+        for ts, power_w in power_series
+    ]
+
+    total_energy_kwh = sum(session["energy_kwh"] for session in sessions)
+    peak_power_kw = max((session["peak_power_kw"] for session in sessions), default=0.0)
+    avg_power_w = sum(p for _, p in power_series) / len(power_series) if power_series else 0.0
+
+    return {
+        "chart": {
+            "kind": "line",
+            "label": "Мгновенная мощность",
+            "unit": "кВт",
+            "bucket": "raw",
+            "period": "day",
+        },
+        "series": series_points,
+        "sessions": [
+            {
+                "start": s["start"].isoformat(),
+                "end": s["end"].isoformat(),
+                "duration_seconds": int(s["duration_seconds"]),
+                "energy_kwh": s["energy_kwh"],
+                "avg_power_kw": s["avg_power_kw"],
+                "peak_power_kw": s["peak_power_kw"],
+            }
+            for s in sessions
+        ],
+        "summary": {
+            "energy_kwh": round(total_energy_kwh, 3),
+            "peak_power_kw": round(peak_power_kw, 3),
+            "avg_power_w": round(avg_power_w, 1),
+            "sample_count": len(power_series),
+            "session_count": len(sessions),
+        },
+    }
 
 
 def pick_bucket(start: datetime, end: datetime, period: str = "custom") -> str:

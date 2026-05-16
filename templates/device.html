@@ -50,6 +50,11 @@
             <div class="chart-day-nav-label" data-day-nav-label>--</div>
             <button type="button" class="chart-day-nav-button" data-day-nav-next>Вперед</button>
         </div>
+        <div class="charger-sessions" data-charger-sessions hidden>
+            <h3>Сессии за день</h3>
+            <ul class="charger-session-list" data-charger-session-list></ul>
+            <div class="charger-session-total" data-charger-session-total></div>
+        </div>
         <div class="detail-device-visual">
             {% if device.image_url %}
             <img class="device-photo detail-device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">

@@ -6,6 +6,7 @@
     "room": "",
     "device_kind": "meter",
     "is_energy_meter": true,
+    "is_charger": false,
     "category_code": "",
     "product_id": "",
     "product_name": ""

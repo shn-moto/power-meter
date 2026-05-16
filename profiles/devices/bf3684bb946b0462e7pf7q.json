@@ -6,6 +6,7 @@
     "room": "Балкон",
     "device_kind": "breaker",
     "is_energy_meter": true,
+    "is_charger": true,
     "category_code": "dlq",
     "product_id": "z3jngbyubvwgfrcv",
     "product_name": "Breaker"

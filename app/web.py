@@ -33,6 +33,7 @@ from app.storage import (
     delete_managed_device,
     get_control_device,
     get_device_capabilities,
+    get_charger_day_stats,
     get_device_context_and_stats,
     get_dashboard_summary,
     get_device_row,
@@ -1463,6 +1464,16 @@ def _build_device_stats_payload(
     device, capabilities, stats = get_device_context_and_stats(config, device_id, range_start, range_end, period, bucket)
     if not device:
         return None
+    if bool(device.get("is_charger")) and period == "day":
+        charger_stats = get_charger_day_stats(config, device_id, range_start, range_end)
+        existing_summary = stats.get("summary") or {}
+        merged_summary = {**existing_summary, **charger_stats.get("summary", {})}
+        stats = {
+            "summary": merged_summary,
+            "series": charger_stats["series"],
+            "sessions": charger_stats["sessions"],
+            "chart": charger_stats["chart"],
+        }
     stats = _apply_live_stats(config, stats, live_sample)
     stats["summary"]["latest_raw_dps"] = _hydrate_recent_visualized_dps(
         config,

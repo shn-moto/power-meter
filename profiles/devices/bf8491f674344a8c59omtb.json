@@ -6,6 +6,7 @@
     "room": "Балкон",
     "device_kind": "meter",
     "is_energy_meter": true,
+    "is_charger": true,
     "category_code": "dlq",
     "product_id": "rh8slxo4otrhaqx8",
     "product_name": "AT-SY1-TSW"
