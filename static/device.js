@@ -562,7 +562,7 @@ if (page) {
         const dayEnd = dayStart.getTime() + 24 * 60 * 60 * 1000;
         chartInstance?.setOption({
             animation: false,
-            grid: { left: 60, right: 20, top: 18, bottom: 40 },
+            grid: { left: 60, right: 20, top: 18, bottom: 56 },
             tooltip: {
                 trigger: 'axis',
                 backgroundColor: 'rgba(31, 32, 34, 0.92)',
@@ -574,6 +574,24 @@ if (page) {
                     return `<strong>${formatClock(ts)}:${String(ts.getSeconds()).padStart(2,'0')}</strong><br/>${formatNumber(p.value[1])} ${chartConfig.unit || 'кВт'}`;
                 },
             },
+            toolbox: {
+                right: 8,
+                top: 0,
+                itemSize: 14,
+                iconStyle: { borderColor: '#7cbcff' },
+                emphasis: { iconStyle: { borderColor: '#ffffff' } },
+                feature: {
+                    dataZoom: {
+                        yAxisIndex: 'none',
+                        title: { zoom: 'Зум по выделению', back: 'Сброс зума' },
+                    },
+                    restore: { title: 'Сбросить' },
+                },
+            },
+            dataZoom: [
+                { type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+                { type: 'slider', xAxisIndex: 0, height: 18, bottom: 6, filterMode: 'none', borderColor: 'rgba(112, 183, 255, 0.2)', textStyle: { color: '#7cbcff' } },
+            ],
             xAxis: {
                 type: 'time',
                 min: dayStart.getTime(),
@@ -582,7 +600,11 @@ if (page) {
                 axisLabel: {
                     color: '#94cfff',
                     fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
-                    formatter: (value) => String(new Date(Number(value)).getHours()),
+                    hideOverlap: true,
+                    formatter: (value) => {
+                        const d = new Date(Number(value));
+                        return d.getMinutes() === 0 ? String(d.getHours()) : `${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
+                    },
                 },
                 splitLine: { show: false },
             },
