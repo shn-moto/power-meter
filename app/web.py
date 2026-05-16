@@ -1464,7 +1464,11 @@ def _build_device_stats_payload(
     device, capabilities, stats = get_device_context_and_stats(config, device_id, range_start, range_end, period, bucket)
     if not device:
         return None
-    if bool(device.get("is_charger")) and period == "day":
+    charger_day_eligible = bool(device.get("is_charger")) and (
+        period == "day"
+        or (period == "custom" and (range_end - range_start) <= timedelta(hours=36))
+    )
+    if charger_day_eligible:
         charger_stats = get_charger_day_stats(config, device_id, range_start, range_end)
         existing_summary = stats.get("summary") or {}
         merged_summary = {**existing_summary, **charger_stats.get("summary", {})}
