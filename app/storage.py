@@ -2101,3 +2101,138 @@ def pick_bucket(start: datetime, end: datetime, period: str = "custom") -> str:
     if span <= timedelta(days=62):
         return "day"
     return "month"
+
+
+METER_APARTMENTS = ("2", "3")
+METER_PREPAID_KWH = 250.0
+
+
+def _normalize_apartment(value: Any) -> str:
+    label = str(value or "").strip()
+    if label not in METER_APARTMENTS:
+        raise ValueError(f"Unknown apartment: {value!r}")
+    return label
+
+
+def save_meter_reading(
+    config: AppConfig,
+    *,
+    apartment: str,
+    reading_date,
+    reading_kwh: float,
+    is_settlement: bool = False,
+    note: str | None = None,
+) -> dict[str, Any]:
+    apt = _normalize_apartment(apartment)
+    if reading_kwh is None or float(reading_kwh) < 0:
+        raise ValueError("reading_kwh must be non-negative")
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO meter_readings (apartment, reading_date, reading_kwh, is_settlement, note)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (apartment, reading_date) DO UPDATE SET
+                    reading_kwh = EXCLUDED.reading_kwh,
+                    is_settlement = EXCLUDED.is_settlement,
+                    note = EXCLUDED.note
+                RETURNING id, apartment, reading_date, reading_kwh, is_settlement, note, created_at
+                """,
+                (apt, reading_date, float(reading_kwh), bool(is_settlement), (note or None)),
+            )
+            return cursor.fetchone()
+
+
+def delete_meter_reading(config: AppConfig, *, reading_id: int) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM meter_readings WHERE id = %s", (reading_id,))
+
+
+def list_meter_readings(config: AppConfig, *, limit: int = 50) -> list[dict[str, Any]]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, apartment, reading_date, reading_kwh, is_settlement, note, created_at
+                FROM meter_readings
+                ORDER BY reading_date DESC, apartment ASC, id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return list(cursor.fetchall())
+
+
+def _coerce_reading_kwh(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_meter_status(config: AppConfig) -> dict[str, Any]:
+    """Compute current underpayment for the paired apartments.
+
+    For each apartment: take the most recent settlement reading and the
+    most recent reading overall. Consumption since settlement =
+    latest - settlement. Combined underpayment = sum_consumption -
+    METER_PREPAID_KWH (clamped to zero)."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT apartment, reading_date, reading_kwh, is_settlement
+                FROM meter_readings
+                ORDER BY apartment ASC, reading_date DESC, id DESC
+                """
+            )
+            rows = list(cursor.fetchall())
+
+    by_apt: dict[str, list[dict[str, Any]]] = {apt: [] for apt in METER_APARTMENTS}
+    for row in rows:
+        apt = str(row.get("apartment") or "").strip()
+        if apt in by_apt:
+            by_apt[apt].append(row)
+
+    apartments: list[dict[str, Any]] = []
+    total_consumption = 0.0
+    have_any_consumption = False
+    for apt in METER_APARTMENTS:
+        apt_rows = by_apt[apt]
+        latest = apt_rows[0] if apt_rows else None
+        settlement = next((r for r in apt_rows if r.get("is_settlement")), None)
+        latest_kwh = _coerce_reading_kwh(latest["reading_kwh"]) if latest else None
+        settlement_kwh = _coerce_reading_kwh(settlement["reading_kwh"]) if settlement else None
+        consumption_kwh: float | None = None
+        if latest_kwh is not None and settlement_kwh is not None and latest["reading_date"] >= settlement["reading_date"]:
+            consumption_kwh = max(latest_kwh - settlement_kwh, 0.0)
+            total_consumption += consumption_kwh
+            have_any_consumption = True
+        apartments.append(
+            {
+                "apartment": apt,
+                "latest": {
+                    "reading_date": latest["reading_date"].isoformat() if latest else None,
+                    "reading_kwh": latest_kwh,
+                } if latest else None,
+                "settlement": {
+                    "reading_date": settlement["reading_date"].isoformat() if settlement else None,
+                    "reading_kwh": settlement_kwh,
+                } if settlement else None,
+                "consumption_kwh": round(consumption_kwh, 3) if consumption_kwh is not None else None,
+            }
+        )
+
+    underpayment_kwh = None
+    if have_any_consumption:
+        underpayment_kwh = round(max(total_consumption - METER_PREPAID_KWH, 0.0), 3)
+
+    return {
+        "apartments": apartments,
+        "prepaid_kwh": METER_PREPAID_KWH,
+        "total_consumption_kwh": round(total_consumption, 3) if have_any_consumption else None,
+        "underpayment_kwh": underpayment_kwh,
+    }

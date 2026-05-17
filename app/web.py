@@ -36,6 +36,12 @@ from app.storage import (
     get_charger_day_stats,
     get_device_context_and_stats,
     get_dashboard_summary,
+    get_meter_status,
+    list_meter_readings,
+    save_meter_reading,
+    delete_meter_reading,
+    METER_APARTMENTS,
+    METER_PREPAID_KWH,
     get_device_row,
     get_device_rows,
     get_user_by_username,
@@ -1308,6 +1314,7 @@ def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[s
         config,
         _decorate_devices_media(payload.get("sensor_devices", [])),
     )
+    payload["meter"] = _build_meter_overview(config)
     return payload
 
 
@@ -1674,6 +1681,7 @@ def dashboard(request: Request) -> HTMLResponse:
         config,
         _decorate_devices_media(summary.get("sensor_devices", [])),
     )
+    summary["meter"] = _build_meter_overview(config)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -1765,6 +1773,59 @@ def summary_api(request: Request) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     payload = _build_dashboard_page_payload(request, config)
     return JSONResponse(jsonable_encoder(payload))
+
+
+class MeterReadingPayload(BaseModel):
+    apartment: str
+    reading_date: str
+    reading_kwh: float
+    is_settlement: bool = False
+    note: str | None = None
+
+
+def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
+    status = get_meter_status(config)
+    readings = list_meter_readings(config, limit=24)
+    return {
+        "status": status,
+        "apartments": list(METER_APARTMENTS),
+        "prepaid_kwh": METER_PREPAID_KWH,
+        "readings": readings,
+    }
+
+
+@app.get("/api/meter-readings")
+def meter_readings_api(request: Request) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
+
+
+@app.post("/api/meter-readings")
+def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    try:
+        reading_date = datetime.fromisoformat(payload.reading_date).date()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"Некорректная дата: {payload.reading_date!r}") from error
+    try:
+        save_meter_reading(
+            config,
+            apartment=payload.apartment,
+            reading_date=reading_date,
+            reading_kwh=payload.reading_kwh,
+            is_settlement=payload.is_settlement,
+            note=payload.note,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
+
+
+@app.delete("/api/meter-readings/{reading_id}")
+def delete_meter_reading_api(request: Request, reading_id: int) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    delete_meter_reading(config, reading_id=reading_id)
+    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
 
 
 @app.get("/api/sensors/summary")

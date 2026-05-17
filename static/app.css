@@ -1409,3 +1409,208 @@ button:hover {
         text-align: left;
     }
 }
+
+.meter-section {
+    margin: 24px 0;
+    padding: 22px 24px;
+}
+
+.meter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+    margin: 14px 0 22px 0;
+}
+
+.meter-apt h3,
+.meter-totals h3 {
+    margin: 0 0 8px 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7cbcff;
+}
+
+.meter-apt dl,
+.meter-totals dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.meter-apt dl > div,
+.meter-totals dl > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    color: #d7ecff;
+    font-family: Bahnschrift, Segoe UI, sans-serif;
+}
+
+.meter-apt dt,
+.meter-totals dt {
+    color: #94cfff;
+    font-size: 0.85rem;
+}
+
+.meter-apt dd,
+.meter-totals dd {
+    margin: 0;
+    color: #ffffff;
+    font-feature-settings: "tnum";
+}
+
+.meter-apt small,
+.meter-totals small {
+    color: #94cfff;
+    font-size: 0.75rem;
+    margin-left: 4px;
+}
+
+.meter-totals {
+    grid-column: 1 / -1;
+    padding-top: 14px;
+    border-top: 1px solid rgba(112, 183, 255, 0.18);
+}
+
+.meter-underpayment dd {
+    color: #ffd56e;
+    font-weight: 500;
+    font-size: 1.05rem;
+}
+
+.meter-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    padding: 16px 0;
+    border-top: 1px solid rgba(112, 183, 255, 0.18);
+    border-bottom: 1px solid rgba(112, 183, 255, 0.18);
+}
+
+.meter-row {
+    border: 1px solid rgba(112, 183, 255, 0.2);
+    border-radius: 6px;
+    padding: 10px 14px 14px 14px;
+    background: rgba(112, 183, 255, 0.04);
+    display: grid;
+    gap: 10px;
+}
+
+.meter-row legend {
+    padding: 0 6px;
+    color: #7cbcff;
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.meter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.meter-field > span {
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
+    color: #94cfff;
+}
+
+.meter-field input {
+    padding: 6px 10px;
+    background: rgba(31, 32, 34, 0.6);
+    border: 1px solid rgba(112, 183, 255, 0.3);
+    border-radius: 4px;
+    color: #d7ecff;
+    font-family: inherit;
+    font-feature-settings: "tnum";
+}
+
+.meter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #d7ecff;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.meter-form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.meter-form-actions button {
+    padding: 8px 20px;
+    background: linear-gradient(180deg, #7fd0ff 0%, #2d78b5 100%);
+    color: #0b1a26;
+    border: 0;
+    border-radius: 4px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.meter-form-status {
+    color: #94cfff;
+    font-size: 0.85rem;
+}
+
+.meter-form-status.is-error {
+    color: #ff9b6e;
+}
+
+.meter-history {
+    margin-top: 16px;
+}
+
+.meter-history > summary {
+    color: #7cbcff;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    padding: 8px 0;
+}
+
+.meter-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    color: #d7ecff;
+    font-family: Bahnschrift, Segoe UI, sans-serif;
+    font-feature-settings: "tnum";
+}
+
+.meter-history-table th {
+    text-align: left;
+    padding: 6px 10px;
+    color: #94cfff;
+    font-weight: 500;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid rgba(112, 183, 255, 0.2);
+}
+
+.meter-history-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(112, 183, 255, 0.08);
+}
+
+.meter-row-delete {
+    background: transparent;
+    border: 0;
+    color: #94cfff;
+    font-size: 1.05rem;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.meter-row-delete:hover {
+    color: #ff9b6e;
+}
