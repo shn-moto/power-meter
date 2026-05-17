@@ -223,19 +223,26 @@ def _piggyback_phase_probes(device: tinytuya.Device, dps: dict[str, Any]) -> dic
     used for status(). Reusing the open socket avoids triggering Tuya's
     per-session anti-spam (which refuses fresh connections that arrive
     immediately after status())."""
+    import logging
+    logger = logging.getLogger(__name__)
     device.set_socketTimeout(1.5)
     device.set_socketRetryLimit(0)
     merged = dict(dps)
     for probe_index in PHASE_VISUAL_DPS_GROUP:
         try:
             response = device.updatedps(index=[probe_index], nowait=False)
-        except Exception:
+        except Exception as exc:
+            logger.warning("piggyback probe %s exception: %s", probe_index, exc)
             continue
         if not isinstance(response, dict):
+            logger.warning("piggyback probe %s non-dict %r", probe_index, response)
             continue
         response_dps = response.get("dps")
         if isinstance(response_dps, dict) and response_dps:
+            logger.warning("piggyback probe %s OK keys=%s", probe_index, sorted(response_dps.keys()))
             merged.update(response_dps)
+        else:
+            logger.warning("piggyback probe %s -> %r", probe_index, response)
     return merged
 
 
