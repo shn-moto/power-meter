@@ -131,10 +131,10 @@ class RawListener(threading.Thread):
                 LOGGER.warning("phase probe for %s could not acquire LAN lock",
                                self._device.device_id)
                 return False
-        # Give the device a moment to settle after the poll loop's last
-        # close — Tuya breakers reject a fresh TCP connect that arrives too
-        # quickly with Err 905.
-        time.sleep(0.3)
+        # Give the device a longer moment to settle after the poll loop's
+        # last status() — Tesla in particular returns None to updatedps if
+        # we try to reconnect too soon after another LAN session.
+        time.sleep(2.0)
         client = self._open_client()
         any_dps = False
         try:
