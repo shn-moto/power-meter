@@ -58,6 +58,7 @@ from app.storage import (
     update_device_summary_config,
 )
 from app.tuya_service import build_live_sample, build_sample, fetch_status, request_dps_by_index
+from app.raw_listeners import RawListener, RawDpsSnapshot, select_listener_devices
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1465,6 +1466,7 @@ def _build_device_stats_payload(
     start_raw: str | None,
     end_raw: str | None,
     live_sample: DeviceSample | None,
+    raw_dps_snapshot: RawDpsSnapshot | None = None,
 ) -> dict[str, Any] | None:
     range_start, range_end = _resolve_period(config, period, start_raw, end_raw)
     bucket = pick_bucket(range_start, range_end, period)
@@ -1496,6 +1498,15 @@ def _build_device_stats_payload(
         stats["summary"].get("latest_raw_dps") or {},
         device.get("visualized_codes") or [],
     )
+    if raw_dps_snapshot is not None:
+        merged_raw = dict(stats["summary"].get("latest_raw_dps") or {})
+        merged_raw.update(raw_dps_snapshot.raw_dps)
+        stats["summary"]["latest_raw_dps"] = merged_raw
+        if live_sample is None or raw_dps_snapshot.captured_at > live_sample.captured_at:
+            now = datetime.now(_get_timezone(config))
+            stats["summary"]["latest_sample"] = _format_live_timestamp(config, raw_dps_snapshot.captured_at)
+            stats["summary"]["latest_sample_age_seconds"] = get_sample_age_seconds(raw_dps_snapshot.captured_at, now)
+            stats["summary"]["latest_sample_status"] = get_sample_status(raw_dps_snapshot.captured_at, now)
     _augment_current_summary(stats["summary"], capabilities)
     stats["device_functions"] = _attach_function_state(_build_device_functions(capabilities), stats["summary"]["latest_raw_dps"])
     stats["live_metrics"] = _build_live_metrics(device.get("visualized_codes") or [], capabilities, stats["summary"]["latest_raw_dps"])
@@ -1521,6 +1532,8 @@ async def lifespan(app: FastAPI):
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
     app.state.aggregate_cache = {}
+    app.state.raw_dps_latest: dict[str, RawDpsSnapshot] = {}
+    app.state.raw_listeners: list[RawListener] = []
     await asyncio.to_thread(apply_migrations, app.state.app_config.database_url)
     await asyncio.to_thread(init_connection_pool, app.state.app_config.database_url)
     await asyncio.to_thread(sync_device_profiles_from_disk, app.state.app_config)
@@ -1528,11 +1541,20 @@ async def lifespan(app: FastAPI):
         str(device["device_id"]): device
         for device in await asyncio.to_thread(get_device_rows, app.state.app_config)
     }
+    polling_devices = await asyncio.to_thread(get_polling_devices, app.state.app_config)
+    for device in select_listener_devices(polling_devices):
+        listener = RawListener(device, app.state.raw_dps_latest)
+        listener.start()
+        app.state.raw_listeners.append(listener)
     app.state.poller = asyncio.create_task(_poll_loop(app))
     yield
     app.state.poller.cancel()
     with suppress(asyncio.CancelledError):
         await app.state.poller
+    for listener in app.state.raw_listeners:
+        listener.stop()
+    for listener in app.state.raw_listeners:
+        listener.join(timeout=5.0)
     await asyncio.to_thread(close_connection_pool)
 
 
@@ -1730,6 +1752,7 @@ def device_details(request: Request, device_id: str) -> HTMLResponse:
             None,
             None,
             request.app.state.live_samples.get(device_id),
+            request.app.state.raw_dps_latest.get(device_id),
         )
         if payload:
             payload = _set_cached_aggregate_payload(request, stats_cache_key, payload)
@@ -2029,6 +2052,7 @@ def device_stats_api(
             start,
             end,
             request.app.state.live_samples.get(device_id),
+            request.app.state.raw_dps_latest.get(device_id),
         )
         if payload:
             payload = _set_cached_aggregate_payload(request, stats_cache_key, payload)
@@ -2046,7 +2070,8 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
     visualized_codes = tuple(str(code) for code in ((device or {}).get("visualized_codes") or []))
 
     control_device = get_control_device(config, device_id)
-    if control_device:
+    listener_snapshot: RawDpsSnapshot | None = request.app.state.raw_dps_latest.get(device_id) if control_device else None
+    if control_device and listener_snapshot is None:
         try:
             async with _device_lan_lock(request.app, control_device.device_id):
                 captured_at, power_w, raw_dps = await asyncio.to_thread(
@@ -2087,6 +2112,19 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
                     )
         except Exception:
             LOGGER.exception("Live fetch for device %s failed", device_id)
+    elif control_device and listener_snapshot is not None and live_sample is not None:
+        # Listener thread holds the LAN socket for this device — don't fight
+        # it. Merge listener's freshly-pushed DPS into the live sample built
+        # by the regular poll loop.
+        merged_raw = dict(live_sample.raw_dps)
+        merged_raw.update(listener_snapshot.raw_dps)
+        live_sample = DeviceSample(
+            device_id=live_sample.device_id,
+            captured_at=max(live_sample.captured_at, listener_snapshot.captured_at),
+            power_w=live_sample.power_w,
+            raw_dps=merged_raw,
+        )
+        request.app.state.live_samples[control_device.device_id] = live_sample
 
     payload = _build_device_live_payload(
         config,
