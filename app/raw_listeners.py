@@ -149,13 +149,18 @@ class RawListener(threading.Thread):
                                    self._device.device_id, probe_index, exc_info=True)
                     continue
                 if not isinstance(response, dict):
+                    LOGGER.warning("probe %s code %s -> non-dict %r",
+                                   self._device.device_id, probe_index, response)
                     continue
                 dps = response.get("dps")
                 if isinstance(dps, dict) and dps:
-                    LOGGER.info("probe %s code %s -> dps=%s",
-                                self._device.device_id, probe_index, sorted(dps.keys()))
+                    LOGGER.warning("probe %s code %s OK dps=%s",
+                                   self._device.device_id, probe_index, sorted(dps.keys()))
                     self._absorb(response)
                     any_dps = True
+                else:
+                    LOGGER.warning("probe %s code %s -> %r",
+                                   self._device.device_id, probe_index, response)
             if any_dps:
                 self._cycles_with_dps += 1
         except Exception:
