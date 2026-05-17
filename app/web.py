@@ -58,7 +58,7 @@ from app.storage import (
     update_device_summary_config,
 )
 from app.tuya_service import build_live_sample, build_sample, fetch_status, request_dps_by_index
-from app.raw_listeners import RawListener, RawDpsSnapshot, select_listener_devices
+from app.raw_listeners import RawListener, RawDpsSnapshot, has_trick678_request_mode, select_listener_devices
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -817,6 +817,10 @@ async def _poll_loop(app: FastAPI) -> None:
         try:
             devices = await asyncio.to_thread(get_polling_devices, config)
             for device in devices:
+                if has_trick678_request_mode(device):
+                    # Owned by a persistent raw listener thread — skip here
+                    # to avoid socket contention with that listener.
+                    continue
                 try:
                     async with _device_lan_lock(app, device.device_id):
                         captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
@@ -1543,7 +1547,12 @@ async def lifespan(app: FastAPI):
     }
     polling_devices = await asyncio.to_thread(get_polling_devices, app.state.app_config)
     for device in select_listener_devices(polling_devices):
-        listener = RawListener(device, app.state.raw_dps_latest)
+        listener = RawListener(
+            device,
+            app.state.app_config,
+            app.state.raw_dps_latest,
+            app.state.live_samples,
+        )
         listener.start()
         app.state.raw_listeners.append(listener)
     app.state.poller = asyncio.create_task(_poll_loop(app))

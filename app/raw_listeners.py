@@ -6,6 +6,13 @@ packet DPS (6/7/8) only appear via spontaneous updates — the regular poll
 loop never sees them because it opens a fresh socket per cycle and the
 device doesn't include phase packets in synchronous `status()` replies.
 
+For listener-managed devices the regular poll loop SKIPS them (otherwise
+its fresh-socket status() queries would collide with the persistent
+session and both sides would get Err 905 "Device Unreachable"). The
+listener doubles as the device's poll source: it writes DeviceSample
+rows to the DB at the same cadence the main poll loop uses (controlled
+by AppConfig.sample_write_interval_seconds).
+
 Listeners run in OS threads (tinytuya is sync); the rest of the server
 reads `app.state.raw_dps_latest[device_id]` lock-free (single-key dict
 writes are atomic in CPython)."""
@@ -20,7 +27,7 @@ from typing import Any
 
 import tinytuya
 
-from config import TuyaDeviceConfig
+from config import AppConfig, TuyaDeviceConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +37,7 @@ RECONNECT_BACKOFF_SECONDS = 8.0
 STATUS_REFRESH_INTERVAL_SECONDS = 45.0
 
 
-def _has_trick678_request_mode(device: TuyaDeviceConfig) -> bool:
+def has_trick678_request_mode(device: TuyaDeviceConfig) -> bool:
     for mode in (device.dps_request_modes or {}).values():
         if isinstance(mode, str) and mode.startswith("trick678_"):
             return True
@@ -44,11 +51,21 @@ class RawDpsSnapshot:
 
 
 class RawListener(threading.Thread):
-    def __init__(self, device: TuyaDeviceConfig, store: dict[str, RawDpsSnapshot]) -> None:
+    def __init__(
+        self,
+        device: TuyaDeviceConfig,
+        app_config: AppConfig,
+        store: dict[str, RawDpsSnapshot],
+        live_samples: dict[str, Any],
+    ) -> None:
         super().__init__(daemon=True, name=f"raw-listener-{device.device_id}")
         self._device = device
+        self._app_config = app_config
         self._store = store
+        self._live_samples = live_samples
         self._stop = threading.Event()
+        self._last_saved_at: datetime | None = None
+        self._merged: dict[str, Any] = {}
 
     def stop(self) -> None:
         self._stop.set()
@@ -59,13 +76,56 @@ class RawListener(threading.Thread):
         dps = payload.get("dps")
         if not isinstance(dps, dict) or not dps:
             return
-        prev = self._store.get(self._device.device_id)
-        merged = dict(prev.raw_dps) if prev else {}
-        merged.update(dps)
+        self._merged.update(dps)
+        captured = datetime.now(timezone.utc)
         self._store[self._device.device_id] = RawDpsSnapshot(
-            raw_dps=merged,
-            captured_at=datetime.now(timezone.utc),
+            raw_dps=dict(self._merged),
+            captured_at=captured,
         )
+        self._maybe_save_sample(captured)
+        self._update_live_sample(captured)
+
+    def _update_live_sample(self, captured_at: datetime) -> None:
+        from app.tuya_service import extract_metrics
+        from app.storage import DeviceSample
+
+        try:
+            power_w, _ = extract_metrics(self._device, {"dps": dict(self._merged)})
+        except Exception:
+            return
+        self._live_samples[self._device.device_id] = DeviceSample(
+            device_id=self._device.device_id,
+            captured_at=captured_at,
+            power_w=power_w,
+            raw_dps=dict(self._merged),
+        )
+
+    def _maybe_save_sample(self, captured_at: datetime) -> None:
+        from app.tuya_service import extract_metrics
+        from app.storage import DeviceSample, save_sample
+
+        interval = max(int(self._app_config.sample_write_interval_seconds or 5), 1)
+        if (
+            self._last_saved_at is not None
+            and (captured_at - self._last_saved_at).total_seconds() < interval
+        ):
+            return
+        try:
+            power_w, _ = extract_metrics(self._device, {"dps": dict(self._merged)})
+        except Exception:
+            return
+        sample = DeviceSample(
+            device_id=self._device.device_id,
+            captured_at=captured_at,
+            power_w=power_w,
+            raw_dps=dict(self._merged),
+        )
+        try:
+            save_sample(self._app_config, sample)
+        except Exception:
+            LOGGER.debug("listener save_sample failed for %s", self._device.device_id, exc_info=True)
+            return
+        self._last_saved_at = captured_at
 
     def _session(self) -> None:
         client = tinytuya.Device(
@@ -135,6 +195,6 @@ def select_listener_devices(devices: list[TuyaDeviceConfig]) -> list[TuyaDeviceC
     for device in devices:
         if not device.ip_address or not device.local_key:
             continue
-        if _has_trick678_request_mode(device):
+        if has_trick678_request_mode(device):
             selected.append(device)
     return selected
