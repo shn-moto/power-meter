@@ -1821,6 +1821,15 @@ def summary_api(request: Request) -> JSONResponse:
     return JSONResponse(jsonable_encoder(payload))
 
 
+@app.get("/api/listener-stats")
+def listener_stats_api(request: Request) -> JSONResponse:
+    listeners: list[RawListener] = request.app.state.raw_listeners
+    return JSONResponse({
+        "now": datetime.now(timezone.utc).isoformat(),
+        "listeners": [listener.stats() for listener in listeners],
+    })
+
+
 class MeterReadingPayload(BaseModel):
     apartment: str
     reading_date: str

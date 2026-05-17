@@ -61,9 +61,28 @@ class RawListener(threading.Thread):
         self._lan_lock = lan_lock
         self._stop = threading.Event()
         self._merged: dict[str, Any] = {}
+        # Diagnostic stats — read snapshot-style from outside via stats().
+        self._cycles_total = 0
+        self._cycles_with_dps = 0
+        self._absorb_total = 0
+        self._value_change_total = 0
+        self._last_change_at: datetime | None = None
+        self._last_probe_at: datetime | None = None
 
     def stop(self) -> None:
         self._stop.set()
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "device_id": self._device.device_id,
+            "cycles_total": self._cycles_total,
+            "cycles_with_dps": self._cycles_with_dps,
+            "absorb_total": self._absorb_total,
+            "value_change_total": self._value_change_total,
+            "last_change_at": self._last_change_at.isoformat() if self._last_change_at else None,
+            "last_probe_at": self._last_probe_at.isoformat() if self._last_probe_at else None,
+            "current_dps_keys": sorted(self._merged.keys()),
+        }
 
     def _absorb(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -71,10 +90,19 @@ class RawListener(threading.Thread):
         dps = payload.get("dps")
         if not isinstance(dps, dict) or not dps:
             return
-        self._merged.update(dps)
+        self._absorb_total += 1
+        changed = False
+        for key, value in dps.items():
+            if self._merged.get(key) != value:
+                changed = True
+                self._merged[key] = value
+        now = datetime.now(timezone.utc)
+        if changed:
+            self._value_change_total += 1
+            self._last_change_at = now
         self._store[self._device.device_id] = RawDpsSnapshot(
             raw_dps=dict(self._merged),
-            captured_at=datetime.now(timezone.utc),
+            captured_at=now,
         )
 
     def _open_client(self) -> tinytuya.Device:
@@ -94,6 +122,8 @@ class RawListener(threading.Thread):
         same fresh socket. Absorb every DPS the device returns from any of
         the three queries. Returns True if at least one query produced a dps
         dict."""
+        self._cycles_total += 1
+        self._last_probe_at = datetime.now(timezone.utc)
         acquired = False
         if self._lan_lock is not None:
             acquired = self._lan_lock.acquire(timeout=5.0)
@@ -127,6 +157,8 @@ class RawListener(threading.Thread):
                                 self._device.device_id, probe_index, sorted(dps.keys()))
                     self._absorb(response)
                     any_dps = True
+            if any_dps:
+                self._cycles_with_dps += 1
         except Exception:
             LOGGER.warning("probe cycle crashed for %s", self._device.device_id, exc_info=True)
         finally:
