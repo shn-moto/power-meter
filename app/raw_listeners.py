@@ -187,14 +187,15 @@ class RawListener(threading.Thread):
                 probe = probe_indices[phase_probe_round % len(probe_indices)]
                 phase_probe_round += 1
                 try:
-                    # On the persistent socket, the response (which often carries
-                    # phase_a/b/c DPS in the same channel) is captured by the
-                    # next receive() iteration; we don't need to consume the
-                    # return value here.
-                    client.updatedps(index=[probe], nowait=True)
+                    probe_response = client.updatedps(index=[probe], nowait=False)
                 except Exception:
-                    LOGGER.debug("phase probe failed for %s", self._device.device_id, exc_info=True)
+                    LOGGER.warning("phase probe failed for %s", self._device.device_id, exc_info=True)
                     break
+                LOGGER.info(
+                    "raw listener %s probe DPS %s -> %r",
+                    self._device.device_id, probe, probe_response,
+                )
+                self._absorb(probe_response)
                 last_phase_trigger = now
 
         try:
@@ -203,7 +204,9 @@ class RawListener(threading.Thread):
             pass
 
     def run(self) -> None:
-        LOGGER.info("raw listener starting for %s", self._device.device_id)
+        # Use warning level so the message survives the default uvicorn log
+        # filter; lets us confirm listeners actually spawn.
+        LOGGER.warning("raw listener starting for %s", self._device.device_id)
         while not self._stop.is_set():
             try:
                 self._session()
@@ -212,7 +215,7 @@ class RawListener(threading.Thread):
             if self._stop.is_set():
                 break
             self._stop.wait(RECONNECT_BACKOFF_SECONDS)
-        LOGGER.info("raw listener stopped for %s", self._device.device_id)
+        LOGGER.warning("raw listener stopped for %s", self._device.device_id)
 
 
 def select_listener_devices(devices: list[TuyaDeviceConfig]) -> list[TuyaDeviceConfig]:
