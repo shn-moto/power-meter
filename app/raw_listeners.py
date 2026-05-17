@@ -111,15 +111,15 @@ class RawListener(threading.Thread):
             except Exception:
                 pass
         if not isinstance(response, dict):
-            LOGGER.info("probe DPS %s for %s -> non-dict %r",
+            LOGGER.warning("probe DPS %s for %s -> non-dict %r",
                         probe_index, self._device.device_id, response)
             return False
         dps = response.get("dps")
         if not isinstance(dps, dict) or not dps:
-            LOGGER.info("probe DPS %s for %s -> %r",
+            LOGGER.warning("probe DPS %s for %s -> %r",
                         probe_index, self._device.device_id, response)
             return False
-        LOGGER.info("probe DPS %s for %s OK keys=%s",
+        LOGGER.warning("probe DPS %s for %s OK keys=%s",
                     probe_index, self._device.device_id, sorted(dps.keys()))
         self._absorb(response)
         return True
