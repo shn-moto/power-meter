@@ -117,6 +117,8 @@ class RawListener(threading.Thread):
             # status() first to negotiate the session token for protocol 3.5;
             # updatedps without prior session frequently returns Err 905.
             status_payload = client.status()
+            LOGGER.warning("probe status() for %s -> %r",
+                           self._device.device_id, status_payload)
             self._absorb(status_payload)
             response = client.updatedps(index=[probe_index], nowait=False)
         except Exception:
