@@ -145,10 +145,16 @@ if (dashboardPage) {
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
+    const meterUnderpayment = dashboardPage.querySelector('[data-summary-meter-underpayment]');
+
     const applyDashboardPayload = (payload) => {
         monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
         estimatedCost.textContent = `${payload.estimated_cost}`;
         deviceCount.textContent = `${payload.device_count}`;
+        if (meterUnderpayment) {
+            const up = payload.meter?.status?.underpayment_kwh;
+            meterUnderpayment.textContent = (up !== null && up !== undefined) ? `${Number(up).toFixed(2)} кВт·ч` : '—';
+        }
         syncDevices(payload.devices || []);
         syncSensorDevices(payload.sensor_devices || []);
     };
@@ -231,41 +237,53 @@ if (meterSection) {
     const formStatus = meterSection.querySelector('[data-meter-form-status]');
     const statusContainer = meterSection.querySelector('[data-meter-status]');
     const historyBody = meterSection.querySelector('[data-meter-history]');
+    const summaryMeta = meterSection.querySelector('[data-meter-summary-meta]');
+    const heroUnderpayment = document.querySelector('[data-summary-meter-underpayment]');
 
-    const fmtKwh = (v) => v === null || v === undefined ? '—' : `${Number(v).toFixed(2)} кВт·ч`;
-    const fmtKwhRaw = (v) => v === null || v === undefined ? '—' : Number(v).toFixed(2);
+    const fmtKwhCell = (v) => v === null || v === undefined ? '—' : Number(v).toFixed(2);
+    const fmtKwhFull = (v) => v === null || v === undefined ? '—' : `${Number(v).toFixed(2)} кВт·ч`;
 
-    const renderStatus = (meter) => {
+    const renderStatusTable = (meter) => {
         if (!meter || !statusContainer) return;
-        const apts = (meter.status?.apartments || []);
-        const aptParts = apts.map((apt) => {
-            const settlement = apt.settlement
-                ? `${fmtKwhRaw(apt.settlement.reading_kwh)} <small>(${apt.settlement.reading_date})</small>`
-                : '—';
-            const latest = apt.latest
-                ? `${fmtKwhRaw(apt.latest.reading_kwh)} <small>(${apt.latest.reading_date})</small>`
-                : '—';
-            const consumption = apt.consumption_kwh !== null && apt.consumption_kwh !== undefined
-                ? fmtKwh(apt.consumption_kwh)
-                : '—';
-            return `<div class="meter-apt">
-                <h3>Квартира ${apt.apartment}</h3>
-                <dl>
-                    <div><dt>Расчётная</dt><dd>${settlement}</dd></div>
-                    <div><dt>Последнее</dt><dd>${latest}</dd></div>
-                    <div><dt>Расход с расчётной</dt><dd>${consumption}</dd></div>
-                </dl>
-            </div>`;
-        });
+        const apts = meter.status?.apartments || [];
+        const aptCount = apts.length;
+        const colHeaders = apts.map((apt) => `<th>Кв ${apt.apartment}</th>`).join('');
+        const settlementCells = apts.map((apt) => {
+            if (!apt.settlement) return '<td>—</td>';
+            return `<td>${fmtKwhCell(apt.settlement.reading_kwh)} <small>(${apt.settlement.reading_date})</small></td>`;
+        }).join('');
+        const latestCells = apts.map((apt) => {
+            if (!apt.latest) return '<td>—</td>';
+            return `<td>${fmtKwhCell(apt.latest.reading_kwh)} <small>(${apt.latest.reading_date})</small></td>`;
+        }).join('');
+        const consumptionCells = apts.map((apt) => `<td>${fmtKwhCell(apt.consumption_kwh)}</td>`).join('');
         const totals = meter.status || {};
-        const totalsHtml = `<div class="meter-totals" data-meter-totals>
-            <dl>
-                <div><dt>Суммарный расход</dt><dd>${totals.total_consumption_kwh !== null && totals.total_consumption_kwh !== undefined ? fmtKwh(totals.total_consumption_kwh) : '—'}</dd></div>
-                <div><dt>Предоплачено</dt><dd>${Number(meter.prepaid_kwh).toFixed(0)} кВт·ч</dd></div>
-                <div class="meter-underpayment"><dt>Недоплата</dt><dd>${totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined ? fmtKwh(totals.underpayment_kwh) : '—'}</dd></div>
-            </dl>
-        </div>`;
-        statusContainer.innerHTML = aptParts.join('') + totalsHtml;
+        const totalConsumption = totals.total_consumption_kwh !== null && totals.total_consumption_kwh !== undefined
+            ? `<strong>${Number(totals.total_consumption_kwh).toFixed(2)}</strong>` : '—';
+        const underpayment = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
+            ? `<strong>${Number(totals.underpayment_kwh).toFixed(2)}</strong>` : '—';
+        statusContainer.innerHTML = `<table class="meter-status-table">
+            <thead>
+                <tr><th></th>${colHeaders}<th>Сумма</th></tr>
+            </thead>
+            <tbody>
+                <tr><th>Расчётное</th>${settlementCells}<td></td></tr>
+                <tr><th>Последнее</th>${latestCells}<td></td></tr>
+                <tr><th>Расход с расчётной</th>${consumptionCells}<td>${totalConsumption}</td></tr>
+                <tr><th>Предоплачено</th><td colspan="${aptCount}"></td><td>${Number(meter.prepaid_kwh).toFixed(0)}</td></tr>
+                <tr class="meter-row-underpayment"><th>Недоплата</th><td colspan="${aptCount}"></td><td>${underpayment}</td></tr>
+            </tbody>
+        </table>`;
+        if (summaryMeta) {
+            summaryMeta.textContent = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
+                ? `недоплата ${Number(totals.underpayment_kwh).toFixed(2)} кВт·ч`
+                : 'нет данных';
+        }
+        if (heroUnderpayment) {
+            heroUnderpayment.textContent = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
+                ? fmtKwhFull(totals.underpayment_kwh)
+                : '—';
+        }
     };
 
     const renderHistory = (rows) => {
@@ -286,7 +304,7 @@ if (meterSection) {
             const response = await fetch('/api/meter-readings', { cache: 'no-store' });
             if (!response.ok) throw new Error('failed');
             const payload = await response.json();
-            renderStatus(payload);
+            renderStatusTable(payload);
             renderHistory(payload.readings);
         } catch (error) {
             // silent
@@ -294,20 +312,22 @@ if (meterSection) {
     };
 
     const collectFormRows = () => {
+        const dateEl = form.querySelector('[name="reading_date"]');
+        const settlementEl = form.querySelector('[name="is_settlement"]');
+        const dateValue = (dateEl?.value || '').trim();
+        if (!dateValue) return [];
+        const isSettlement = !!settlementEl?.checked;
         const rows = [];
-        meterSection.querySelectorAll('[data-meter-row]').forEach((fieldset) => {
-            const apt = fieldset.dataset.apt;
-            const dateEl = fieldset.querySelector('[name="reading_date"]');
-            const valueEl = fieldset.querySelector('[name="reading_kwh"]');
-            const settlementEl = fieldset.querySelector('[name="is_settlement"]');
-            const dateValue = (dateEl?.value || '').trim();
+        form.querySelectorAll('[data-meter-row]').forEach((wrapper) => {
+            const apt = wrapper.dataset.apt;
+            const valueEl = wrapper.querySelector('[name="reading_kwh"]');
             const valueRaw = (valueEl?.value || '').trim();
-            if (!dateValue || !valueRaw) return;
+            if (!valueRaw) return;
             rows.push({
                 apartment: apt,
                 reading_date: dateValue,
                 reading_kwh: Number(valueRaw),
-                is_settlement: !!settlementEl?.checked,
+                is_settlement: isSettlement,
             });
         });
         return rows;
@@ -323,7 +343,7 @@ if (meterSection) {
         event.preventDefault();
         const rows = collectFormRows();
         if (!rows.length) {
-            setFormStatus('Заполните хотя бы одно показание', true);
+            setFormStatus('Введите дату и хотя бы одно показание', true);
             return;
         }
         setFormStatus('Сохраняем…');
@@ -341,7 +361,8 @@ if (meterSection) {
             }
             setFormStatus('Сохранено');
             form.querySelectorAll('[name="reading_kwh"]').forEach((el) => { el.value = ''; });
-            form.querySelectorAll('[name="is_settlement"]').forEach((el) => { el.checked = false; });
+            const settlementBox = form.querySelector('[name="is_settlement"]');
+            if (settlementBox) settlementBox.checked = false;
             await refreshMeter();
             setTimeout(() => setFormStatus(''), 2000);
         } catch (error) {
@@ -363,14 +384,13 @@ if (meterSection) {
         }
     });
 
-    // Pre-fill date inputs with today
-    meterSection.querySelectorAll('[name="reading_date"]').forEach((el) => {
-        if (!el.value) {
-            const today = new Date();
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const dd = String(today.getDate()).padStart(2, '0');
-            el.value = `${yyyy}-${mm}-${dd}`;
-        }
-    });
+    // Pre-fill date input with today
+    const dateInput = meterSection.querySelector('[name="reading_date"]');
+    if (dateInput && !dateInput.value) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        dateInput.value = `${yyyy}-${mm}-${dd}`;
+    }
 }

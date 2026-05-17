@@ -61,102 +61,115 @@
             <span class="stat-label">Устройств онлайн</span>
             <strong class="stat-value" data-summary-device-count>{{ summary.device_count }}</strong>
         </article>
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Недоплата по счётчикам</span>
+            <strong class="stat-value" data-summary-meter-underpayment>{% if summary.meter and summary.meter.status.underpayment_kwh is not none %}{{ '%.2f'|format(summary.meter.status.underpayment_kwh) }} кВт·ч{% else %}—{% endif %}</strong>
+        </article>
     </div>
 </section>
 
-<section class="meter-section detail-card lcd-panel" data-meter-section>
-    <div class="section-heading">
-        <h2>Учёт показаний</h2>
-    </div>
-    {% set meter = summary.meter %}
-    <div class="meter-grid" data-meter-status>
-        {% for apt in meter.status.apartments %}
-        <div class="meter-apt">
-            <h3>Квартира {{ apt.apartment }}</h3>
-            <dl>
-                <div>
-                    <dt>Расчётная</dt>
-                    <dd>{% if apt.settlement %}{{ '%.2f'|format(apt.settlement.reading_kwh) }} <small>({{ apt.settlement.reading_date }})</small>{% else %}—{% endif %}</dd>
-                </div>
-                <div>
-                    <dt>Последнее</dt>
-                    <dd>{% if apt.latest %}{{ '%.2f'|format(apt.latest.reading_kwh) }} <small>({{ apt.latest.reading_date }})</small>{% else %}—{% endif %}</dd>
-                </div>
-                <div>
-                    <dt>Расход с расчётной</dt>
-                    <dd>{% if apt.consumption_kwh is not none %}{{ '%.2f'|format(apt.consumption_kwh) }} кВт·ч{% else %}—{% endif %}</dd>
-                </div>
-            </dl>
+{% set meter = summary.meter %}
+<details class="meter-section" data-meter-section>
+    <summary class="meter-section-summary">
+        <span>Учёт показаний счётчиков</span>
+        <span class="meter-section-summary-meta" data-meter-summary-meta>
+            {% if meter.status.underpayment_kwh is not none %}недоплата {{ '%.2f'|format(meter.status.underpayment_kwh) }} кВт·ч{% else %}нет данных{% endif %}
+        </span>
+    </summary>
+    <div class="meter-section-body">
+        <div class="meter-status" data-meter-status>
+            <table class="meter-status-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        {% for apt in meter.status.apartments %}<th>Кв {{ apt.apartment }}</th>{% endfor %}
+                        <th>Сумма</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <th>Расчётное</th>
+                        {% for apt in meter.status.apartments %}
+                        <td>{% if apt.settlement %}{{ '%.2f'|format(apt.settlement.reading_kwh) }} <small>({{ apt.settlement.reading_date }})</small>{% else %}—{% endif %}</td>
+                        {% endfor %}
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <th>Последнее</th>
+                        {% for apt in meter.status.apartments %}
+                        <td>{% if apt.latest %}{{ '%.2f'|format(apt.latest.reading_kwh) }} <small>({{ apt.latest.reading_date }})</small>{% else %}—{% endif %}</td>
+                        {% endfor %}
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <th>Расход с расчётной</th>
+                        {% for apt in meter.status.apartments %}
+                        <td>{% if apt.consumption_kwh is not none %}{{ '%.2f'|format(apt.consumption_kwh) }}{% else %}—{% endif %}</td>
+                        {% endfor %}
+                        <td>{% if meter.status.total_consumption_kwh is not none %}<strong>{{ '%.2f'|format(meter.status.total_consumption_kwh) }}</strong>{% else %}—{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <th>Предоплачено</th>
+                        <td colspan="{{ meter.status.apartments|length }}"></td>
+                        <td>{{ '%.0f'|format(meter.prepaid_kwh) }}</td>
+                    </tr>
+                    <tr class="meter-row-underpayment">
+                        <th>Недоплата</th>
+                        <td colspan="{{ meter.status.apartments|length }}"></td>
+                        <td>{% if meter.status.underpayment_kwh is not none %}<strong>{{ '%.2f'|format(meter.status.underpayment_kwh) }}</strong>{% else %}—{% endif %}</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
-        {% endfor %}
-        <div class="meter-totals" data-meter-totals>
-            <dl>
-                <div>
-                    <dt>Суммарный расход</dt>
-                    <dd>{% if meter.status.total_consumption_kwh is not none %}{{ '%.2f'|format(meter.status.total_consumption_kwh) }} кВт·ч{% else %}—{% endif %}</dd>
-                </div>
-                <div>
-                    <dt>Предоплачено</dt>
-                    <dd>{{ '%.0f'|format(meter.prepaid_kwh) }} кВт·ч</dd>
-                </div>
-                <div class="meter-underpayment">
-                    <dt>Недоплата</dt>
-                    <dd>{% if meter.status.underpayment_kwh is not none %}{{ '%.2f'|format(meter.status.underpayment_kwh) }} кВт·ч{% else %}—{% endif %}</dd>
-                </div>
-            </dl>
-        </div>
-    </div>
 
-    <form class="meter-form" data-meter-form>
-        {% for apt in meter.apartments %}
-        <fieldset class="meter-row" data-meter-row data-apt="{{ apt }}">
-            <legend>Квартира {{ apt }}</legend>
-            <label class="meter-field">
+        <form class="meter-form" data-meter-form>
+            <label class="meter-field meter-field-date">
                 <span>Дата</span>
                 <input type="date" name="reading_date" required>
             </label>
-            <label class="meter-field">
-                <span>Показание, кВт·ч</span>
+            {% for apt in meter.apartments %}
+            <label class="meter-field" data-meter-row data-apt="{{ apt }}">
+                <span>Кв {{ apt }}, кВт·ч</span>
                 <input type="number" name="reading_kwh" step="0.01" min="0" inputmode="decimal" placeholder="0.00">
             </label>
+            {% endfor %}
             <label class="meter-checkbox">
                 <input type="checkbox" name="is_settlement">
                 <span>Расчётная дата</span>
             </label>
-        </fieldset>
-        {% endfor %}
-        <div class="meter-form-actions">
-            <button type="submit">Сохранить</button>
-            <span class="meter-form-status" data-meter-form-status></span>
-        </div>
-    </form>
+            <div class="meter-form-actions">
+                <button type="submit">Сохранить</button>
+                <span class="meter-form-status" data-meter-form-status></span>
+            </div>
+        </form>
 
-    <details class="meter-history">
-        <summary>История показаний</summary>
-        <table class="meter-history-table">
-            <thead>
-                <tr>
-                    <th>Дата</th>
-                    <th>Кв</th>
-                    <th>кВт·ч</th>
-                    <th>Расч.</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody data-meter-history>
-                {% for row in meter.readings %}
-                <tr data-reading-id="{{ row.id }}">
-                    <td>{{ row.reading_date }}</td>
-                    <td>{{ row.apartment }}</td>
-                    <td>{{ '%.2f'|format(row.reading_kwh) }}</td>
-                    <td>{% if row.is_settlement %}✓{% endif %}</td>
-                    <td><button type="button" class="meter-row-delete" data-meter-delete="{{ row.id }}" aria-label="Удалить">×</button></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </details>
-</section>
+        <details class="meter-history">
+            <summary>История показаний</summary>
+            <table class="meter-history-table">
+                <thead>
+                    <tr>
+                        <th>Дата</th>
+                        <th>Кв</th>
+                        <th>кВт·ч</th>
+                        <th>Расч.</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody data-meter-history>
+                    {% for row in meter.readings %}
+                    <tr data-reading-id="{{ row.id }}">
+                        <td>{{ row.reading_date }}</td>
+                        <td>{{ row.apartment }}</td>
+                        <td>{{ '%.2f'|format(row.reading_kwh) }}</td>
+                        <td>{% if row.is_settlement %}✓{% endif %}</td>
+                        <td><button type="button" class="meter-row-delete" data-meter-delete="{{ row.id }}" aria-label="Удалить">×</button></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </details>
+    </div>
+</details>
 
 <section class="device-section">
     <div class="section-heading">
