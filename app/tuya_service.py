@@ -250,6 +250,7 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     if not device_config.ip_address or not _is_tuya_host_reachable(device_config.ip_address):
         raise RuntimeError(f"Device {device_config.device_id} is offline")
 
+    needs_piggyback = _has_trick678_modes(device_config)
     device = tinytuya.Device(
         device_config.device_id,
         device_config.ip_address,
@@ -259,19 +260,31 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     device.set_version(device_config.version)
     device.set_socketTimeout(5.0)
     device.set_socketRetryLimit(2)
-    payload = device.status()
-    if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
-        if _has_trick678_modes(device_config):
-            payload = {
-                **payload,
-                "dps": _piggyback_phase_probes(device, payload.get("dps") or {}),
-            }
-        if include_visualized_codes:
-            payload = {
-                **payload,
-                "dps": _merge_missing_visualized_codes_once(device, device_config, payload.get("dps") or {}),
-            }
-        return payload
+    if needs_piggyback:
+        # Keep the TCP socket alive so the follow-up updatedps probes can
+        # reuse the same Tuya session — without persistence the breaker
+        # rejects each fresh connect with Err 905.
+        device.set_socketPersistent(True)
+    try:
+        payload = device.status()
+        if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
+            if needs_piggyback:
+                payload = {
+                    **payload,
+                    "dps": _piggyback_phase_probes(device, payload.get("dps") or {}),
+                }
+            if include_visualized_codes:
+                payload = {
+                    **payload,
+                    "dps": _merge_missing_visualized_codes_once(device, device_config, payload.get("dps") or {}),
+                }
+            return payload
+    finally:
+        if needs_piggyback:
+            try:
+                device.close()
+            except Exception:
+                pass
 
     return payload
 
