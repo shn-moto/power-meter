@@ -53,10 +53,12 @@ class RawListener(threading.Thread):
         self,
         device: TuyaDeviceConfig,
         store: dict[str, RawDpsSnapshot],
+        lan_lock: "threading.Lock | None" = None,
     ) -> None:
         super().__init__(daemon=True, name=f"raw-listener-{device.device_id}")
         self._device = device
         self._store = store
+        self._lan_lock = lan_lock
         self._stop = threading.Event()
         self._merged: dict[str, Any] = {}
 
@@ -98,6 +100,15 @@ class RawListener(threading.Thread):
     def _probe_once(self, probe_index: int) -> bool:
         """Open a fresh socket, fire a single updatedps([probe_index]), absorb
         the response, close. Returns True if response carried any DPS."""
+        acquired = False
+        if self._lan_lock is not None:
+            # Wait up to ~5 seconds for the poll loop to release the LAN
+            # socket — fail-fast otherwise rather than queueing forever.
+            acquired = self._lan_lock.acquire(timeout=5.0)
+            if not acquired:
+                LOGGER.warning("phase probe for %s could not acquire LAN lock",
+                               self._device.device_id)
+                return False
         client = self._open_client()
         try:
             response = client.updatedps(index=[probe_index], nowait=False)
@@ -110,6 +121,8 @@ class RawListener(threading.Thread):
                 client.close()
             except Exception:
                 pass
+            if acquired and self._lan_lock is not None:
+                self._lan_lock.release()
         if not isinstance(response, dict):
             LOGGER.warning("probe DPS %s for %s -> non-dict %r",
                         probe_index, self._device.device_id, response)

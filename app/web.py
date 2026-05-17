@@ -800,6 +800,18 @@ def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_r
     return month_start, now
 
 
+def _device_lan_thread_lock(app: FastAPI, device_id: str):
+    """Per-device threading.Lock — shared between the asyncio poll loop
+    (acquired inside to_thread) and the raw listener thread."""
+    import threading
+    locks: dict[str, threading.Lock] = app.state.device_lan_thread_locks
+    lock = locks.get(device_id)
+    if lock is None:
+        lock = threading.Lock()
+        locks[device_id] = lock
+    return lock
+
+
 def _device_lan_lock(app: FastAPI, device_id: str) -> asyncio.Lock:
     locks: dict[str, asyncio.Lock] = app.state.device_lan_locks
     lock = locks.get(device_id)
@@ -818,8 +830,14 @@ async def _poll_loop(app: FastAPI) -> None:
             devices = await asyncio.to_thread(get_polling_devices, config)
             for device in devices:
                 try:
+                    thread_lock = _device_lan_thread_lock(app, device.device_id)
+
+                    def _locked_build_sample(d=device, lock=thread_lock):
+                        with lock:
+                            return build_sample(d)
+
                     async with _device_lan_lock(app, device.device_id):
-                        captured_at, power_w, raw_dps = await asyncio.to_thread(build_sample, device)
+                        captured_at, power_w, raw_dps = await asyncio.to_thread(_locked_build_sample)
                     sample = DeviceSample(
                         device_id=device.device_id,
                         captured_at=captured_at,
@@ -1529,6 +1547,7 @@ async def lifespan(app: FastAPI):
     app.state.live_visualized_cache = {}
     app.state.live_visualized_tasks = {}
     app.state.device_lan_locks = {}
+    app.state.device_lan_thread_locks = {}
     app.state.last_saved_at = {}
     app.state.device_capabilities_cache = {}
     app.state.aggregate_cache = {}
@@ -1543,7 +1562,11 @@ async def lifespan(app: FastAPI):
     }
     polling_devices = await asyncio.to_thread(get_polling_devices, app.state.app_config)
     for device in select_listener_devices(polling_devices):
-        listener = RawListener(device, app.state.raw_dps_latest)
+        listener = RawListener(
+            device,
+            app.state.raw_dps_latest,
+            _device_lan_thread_lock(app, device.device_id),
+        )
         listener.start()
         app.state.raw_listeners.append(listener)
     app.state.poller = asyncio.create_task(_poll_loop(app))
@@ -2073,10 +2096,14 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
     listener_snapshot: RawDpsSnapshot | None = request.app.state.raw_dps_latest.get(device_id) if control_device else None
     if control_device and listener_snapshot is None:
         try:
+            thread_lock_live = _device_lan_thread_lock(request.app, control_device.device_id)
+
+            def _locked_build_live_sample(d=control_device, lock=thread_lock_live):
+                with lock:
+                    return build_live_sample(d)
+
             async with _device_lan_lock(request.app, control_device.device_id):
-                captured_at, power_w, raw_dps = await asyncio.to_thread(
-                    build_live_sample, control_device
-                )
+                captured_at, power_w, raw_dps = await asyncio.to_thread(_locked_build_live_sample)
             # Cache any freshly-obtained visualized DPS values for subsequent
             # calls — Tuya breakers sometimes refuse rapid queries.
             cache_updates = {
