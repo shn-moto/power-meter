@@ -102,8 +102,8 @@ class RawListener(threading.Thread):
         try:
             response = client.updatedps(index=[probe_index], nowait=False)
         except Exception:
-            LOGGER.debug("phase probe error for %s code %s",
-                         self._device.device_id, probe_index, exc_info=True)
+            LOGGER.warning("phase probe error for %s code %s",
+                           self._device.device_id, probe_index, exc_info=True)
             return False
         finally:
             try:
@@ -111,10 +111,16 @@ class RawListener(threading.Thread):
             except Exception:
                 pass
         if not isinstance(response, dict):
+            LOGGER.info("probe DPS %s for %s -> non-dict %r",
+                        probe_index, self._device.device_id, response)
             return False
         dps = response.get("dps")
         if not isinstance(dps, dict) or not dps:
+            LOGGER.info("probe DPS %s for %s -> %r",
+                        probe_index, self._device.device_id, response)
             return False
+        LOGGER.info("probe DPS %s for %s OK keys=%s",
+                    probe_index, self._device.device_id, sorted(dps.keys()))
         self._absorb(response)
         return True
 
