@@ -63,7 +63,7 @@
         </article>
         <article class="stat-card lcd-panel">
             <span class="stat-label">Недоплата по счётчикам</span>
-            <strong class="stat-value" data-summary-meter-underpayment>{% if summary.meter and summary.meter.status.underpayment_kwh is not none %}{{ '%.2f'|format(summary.meter.status.underpayment_kwh) }} кВт·ч{% else %}—{% endif %}</strong>
+            <strong class="stat-value" data-summary-meter-underpayment>{% if summary.meter and summary.meter.status.underpayment_cost is not none %}{{ '%.2f'|format(summary.meter.status.underpayment_cost) }}{% else %}—{% endif %}</strong>
         </article>
     </div>
 </section>
@@ -73,7 +73,7 @@
     <summary class="meter-section-summary">
         <span>Учёт показаний счётчиков</span>
         <span class="meter-section-summary-meta" data-meter-summary-meta>
-            {% if meter.status.underpayment_kwh is not none %}недоплата {{ '%.2f'|format(meter.status.underpayment_kwh) }} кВт·ч{% else %}нет данных{% endif %}
+            {% if meter.status.underpayment_cost is not none %}недоплата {{ '%.2f'|format(meter.status.underpayment_cost) }} ({{ '%.2f'|format(meter.status.underpayment_kwh) }} кВт·ч){% else %}нет данных{% endif %}
         </span>
     </summary>
     <div class="meter-section-body">
@@ -116,7 +116,7 @@
                     <tr class="meter-row-underpayment">
                         <th>Недоплата</th>
                         <td colspan="{{ meter.status.apartments|length }}"></td>
-                        <td>{% if meter.status.underpayment_kwh is not none %}<strong>{{ '%.2f'|format(meter.status.underpayment_kwh) }}</strong>{% else %}—{% endif %}</td>
+                        <td>{% if meter.status.underpayment_cost is not none %}<strong>{{ '%.2f'|format(meter.status.underpayment_cost) }}</strong> <small>({{ '%.2f'|format(meter.status.underpayment_kwh) }} кВт·ч)</small>{% else %}—{% endif %}</td>
                     </tr>
                 </tbody>
             </table>

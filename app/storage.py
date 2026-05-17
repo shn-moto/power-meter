@@ -2227,12 +2227,16 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
         )
 
     underpayment_kwh = None
+    underpayment_cost = None
     if have_any_consumption:
         underpayment_kwh = round(max(total_consumption - METER_PREPAID_KWH, 0.0), 3)
+        underpayment_cost = round(underpayment_kwh * float(config.tariff_per_kwh or 0.0), 2)
 
     return {
         "apartments": apartments,
         "prepaid_kwh": METER_PREPAID_KWH,
+        "tariff_per_kwh": float(config.tariff_per_kwh or 0.0),
         "total_consumption_kwh": round(total_consumption, 3) if have_any_consumption else None,
         "underpayment_kwh": underpayment_kwh,
+        "underpayment_cost": underpayment_cost,
     }

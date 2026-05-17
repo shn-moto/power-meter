@@ -152,8 +152,8 @@ if (dashboardPage) {
         estimatedCost.textContent = `${payload.estimated_cost}`;
         deviceCount.textContent = `${payload.device_count}`;
         if (meterUnderpayment) {
-            const up = payload.meter?.status?.underpayment_kwh;
-            meterUnderpayment.textContent = (up !== null && up !== undefined) ? `${Number(up).toFixed(2)} кВт·ч` : '—';
+            const upCost = payload.meter?.status?.underpayment_cost;
+            meterUnderpayment.textContent = (upCost !== null && upCost !== undefined) ? Number(upCost).toFixed(2) : '—';
         }
         syncDevices(payload.devices || []);
         syncSensorDevices(payload.sensor_devices || []);
@@ -260,8 +260,11 @@ if (meterSection) {
         const totals = meter.status || {};
         const totalConsumption = totals.total_consumption_kwh !== null && totals.total_consumption_kwh !== undefined
             ? `<strong>${Number(totals.total_consumption_kwh).toFixed(2)}</strong>` : '—';
-        const underpayment = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
-            ? `<strong>${Number(totals.underpayment_kwh).toFixed(2)}</strong>` : '—';
+        const upKwh = totals.underpayment_kwh;
+        const upCost = totals.underpayment_cost;
+        const underpaymentCell = (upCost !== null && upCost !== undefined)
+            ? `<strong>${Number(upCost).toFixed(2)}</strong> <small>(${Number(upKwh).toFixed(2)} кВт·ч)</small>`
+            : '—';
         statusContainer.innerHTML = `<table class="meter-status-table">
             <thead>
                 <tr><th></th>${colHeaders}<th>Сумма</th></tr>
@@ -271,17 +274,17 @@ if (meterSection) {
                 <tr><th>Последнее</th>${latestCells}<td></td></tr>
                 <tr><th>Расход с расчётной</th>${consumptionCells}<td>${totalConsumption}</td></tr>
                 <tr><th>Предоплачено</th><td colspan="${aptCount}"></td><td>${Number(meter.prepaid_kwh).toFixed(0)}</td></tr>
-                <tr class="meter-row-underpayment"><th>Недоплата</th><td colspan="${aptCount}"></td><td>${underpayment}</td></tr>
+                <tr class="meter-row-underpayment"><th>Недоплата</th><td colspan="${aptCount}"></td><td>${underpaymentCell}</td></tr>
             </tbody>
         </table>`;
         if (summaryMeta) {
-            summaryMeta.textContent = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
-                ? `недоплата ${Number(totals.underpayment_kwh).toFixed(2)} кВт·ч`
+            summaryMeta.textContent = (upCost !== null && upCost !== undefined)
+                ? `недоплата ${Number(upCost).toFixed(2)} (${Number(upKwh).toFixed(2)} кВт·ч)`
                 : 'нет данных';
         }
         if (heroUnderpayment) {
-            heroUnderpayment.textContent = totals.underpayment_kwh !== null && totals.underpayment_kwh !== undefined
-                ? fmtKwhFull(totals.underpayment_kwh)
+            heroUnderpayment.textContent = (upCost !== null && upCost !== undefined)
+                ? Number(upCost).toFixed(2)
                 : '—';
         }
     };
