@@ -35,6 +35,9 @@ HEARTBEAT_INTERVAL_SECONDS = 9.0
 RECEIVE_TIMEOUT_SECONDS = 2.0
 RECONNECT_BACKOFF_SECONDS = 8.0
 STATUS_REFRESH_INTERVAL_SECONDS = 45.0
+PHASE_TRIGGER_INTERVAL_SECONDS = 15.0
+PHASE_PROBE_INDICES_1P = (7,)        # querying DPS 7 wakes DPS 6 on single-phase Tesla
+PHASE_PROBE_INDICES_3P = (6, 7, 8)   # query each phase to surface its packet on 3-phase stove
 
 
 def has_trick678_request_mode(device: TuyaDeviceConfig) -> bool:
@@ -127,6 +130,14 @@ class RawListener(threading.Thread):
             return
         self._last_saved_at = captured_at
 
+    def _phase_probe_indices(self) -> tuple[int, ...]:
+        modes = set((self._device.dps_request_modes or {}).values())
+        if "trick678_3P" in modes:
+            return PHASE_PROBE_INDICES_3P
+        if "trick678_1P" in modes:
+            return PHASE_PROBE_INDICES_1P
+        return ()
+
     def _session(self) -> None:
         client = tinytuya.Device(
             self._device.device_id,
@@ -145,6 +156,9 @@ class RawListener(threading.Thread):
 
         last_heartbeat = time.monotonic()
         last_status = time.monotonic()
+        last_phase_trigger = 0.0
+        phase_probe_round = 0
+        probe_indices = self._phase_probe_indices()
         while not self._stop.is_set():
             try:
                 data = client.receive()
@@ -169,6 +183,19 @@ class RawListener(threading.Thread):
                     LOGGER.debug("status refresh failed for %s", self._device.device_id, exc_info=True)
                     break
                 last_status = now
+            if probe_indices and now - last_phase_trigger >= PHASE_TRIGGER_INTERVAL_SECONDS:
+                probe = probe_indices[phase_probe_round % len(probe_indices)]
+                phase_probe_round += 1
+                try:
+                    # On the persistent socket, the response (which often carries
+                    # phase_a/b/c DPS in the same channel) is captured by the
+                    # next receive() iteration; we don't need to consume the
+                    # return value here.
+                    client.updatedps(index=[probe], nowait=True)
+                except Exception:
+                    LOGGER.debug("phase probe failed for %s", self._device.device_id, exc_info=True)
+                    break
+                last_phase_trigger = now
 
         try:
             client.close()
