@@ -211,6 +211,34 @@ def _merge_missing_visualized_codes_once(
     return merged
 
 
+def _has_trick678_modes(device_config: TuyaDeviceConfig) -> bool:
+    for mode in (device_config.dps_request_modes or {}).values():
+        if isinstance(mode, str) and mode.startswith("trick678_"):
+            return True
+    return False
+
+
+def _piggyback_phase_probes(device: tinytuya.Device, dps: dict[str, Any]) -> dict[str, Any]:
+    """Probe DPS 6, 7, 8 on the SAME tinytuya.Device session that was just
+    used for status(). Reusing the open socket avoids triggering Tuya's
+    per-session anti-spam (which refuses fresh connections that arrive
+    immediately after status())."""
+    device.set_socketTimeout(1.5)
+    device.set_socketRetryLimit(0)
+    merged = dict(dps)
+    for probe_index in PHASE_VISUAL_DPS_GROUP:
+        try:
+            response = device.updatedps(index=[probe_index], nowait=False)
+        except Exception:
+            continue
+        if not isinstance(response, dict):
+            continue
+        response_dps = response.get("dps")
+        if isinstance(response_dps, dict) and response_dps:
+            merged.update(response_dps)
+    return merged
+
+
 def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: bool = False) -> dict[str, Any]:
     if not device_config.ip_address or not _is_tuya_host_reachable(device_config.ip_address):
         raise RuntimeError(f"Device {device_config.device_id} is offline")
@@ -226,6 +254,11 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     device.set_socketRetryLimit(2)
     payload = device.status()
     if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
+        if _has_trick678_modes(device_config):
+            payload = {
+                **payload,
+                "dps": _piggyback_phase_probes(device, payload.get("dps") or {}),
+            }
         if include_visualized_codes:
             payload = {
                 **payload,

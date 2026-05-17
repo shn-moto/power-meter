@@ -845,6 +845,11 @@ async def _poll_loop(app: FastAPI) -> None:
                         raw_dps=raw_dps,
                     )
                     app.state.live_samples[device.device_id] = sample
+                    if has_trick678_request_mode(device):
+                        app.state.raw_dps_latest[device.device_id] = RawDpsSnapshot(
+                            raw_dps=dict(raw_dps),
+                            captured_at=captured_at,
+                        )
 
                     last_saved_at = app.state.last_saved_at.get(device.device_id)
                     should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
@@ -1560,15 +1565,11 @@ async def lifespan(app: FastAPI):
         str(device["device_id"]): device
         for device in await asyncio.to_thread(get_device_rows, app.state.app_config)
     }
-    polling_devices = await asyncio.to_thread(get_polling_devices, app.state.app_config)
-    for device in select_listener_devices(polling_devices):
-        listener = RawListener(
-            device,
-            app.state.raw_dps_latest,
-            _device_lan_thread_lock(app, device.device_id),
-        )
-        listener.start()
-        app.state.raw_listeners.append(listener)
+    # Phase probes for trick678 devices now happen inside the poll loop's
+    # status() session (see _piggyback_phase_probes in tuya_service.py).
+    # The standalone listener thread is no longer needed; raw_dps_latest is
+    # populated directly by the poll loop after each successful build_sample.
+    _ = select_listener_devices  # noqa: F841 — kept for future re-introduction
     app.state.poller = asyncio.create_task(_poll_loop(app))
     yield
     app.state.poller.cancel()

@@ -1,7 +1,7 @@
 const page = document.querySelector('[data-device-page]');
 
 if (page) {
-    const LIVE_REFRESH_INTERVAL_MS = 1000;
+    const LIVE_REFRESH_INTERVAL_MS = 5000;
     const AGGREGATE_REFRESH_INTERVAL_MS = 5000;
     const HOUR_BUCKET_MS = 60 * 60 * 1000;
     const DAY_PERIOD = 'day';
