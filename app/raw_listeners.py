@@ -32,8 +32,7 @@ PROBE_SOCKET_TIMEOUT_SECONDS = 5.0
 PROBE_RETRY_LIMIT = 2
 PROBE_BACKOFF_AFTER_ERROR_SECONDS = 8.0
 
-PHASE_PROBE_INDICES_1P = (7,)        # querying DPS 7 wakes DPS 6 on single-phase Tesla
-PHASE_PROBE_INDICES_3P = (6, 7, 8)   # rotate through each phase on the 3-phase stove
+PHASE_PROBE_INDICES = (6, 7, 8)   # probe all three each cycle and absorb whatever the device responds with
 
 
 def has_trick678_request_mode(device: TuyaDeviceConfig) -> bool:
@@ -66,14 +65,6 @@ class RawListener(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
-    def _phase_probe_indices(self) -> tuple[int, ...]:
-        modes = set((self._device.dps_request_modes or {}).values())
-        if "trick678_3P" in modes:
-            return PHASE_PROBE_INDICES_3P
-        if "trick678_1P" in modes:
-            return PHASE_PROBE_INDICES_1P
-        return ()
-
     def _absorb(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
@@ -98,9 +89,11 @@ class RawListener(threading.Thread):
         client.set_socketRetryLimit(PROBE_RETRY_LIMIT)
         return client
 
-    def _probe_once(self, probe_index: int) -> bool:
-        """Open a fresh socket, fire a single updatedps([probe_index]), absorb
-        the response, close. Returns True if response carried any DPS."""
+    def _probe_cycle(self) -> bool:
+        """Acquire the LAN lock once and probe DPS 6, 7, 8 in sequence on the
+        same fresh socket. Absorb every DPS the device returns from any of
+        the three queries. Returns True if at least one query produced a dps
+        dict."""
         acquired = False
         if self._lan_lock is not None:
             acquired = self._lan_lock.acquire(timeout=5.0)
@@ -108,24 +101,34 @@ class RawListener(threading.Thread):
                 LOGGER.warning("phase probe for %s could not acquire LAN lock",
                                self._device.device_id)
                 return False
-        # Give the device a brief moment to reset the LAN socket state after
-        # the poll loop's previous status() — Tuya breakers sometimes return
-        # Err 905 if a fresh TCP connect arrives too quickly.
+        # Give the device a moment to settle after the poll loop's last
+        # close — Tuya breakers reject a fresh TCP connect that arrives too
+        # quickly with Err 905.
         time.sleep(0.3)
         client = self._open_client()
-        response: Any = None
+        any_dps = False
         try:
-            # status() first to negotiate the session token for protocol 3.5;
-            # updatedps without prior session frequently returns Err 905.
+            # status() first to negotiate the session token for protocol 3.5.
             status_payload = client.status()
-            LOGGER.warning("probe status() for %s -> %r",
-                           self._device.device_id, status_payload)
-            self._absorb(status_payload)
-            response = client.updatedps(index=[probe_index], nowait=False)
+            if isinstance(status_payload, dict) and isinstance(status_payload.get("dps"), dict):
+                self._absorb(status_payload)
+            for probe_index in PHASE_PROBE_INDICES:
+                try:
+                    response = client.updatedps(index=[probe_index], nowait=False)
+                except Exception:
+                    LOGGER.warning("phase probe error for %s code %s",
+                                   self._device.device_id, probe_index, exc_info=True)
+                    continue
+                if not isinstance(response, dict):
+                    continue
+                dps = response.get("dps")
+                if isinstance(dps, dict) and dps:
+                    LOGGER.info("probe %s code %s -> dps=%s",
+                                self._device.device_id, probe_index, sorted(dps.keys()))
+                    self._absorb(response)
+                    any_dps = True
         except Exception:
-            LOGGER.warning("phase probe error for %s code %s",
-                           self._device.device_id, probe_index, exc_info=True)
-            return False
+            LOGGER.warning("probe cycle crashed for %s", self._device.device_id, exc_info=True)
         finally:
             try:
                 client.close()
@@ -133,36 +136,17 @@ class RawListener(threading.Thread):
                 pass
             if acquired and self._lan_lock is not None:
                 self._lan_lock.release()
-        if not isinstance(response, dict):
-            LOGGER.warning("probe DPS %s for %s -> non-dict %r",
-                        probe_index, self._device.device_id, response)
-            return False
-        dps = response.get("dps")
-        if not isinstance(dps, dict) or not dps:
-            LOGGER.warning("probe DPS %s for %s -> %r",
-                        probe_index, self._device.device_id, response)
-            return False
-        LOGGER.warning("probe DPS %s for %s OK keys=%s",
-                    probe_index, self._device.device_id, sorted(dps.keys()))
-        self._absorb(response)
-        return True
+        return any_dps
 
     def run(self) -> None:
         LOGGER.warning("raw listener starting for %s", self._device.device_id)
-        probe_indices = self._phase_probe_indices()
-        if not probe_indices:
-            LOGGER.warning("no probe indices for %s; listener exiting", self._device.device_id)
-            return
-        round_index = 0
         backoff_seconds = 0.0
         while not self._stop.is_set():
             if backoff_seconds > 0:
                 if self._stop.wait(backoff_seconds):
                     break
                 backoff_seconds = 0.0
-            probe = probe_indices[round_index % len(probe_indices)]
-            round_index += 1
-            ok = self._probe_once(probe)
+            ok = self._probe_cycle()
             if not ok:
                 backoff_seconds = PROBE_BACKOFF_AFTER_ERROR_SECONDS
                 continue
