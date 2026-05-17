@@ -28,7 +28,8 @@ from config import TuyaDeviceConfig
 LOGGER = logging.getLogger(__name__)
 
 PHASE_TRIGGER_INTERVAL_SECONDS = 15.0
-PROBE_SOCKET_TIMEOUT_SECONDS = 3.0
+PROBE_SOCKET_TIMEOUT_SECONDS = 5.0
+PROBE_RETRY_LIMIT = 2
 PROBE_BACKOFF_AFTER_ERROR_SECONDS = 8.0
 
 PHASE_PROBE_INDICES_1P = (7,)        # querying DPS 7 wakes DPS 6 on single-phase Tesla
@@ -94,7 +95,7 @@ class RawListener(threading.Thread):
         )
         client.set_version(self._device.version)
         client.set_socketTimeout(PROBE_SOCKET_TIMEOUT_SECONDS)
-        client.set_socketRetryLimit(0)
+        client.set_socketRetryLimit(PROBE_RETRY_LIMIT)
         return client
 
     def _probe_once(self, probe_index: int) -> bool:
