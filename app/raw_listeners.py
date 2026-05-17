@@ -102,15 +102,22 @@ class RawListener(threading.Thread):
         the response, close. Returns True if response carried any DPS."""
         acquired = False
         if self._lan_lock is not None:
-            # Wait up to ~5 seconds for the poll loop to release the LAN
-            # socket — fail-fast otherwise rather than queueing forever.
             acquired = self._lan_lock.acquire(timeout=5.0)
             if not acquired:
                 LOGGER.warning("phase probe for %s could not acquire LAN lock",
                                self._device.device_id)
                 return False
+        # Give the device a brief moment to reset the LAN socket state after
+        # the poll loop's previous status() — Tuya breakers sometimes return
+        # Err 905 if a fresh TCP connect arrives too quickly.
+        time.sleep(0.3)
         client = self._open_client()
+        response: Any = None
         try:
+            # status() first to negotiate the session token for protocol 3.5;
+            # updatedps without prior session frequently returns Err 905.
+            status_payload = client.status()
+            self._absorb(status_payload)
             response = client.updatedps(index=[probe_index], nowait=False)
         except Exception:
             LOGGER.warning("phase probe error for %s code %s",
