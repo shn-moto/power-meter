@@ -27,10 +27,10 @@ from config import TuyaDeviceConfig
 
 LOGGER = logging.getLogger(__name__)
 
-PHASE_TRIGGER_INTERVAL_SECONDS = 15.0
-PROBE_SOCKET_TIMEOUT_SECONDS = 5.0
-PROBE_RETRY_LIMIT = 2
-PROBE_BACKOFF_AFTER_ERROR_SECONDS = 8.0
+PHASE_TRIGGER_INTERVAL_SECONDS = 5.0
+PROBE_SOCKET_TIMEOUT_SECONDS = 2.0
+PROBE_RETRY_LIMIT = 1
+PROBE_BACKOFF_AFTER_ERROR_SECONDS = 4.0
 
 PHASE_PROBE_INDICES = (6, 7, 8)   # probe all three each cycle and absorb whatever the device responds with
 
@@ -138,10 +138,9 @@ class RawListener(threading.Thread):
         client = self._open_client()
         any_dps = False
         try:
-            # status() first to negotiate the session token for protocol 3.5.
-            status_payload = client.status()
-            if isinstance(status_payload, dict) and isinstance(status_payload.get("dps"), dict):
-                self._absorb(status_payload)
+            # Skip the status() prep — the poll loop already negotiated a
+            # session moments ago, doing it again wastes 1-3 seconds per
+            # cycle and we don't need the status payload here.
             for probe_index in PHASE_PROBE_INDICES:
                 try:
                     response = client.updatedps(index=[probe_index], nowait=False)
