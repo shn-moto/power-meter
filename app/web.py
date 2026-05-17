@@ -58,7 +58,7 @@ from app.storage import (
     update_device_summary_config,
 )
 from app.tuya_service import build_live_sample, build_sample, fetch_status, request_dps_by_index
-from app.raw_listeners import RawListener, RawDpsSnapshot, select_listener_devices
+from app.raw_listeners import RawListener, RawDpsSnapshot, has_trick678_request_mode, select_listener_devices
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -2103,7 +2103,32 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
 
     control_device = get_control_device(config, device_id)
     listener_snapshot: RawDpsSnapshot | None = request.app.state.raw_dps_latest.get(device_id) if control_device else None
-    if control_device and listener_snapshot is None:
+    listener_owned = control_device is not None and has_trick678_request_mode(control_device)
+
+    if listener_owned:
+        # Listener-owned devices: never fight the listener for the LAN
+        # socket here. Merge the freshest status() snapshot the poll loop
+        # left in live_samples with whatever DPS the listener pushed into
+        # raw_dps_latest. Pure dict lookups — milliseconds total.
+        if live_sample is not None and listener_snapshot is not None:
+            merged_raw = dict(live_sample.raw_dps)
+            merged_raw.update(listener_snapshot.raw_dps)
+            live_sample = DeviceSample(
+                device_id=live_sample.device_id,
+                captured_at=max(live_sample.captured_at, listener_snapshot.captured_at),
+                power_w=live_sample.power_w,
+                raw_dps=merged_raw,
+            )
+        elif listener_snapshot is not None and live_sample is None:
+            live_sample = DeviceSample(
+                device_id=device_id,
+                captured_at=listener_snapshot.captured_at,
+                power_w=0.0,
+                raw_dps=dict(listener_snapshot.raw_dps),
+            )
+    elif control_device:
+        # Non-listener devices keep the existing on-demand fetch path with
+        # trick678 fallback.
         try:
             thread_lock_live = _device_lan_thread_lock(request.app, control_device.device_id)
 
@@ -2113,8 +2138,6 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
 
             async with _device_lan_lock(request.app, control_device.device_id):
                 captured_at, power_w, raw_dps = await asyncio.to_thread(_locked_build_live_sample)
-            # Cache any freshly-obtained visualized DPS values for subsequent
-            # calls — Tuya breakers sometimes refuse rapid queries.
             cache_updates = {
                 str(code): raw_dps.get(str(code))
                 for code in visualized_codes
@@ -2148,19 +2171,6 @@ async def device_live_api(request: Request, device_id: str) -> JSONResponse:
                     )
         except Exception:
             LOGGER.exception("Live fetch for device %s failed", device_id)
-    elif control_device and listener_snapshot is not None and live_sample is not None:
-        # Listener thread holds the LAN socket for this device — don't fight
-        # it. Merge listener's freshly-pushed DPS into the live sample built
-        # by the regular poll loop.
-        merged_raw = dict(live_sample.raw_dps)
-        merged_raw.update(listener_snapshot.raw_dps)
-        live_sample = DeviceSample(
-            device_id=live_sample.device_id,
-            captured_at=max(live_sample.captured_at, listener_snapshot.captured_at),
-            power_w=live_sample.power_w,
-            raw_dps=merged_raw,
-        )
-        request.app.state.live_samples[control_device.device_id] = live_sample
 
     payload = _build_device_live_payload(
         config,

@@ -27,10 +27,11 @@ from config import TuyaDeviceConfig
 
 LOGGER = logging.getLogger(__name__)
 
-PHASE_TRIGGER_INTERVAL_SECONDS = 5.0
-PROBE_SOCKET_TIMEOUT_SECONDS = 2.0
-PROBE_RETRY_LIMIT = 1
-PROBE_BACKOFF_AFTER_ERROR_SECONDS = 4.0
+PHASE_TRIGGER_INTERVAL_SECONDS = 4.0
+PROBE_SOCKET_TIMEOUT_SECONDS = 1.5
+PROBE_RETRY_LIMIT = 0
+PROBE_BACKOFF_AFTER_ERROR_SECONDS = 2.0
+SETTLE_DELAY_AFTER_LOCK_SECONDS = 0.5
 
 PHASE_PROBE_INDICES = (6, 7, 8)   # probe all three each cycle and absorb whatever the device responds with
 
@@ -131,10 +132,7 @@ class RawListener(threading.Thread):
                 LOGGER.warning("phase probe for %s could not acquire LAN lock",
                                self._device.device_id)
                 return False
-        # Give the device a longer moment to settle after the poll loop's
-        # last status() — Tesla in particular returns None to updatedps if
-        # we try to reconnect too soon after another LAN session.
-        time.sleep(2.0)
+        time.sleep(SETTLE_DELAY_AFTER_LOCK_SECONDS)
         client = self._open_client()
         any_dps = False
         try:
