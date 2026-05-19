@@ -2286,12 +2286,13 @@ def _device_energy_kwh_for_range(
                 # had a sample reach the DB?
                 cursor.execute(
                     """
-                    SELECT count(*) FROM samples_hourly
+                    SELECT count(*) AS n FROM samples_hourly
                     WHERE device_id = %s AND bucket >= %s AND bucket < %s
                     """,
                     (device_id, start_dt, end_dt),
                 )
-                hours_with_data = int((cursor.fetchone() or [0])[0] or 0)
+                row = cursor.fetchone()
+                hours_with_data = int((row.get("n") if row else 0) or 0)
         if not start_row or not end_row:
             return 0.0, hours_with_data
         start_counter = _read_energy_counter_kwh(
