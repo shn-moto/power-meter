@@ -2247,13 +2247,63 @@ def _device_energy_kwh_for_range(
     device_id: str,
     start_dt: datetime,
     end_dt: datetime,
-) -> float:
+) -> tuple[float, int]:
     """Sum kWh consumed by one device between start_dt (inclusive) and
-    end_dt (exclusive) using the hourly continuous aggregate. Counter-type
-    devices use the telescoping (last - prev_last) formula; current-type
-    sums the bucket energy_wh."""
+    end_dt (exclusive). Returns (kwh, hours_with_data).
+
+    For counter-type devices (`power_type='total'`) the value is the
+    counter delta between the last sample at-or-before `start_dt` and
+    the last sample at-or-before `end_dt`. Offline gaps don't drop the
+    counter, so this catches consumption even when the device wasn't
+    online to be polled. For current-type devices we still sum hourly
+    bucket energy — those buckets miss energy during offline gaps."""
     capabilities = get_device_capabilities(config, device_id)
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+
+    if energy_counter_meta is not None:
+        dp_key, scale_divisor = energy_counter_meta
+        with _connect(config.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT raw_dps FROM samples
+                    WHERE device_id = %s AND captured_at <= %s
+                    ORDER BY captured_at DESC LIMIT 1
+                    """,
+                    (device_id, start_dt),
+                )
+                start_row = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT raw_dps FROM samples
+                    WHERE device_id = %s AND captured_at < %s
+                    ORDER BY captured_at DESC LIMIT 1
+                    """,
+                    (device_id, end_dt),
+                )
+                end_row = cursor.fetchone()
+                # Coverage in hours: how many of the period's hours actually
+                # had a sample reach the DB?
+                cursor.execute(
+                    """
+                    SELECT count(*) FROM samples_hourly
+                    WHERE device_id = %s AND bucket >= %s AND bucket < %s
+                    """,
+                    (device_id, start_dt, end_dt),
+                )
+                hours_with_data = int((cursor.fetchone() or [0])[0] or 0)
+        if not start_row or not end_row:
+            return 0.0, hours_with_data
+        start_counter = _read_energy_counter_kwh(
+            _normalize_json_field(start_row["raw_dps"]), dp_key, scale_divisor
+        )
+        end_counter = _read_energy_counter_kwh(
+            _normalize_json_field(end_row["raw_dps"]), dp_key, scale_divisor
+        )
+        if start_counter is None or end_counter is None:
+            return 0.0, hours_with_data
+        return max(end_counter - start_counter, 0.0), hours_with_data
+
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -2269,8 +2319,9 @@ def _device_energy_kwh_for_range(
             )
             rows = cursor.fetchall()
     if not rows:
-        return 0.0
-    return _aggregate_energy_wh(rows, "hour", energy_counter_meta) / 1000.0
+        return 0.0, 0
+    kwh = _aggregate_energy_wh(rows, "hour", energy_counter_meta) / 1000.0
+    return kwh, len(rows)
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
@@ -2325,9 +2376,18 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
 
         start_dt = datetime.combine(prev_date, datetime.min.time(), tzinfo=tz)
         end_dt = datetime.combine(curr_date, datetime.min.time(), tzinfo=tz)
+        period_hours = max(int(round((end_dt - start_dt).total_seconds() / 3600.0)), 1)
         device_total = 0.0
+        # Per-device hour coverage; coverage of the period as a whole is the
+        # minimum across all devices — a single device that joined the system
+        # mid-period drags the number down.
+        device_hours: dict[str, int] = {}
         for device_id in energy_device_ids:
-            device_total += _device_energy_kwh_for_range(config, device_id, start_dt, end_dt)
+            kwh, hours = _device_energy_kwh_for_range(config, device_id, start_dt, end_dt)
+            device_total += kwh
+            device_hours[device_id] = hours
+        coverage_hours = min(device_hours.values()) if device_hours else 0
+        coverage_pct = round(coverage_hours * 100.0 / period_hours, 1) if period_hours else 0.0
         device_total = round(device_total, 3)
 
         periods.append(
@@ -2337,6 +2397,7 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 "meter_kwh": meter_total,
                 "device_kwh": device_total,
                 "delta_kwh": round(meter_total - device_total, 3),
+                "coverage_pct": coverage_pct,
             }
         )
     return periods
