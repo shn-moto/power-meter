@@ -2154,6 +2154,7 @@ def delete_meter_reading(config: AppConfig, *, reading_id: int) -> None:
 
 
 def list_meter_readings(config: AppConfig, *, limit: int = 50) -> list[dict[str, Any]]:
+    tz = _get_timezone(config)
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -2165,7 +2166,11 @@ def list_meter_readings(config: AppConfig, *, limit: int = 50) -> list[dict[str,
                 """,
                 (limit,),
             )
-            return list(cursor.fetchall())
+            rows = list(cursor.fetchall())
+    for row in rows:
+        if row.get("reading_at"):
+            row["reading_at"] = row["reading_at"].astimezone(tz)
+    return rows
 
 
 def _coerce_reading_kwh(value: Any) -> float | None:
@@ -2184,6 +2189,7 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
     most recent reading overall. Consumption since settlement =
     latest - settlement. Combined underpayment = sum_consumption -
     METER_PREPAID_KWH (clamped to zero)."""
+    tz = _get_timezone(config)
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -2194,6 +2200,9 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
                 """
             )
             rows = list(cursor.fetchall())
+    for row in rows:
+        if row.get("reading_at"):
+            row["reading_at"] = row["reading_at"].astimezone(tz)
 
     by_apt: dict[str, list[dict[str, Any]]] = {apt: [] for apt in METER_APARTMENTS}
     for row in rows:
@@ -2387,10 +2396,11 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
         coverage_pct = round(coverage_hours * 100.0 / period_hours, 1) if period_hours else 0.0
         device_total = round(device_total, 3)
 
+        local_tz = _get_timezone(config)
         periods.append(
             {
-                "start_at": start_dt.isoformat(),
-                "end_at": end_dt.isoformat(),
+                "start_at": start_dt.astimezone(local_tz).isoformat(),
+                "end_at": end_dt.astimezone(local_tz).isoformat(),
                 "meter_kwh": meter_total,
                 "device_kwh": device_total,
                 "delta_kwh": round(meter_total - device_total, 3),
