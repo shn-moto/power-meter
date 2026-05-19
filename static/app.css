@@ -1572,6 +1572,57 @@ button:hover {
     color: #d97757;
 }
 
+.meter-discrepancy {
+    margin-top: 6px;
+}
+
+.meter-discrepancy[hidden] {
+    display: none;
+}
+
+.meter-discrepancy h4 {
+    margin: 0 0 8px 0;
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--muted);
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.meter-discrepancy-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-feature-settings: "tnum";
+    font-size: 0.88rem;
+}
+
+.meter-discrepancy-table th,
+.meter-discrepancy-table td {
+    padding: 5px 10px;
+    text-align: right;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--text);
+}
+
+.meter-discrepancy-table thead th {
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 0.8rem;
+}
+
+.meter-discrepancy-table th:first-child,
+.meter-discrepancy-table td:first-child {
+    text-align: left;
+}
+
+.meter-discrepancy-delta.is-positive {
+    color: #d9b15f;
+}
+
+.meter-discrepancy-delta.is-negative {
+    color: #76b986;
+}
+
 .meter-history > summary {
     color: var(--muted);
     font-size: 0.85rem;

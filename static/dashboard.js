@@ -302,6 +302,30 @@ if (meterSection) {
         `).join('');
     };
 
+    const discrepancyContainer = meterSection.querySelector('[data-meter-discrepancy]');
+    const discrepancyBody = meterSection.querySelector('[data-meter-discrepancy-body]');
+
+    const renderDiscrepancy = (periods) => {
+        if (!discrepancyContainer || !discrepancyBody) return;
+        if (!periods || !periods.length) {
+            discrepancyContainer.hidden = true;
+            discrepancyBody.innerHTML = '';
+            return;
+        }
+        discrepancyContainer.hidden = false;
+        discrepancyBody.innerHTML = periods.map((p) => {
+            const delta = Number(p.delta_kwh);
+            const cls = delta > 0 ? 'is-positive' : (delta < 0 ? 'is-negative' : '');
+            const sign = delta > 0 ? '+' : '';
+            return `<tr>
+                <td>${p.start_date} – ${p.end_date}</td>
+                <td>${Number(p.meter_kwh).toFixed(2)}</td>
+                <td>${Number(p.device_kwh).toFixed(2)}</td>
+                <td class="meter-discrepancy-delta ${cls}">${sign}${delta.toFixed(2)}</td>
+            </tr>`;
+        }).join('');
+    };
+
     const refreshMeter = async () => {
         try {
             const response = await fetch('/api/meter-readings', { cache: 'no-store' });
@@ -309,6 +333,7 @@ if (meterSection) {
             const payload = await response.json();
             renderStatusTable(payload);
             renderHistory(payload.readings);
+            renderDiscrepancy(payload.discrepancy_periods);
         } catch (error) {
             // silent
         }

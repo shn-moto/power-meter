@@ -2240,3 +2240,103 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
         "underpayment_kwh": underpayment_kwh,
         "underpayment_cost": underpayment_cost,
     }
+
+
+def _device_energy_kwh_for_range(
+    config: AppConfig,
+    device_id: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> float:
+    """Sum kWh consumed by one device between start_dt (inclusive) and
+    end_dt (exclusive) using the hourly continuous aggregate. Counter-type
+    devices use the telescoping (last - prev_last) formula; current-type
+    sums the bucket energy_wh."""
+    capabilities = get_device_capabilities(config, device_id)
+    energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT bucket, avg_power_w, peak_power_w, sample_count, energy_wh,
+                       last_power_w, first_raw_dps, last_raw_dps,
+                       first_captured_at, last_captured_at
+                FROM samples_hourly
+                WHERE device_id = %s AND bucket >= %s AND bucket < %s
+                ORDER BY bucket ASC
+                """,
+                (device_id, start_dt, end_dt),
+            )
+            rows = cursor.fetchall()
+    if not rows:
+        return 0.0
+    return _aggregate_energy_wh(rows, "hour", energy_counter_meta) / 1000.0
+
+
+def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
+    """For each pair of consecutive meter-reading dates where BOTH
+    apartments reported, compute:
+
+      meter_kwh   = (apt2_end - apt2_start) + (apt3_end - apt3_start)
+      device_kwh  = Σ energy of every is_energy_meter device for the same range
+      delta_kwh   = meter_kwh - device_kwh
+
+    Date boundaries are interpreted at 00:00 in the app's timezone.
+    """
+    tz = _get_timezone(config)
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT apartment, reading_date, reading_kwh
+                FROM meter_readings
+                ORDER BY reading_date ASC, apartment ASC
+                """
+            )
+            reading_rows = list(cursor.fetchall())
+            cursor.execute(
+                """
+                SELECT device_id FROM devices WHERE is_energy_meter
+                """
+            )
+            energy_device_ids = [str(r["device_id"]) for r in cursor.fetchall()]
+
+    by_apt: dict[str, dict] = {}
+    for row in reading_rows:
+        apt = str(row["apartment"])
+        by_apt.setdefault(apt, {})[row["reading_date"]] = float(row["reading_kwh"])
+
+    if not by_apt:
+        return []
+
+    # Only periods where every apartment has a reading at both ends are
+    # comparable. Intersect the date sets across apartments.
+    common_dates = sorted(set.intersection(*(set(d.keys()) for d in by_apt.values())))
+    if len(common_dates) < 2:
+        return []
+
+    periods: list[dict[str, Any]] = []
+    for prev_date, curr_date in zip(common_dates, common_dates[1:]):
+        meter_total = 0.0
+        for apt_readings in by_apt.values():
+            meter_total += apt_readings[curr_date] - apt_readings[prev_date]
+        meter_total = round(meter_total, 3)
+
+        start_dt = datetime.combine(prev_date, datetime.min.time(), tzinfo=tz)
+        end_dt = datetime.combine(curr_date, datetime.min.time(), tzinfo=tz)
+        device_total = 0.0
+        for device_id in energy_device_ids:
+            device_total += _device_energy_kwh_for_range(config, device_id, start_dt, end_dt)
+        device_total = round(device_total, 3)
+
+        periods.append(
+            {
+                "start_date": prev_date.isoformat(),
+                "end_date": curr_date.isoformat(),
+                "meter_kwh": meter_total,
+                "device_kwh": device_total,
+                "delta_kwh": round(meter_total - device_total, 3),
+            }
+        )
+    return periods

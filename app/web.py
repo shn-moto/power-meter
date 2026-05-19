@@ -37,6 +37,7 @@ from app.storage import (
     get_device_context_and_stats,
     get_dashboard_summary,
     get_meter_status,
+    get_meter_discrepancy_periods,
     list_meter_readings,
     save_meter_reading,
     delete_meter_reading,
@@ -1842,11 +1843,13 @@ class MeterReadingPayload(BaseModel):
 def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
     status = get_meter_status(config)
     readings = list_meter_readings(config, limit=24)
+    periods = get_meter_discrepancy_periods(config)
     return {
         "status": status,
         "apartments": list(METER_APARTMENTS),
         "prepaid_kwh": METER_PREPAID_KWH,
         "readings": readings,
+        "discrepancy_periods": periods,
     }
 
 
