@@ -1513,7 +1513,8 @@ button:hover {
     min-width: 0;
 }
 
-.meter-field-date { flex: 0 0 150px; }
+.meter-field-date { flex: 0 0 220px; }
+.meter-field-date input { min-width: 200px; }
 
 .meter-field > span {
     font-size: 0.78rem;
