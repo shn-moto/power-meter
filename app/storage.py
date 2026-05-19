@@ -2118,7 +2118,7 @@ def save_meter_reading(
     config: AppConfig,
     *,
     apartment: str,
-    reading_date,
+    reading_at: datetime,
     reading_kwh: float,
     is_settlement: bool = False,
     note: str | None = None,
@@ -2126,19 +2126,23 @@ def save_meter_reading(
     apt = _normalize_apartment(apartment)
     if reading_kwh is None or float(reading_kwh) < 0:
         raise ValueError("reading_kwh must be non-negative")
+    if reading_at.tzinfo is None:
+        reading_at = reading_at.replace(tzinfo=_get_timezone(config))
+    reading_date = reading_at.astimezone(_get_timezone(config)).date()
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO meter_readings (apartment, reading_date, reading_kwh, is_settlement, note)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (apartment, reading_date) DO UPDATE SET
+                INSERT INTO meter_readings (apartment, reading_at, reading_date, reading_kwh, is_settlement, note)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (apartment, reading_at) DO UPDATE SET
                     reading_kwh = EXCLUDED.reading_kwh,
+                    reading_date = EXCLUDED.reading_date,
                     is_settlement = EXCLUDED.is_settlement,
                     note = EXCLUDED.note
-                RETURNING id, apartment, reading_date, reading_kwh, is_settlement, note, created_at
+                RETURNING id, apartment, reading_at, reading_date, reading_kwh, is_settlement, note, created_at
                 """,
-                (apt, reading_date, float(reading_kwh), bool(is_settlement), (note or None)),
+                (apt, reading_at, reading_date, float(reading_kwh), bool(is_settlement), (note or None)),
             )
             return cursor.fetchone()
 
@@ -2154,9 +2158,9 @@ def list_meter_readings(config: AppConfig, *, limit: int = 50) -> list[dict[str,
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, apartment, reading_date, reading_kwh, is_settlement, note, created_at
+                SELECT id, apartment, reading_at, reading_kwh, is_settlement, note, created_at
                 FROM meter_readings
-                ORDER BY reading_date DESC, apartment ASC, id DESC
+                ORDER BY reading_at DESC, apartment ASC, id DESC
                 LIMIT %s
                 """,
                 (limit,),
@@ -2184,9 +2188,9 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT apartment, reading_date, reading_kwh, is_settlement
+                SELECT apartment, reading_at, reading_kwh, is_settlement
                 FROM meter_readings
-                ORDER BY apartment ASC, reading_date DESC, id DESC
+                ORDER BY apartment ASC, reading_at DESC, id DESC
                 """
             )
             rows = list(cursor.fetchall())
@@ -2207,7 +2211,7 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
         latest_kwh = _coerce_reading_kwh(latest["reading_kwh"]) if latest else None
         settlement_kwh = _coerce_reading_kwh(settlement["reading_kwh"]) if settlement else None
         consumption_kwh: float | None = None
-        if latest_kwh is not None and settlement_kwh is not None and latest["reading_date"] >= settlement["reading_date"]:
+        if latest_kwh is not None and settlement_kwh is not None and latest["reading_at"] >= settlement["reading_at"]:
             consumption_kwh = max(latest_kwh - settlement_kwh, 0.0)
             total_consumption += consumption_kwh
             have_any_consumption = True
@@ -2215,11 +2219,11 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             {
                 "apartment": apt,
                 "latest": {
-                    "reading_date": latest["reading_date"].isoformat() if latest else None,
+                    "reading_at": latest["reading_at"].isoformat() if latest else None,
                     "reading_kwh": latest_kwh,
                 } if latest else None,
                 "settlement": {
-                    "reading_date": settlement["reading_date"].isoformat() if settlement else None,
+                    "reading_at": settlement["reading_at"].isoformat() if settlement else None,
                     "reading_kwh": settlement_kwh,
                 } if settlement else None,
                 "consumption_kwh": round(consumption_kwh, 3) if consumption_kwh is not None else None,
@@ -2326,24 +2330,23 @@ def _device_energy_kwh_for_range(
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
-    """For each pair of consecutive meter-reading dates where BOTH
-    apartments reported, compute:
+    """For each pair of consecutive moments where BOTH apartments have a
+    meter reading, compute:
 
       meter_kwh   = (apt2_end - apt2_start) + (apt3_end - apt3_start)
       device_kwh  = Σ energy of every is_energy_meter device for the same range
       delta_kwh   = meter_kwh - device_kwh
 
-    Date boundaries are interpreted at 00:00 in the app's timezone.
-    """
-    tz = _get_timezone(config)
-
+    Boundaries are precise timestamps from `meter_readings.reading_at`
+    so a manual reading taken at 19:33 is matched to device data at
+    exactly that moment, not at midnight."""
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT apartment, reading_date, reading_kwh
+                SELECT apartment, reading_at, reading_kwh
                 FROM meter_readings
-                ORDER BY reading_date ASC, apartment ASC
+                ORDER BY reading_at ASC, apartment ASC
                 """
             )
             reading_rows = list(cursor.fetchall())
@@ -2354,34 +2357,27 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
             )
             energy_device_ids = [str(r["device_id"]) for r in cursor.fetchall()]
 
-    by_apt: dict[str, dict] = {}
+    by_apt: dict[str, dict[datetime, float]] = {}
     for row in reading_rows:
         apt = str(row["apartment"])
-        by_apt.setdefault(apt, {})[row["reading_date"]] = float(row["reading_kwh"])
+        by_apt.setdefault(apt, {})[row["reading_at"]] = float(row["reading_kwh"])
 
     if not by_apt:
         return []
 
-    # Only periods where every apartment has a reading at both ends are
-    # comparable. Intersect the date sets across apartments.
-    common_dates = sorted(set.intersection(*(set(d.keys()) for d in by_apt.values())))
-    if len(common_dates) < 2:
+    common_timestamps = sorted(set.intersection(*(set(d.keys()) for d in by_apt.values())))
+    if len(common_timestamps) < 2:
         return []
 
     periods: list[dict[str, Any]] = []
-    for prev_date, curr_date in zip(common_dates, common_dates[1:]):
+    for start_dt, end_dt in zip(common_timestamps, common_timestamps[1:]):
         meter_total = 0.0
         for apt_readings in by_apt.values():
-            meter_total += apt_readings[curr_date] - apt_readings[prev_date]
+            meter_total += apt_readings[end_dt] - apt_readings[start_dt]
         meter_total = round(meter_total, 3)
 
-        start_dt = datetime.combine(prev_date, datetime.min.time(), tzinfo=tz)
-        end_dt = datetime.combine(curr_date, datetime.min.time(), tzinfo=tz)
         period_hours = max(int(round((end_dt - start_dt).total_seconds() / 3600.0)), 1)
         device_total = 0.0
-        # Per-device hour coverage; coverage of the period as a whole is the
-        # minimum across all devices — a single device that joined the system
-        # mid-period drags the number down.
         device_hours: dict[str, int] = {}
         for device_id in energy_device_ids:
             kwh, hours = _device_energy_kwh_for_range(config, device_id, start_dt, end_dt)
@@ -2393,8 +2389,8 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
 
         periods.append(
             {
-                "start_date": prev_date.isoformat(),
-                "end_date": curr_date.isoformat(),
+                "start_at": start_dt.isoformat(),
+                "end_at": end_dt.isoformat(),
                 "meter_kwh": meter_total,
                 "device_kwh": device_total,
                 "delta_kwh": round(meter_total - device_total, 3),

@@ -1834,7 +1834,7 @@ def listener_stats_api(request: Request) -> JSONResponse:
 
 class MeterReadingPayload(BaseModel):
     apartment: str
-    reading_date: str
+    reading_at: str
     reading_kwh: float
     is_settlement: bool = False
     note: str | None = None
@@ -1863,14 +1863,16 @@ def meter_readings_api(request: Request) -> JSONResponse:
 def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     try:
-        reading_date = datetime.fromisoformat(payload.reading_date).date()
+        reading_at = datetime.fromisoformat(payload.reading_at)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=f"Некорректная дата: {payload.reading_date!r}") from error
+        raise HTTPException(status_code=400, detail=f"Некорректное время: {payload.reading_at!r}") from error
+    if reading_at.tzinfo is None:
+        reading_at = reading_at.replace(tzinfo=_get_timezone(config))
     try:
         save_meter_reading(
             config,
             apartment=payload.apartment,
-            reading_date=reading_date,
+            reading_at=reading_at,
             reading_kwh=payload.reading_kwh,
             is_settlement=payload.is_settlement,
             note=payload.note,

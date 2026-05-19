@@ -90,14 +90,14 @@
                     <tr>
                         <th>Расчётное</th>
                         {% for apt in meter.status.apartments %}
-                        <td>{% if apt.settlement %}{{ '%.2f'|format(apt.settlement.reading_kwh) }} <small>({{ apt.settlement.reading_date }})</small>{% else %}—{% endif %}</td>
+                        <td>{% if apt.settlement %}{{ '%.2f'|format(apt.settlement.reading_kwh) }} <small>({{ apt.settlement.reading_at[:16].replace('T',' ') }})</small>{% else %}—{% endif %}</td>
                         {% endfor %}
                         <td></td>
                     </tr>
                     <tr>
                         <th>Последнее</th>
                         {% for apt in meter.status.apartments %}
-                        <td>{% if apt.latest %}{{ '%.2f'|format(apt.latest.reading_kwh) }} <small>({{ apt.latest.reading_date }})</small>{% else %}—{% endif %}</td>
+                        <td>{% if apt.latest %}{{ '%.2f'|format(apt.latest.reading_kwh) }} <small>({{ apt.latest.reading_at[:16].replace('T',' ') }})</small>{% else %}—{% endif %}</td>
                         {% endfor %}
                         <td></td>
                     </tr>
@@ -124,8 +124,8 @@
 
         <form class="meter-form" data-meter-form>
             <label class="meter-field meter-field-date">
-                <span>Дата</span>
-                <input type="date" name="reading_date" required>
+                <span>Когда сняли</span>
+                <input type="datetime-local" name="reading_at" required>
             </label>
             {% for apt in meter.apartments %}
             <label class="meter-field" data-meter-row data-apt="{{ apt }}">
@@ -157,7 +157,7 @@
                 <tbody data-meter-discrepancy-body>
                     {% for period in meter.discrepancy_periods %}
                     <tr>
-                        <td>{{ period.start_date }} – {{ period.end_date }}</td>
+                        <td>{{ period.start_at[:16].replace('T',' ') }} – {{ period.end_at[:16].replace('T',' ') }}</td>
                         <td>{{ '%.2f'|format(period.meter_kwh) }}</td>
                         <td>{{ '%.2f'|format(period.device_kwh) }}</td>
                         <td class="meter-discrepancy-delta {% if period.delta_kwh > 0 %}is-positive{% elif period.delta_kwh < 0 %}is-negative{% endif %}">{{ '%+.2f'|format(period.delta_kwh) }}</td>
@@ -172,7 +172,7 @@
             <table class="meter-history-table">
                 <thead>
                     <tr>
-                        <th>Дата</th>
+                        <th>Когда</th>
                         <th>Кв</th>
                         <th>кВт·ч</th>
                         <th>Расч.</th>
@@ -182,7 +182,7 @@
                 <tbody data-meter-history>
                     {% for row in meter.readings %}
                     <tr data-reading-id="{{ row.id }}">
-                        <td>{{ row.reading_date }}</td>
+                        <td>{{ row.reading_at|string|truncate(16, true, '') }}</td>
                         <td>{{ row.apartment }}</td>
                         <td>{{ '%.2f'|format(row.reading_kwh) }}</td>
                         <td>{% if row.is_settlement %}✓{% endif %}</td>

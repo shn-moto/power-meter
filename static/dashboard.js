@@ -248,13 +248,14 @@ if (meterSection) {
         const apts = meter.status?.apartments || [];
         const aptCount = apts.length;
         const colHeaders = apts.map((apt) => `<th>Кв ${apt.apartment}</th>`).join('');
+        const formatAt = (iso) => iso ? iso.slice(0, 16).replace('T', ' ') : '';
         const settlementCells = apts.map((apt) => {
             if (!apt.settlement) return '<td>—</td>';
-            return `<td>${fmtKwhCell(apt.settlement.reading_kwh)} <small>(${apt.settlement.reading_date})</small></td>`;
+            return `<td>${fmtKwhCell(apt.settlement.reading_kwh)} <small>(${formatAt(apt.settlement.reading_at)})</small></td>`;
         }).join('');
         const latestCells = apts.map((apt) => {
             if (!apt.latest) return '<td>—</td>';
-            return `<td>${fmtKwhCell(apt.latest.reading_kwh)} <small>(${apt.latest.reading_date})</small></td>`;
+            return `<td>${fmtKwhCell(apt.latest.reading_kwh)} <small>(${formatAt(apt.latest.reading_at)})</small></td>`;
         }).join('');
         const consumptionCells = apts.map((apt) => `<td>${fmtKwhCell(apt.consumption_kwh)}</td>`).join('');
         const totals = meter.status || {};
@@ -289,11 +290,12 @@ if (meterSection) {
         }
     };
 
+    const formatReadingAt = (iso) => iso ? String(iso).slice(0, 16).replace('T', ' ') : '';
     const renderHistory = (rows) => {
         if (!historyBody) return;
         historyBody.innerHTML = (rows || []).map((row) => `
             <tr data-reading-id="${row.id}">
-                <td>${row.reading_date}</td>
+                <td>${formatReadingAt(row.reading_at)}</td>
                 <td>${row.apartment}</td>
                 <td>${Number(row.reading_kwh).toFixed(2)}</td>
                 <td>${row.is_settlement ? '✓' : ''}</td>
@@ -318,7 +320,7 @@ if (meterSection) {
             const cls = delta > 0 ? 'is-positive' : (delta < 0 ? 'is-negative' : '');
             const sign = delta > 0 ? '+' : '';
             return `<tr>
-                <td>${p.start_date} – ${p.end_date}</td>
+                <td>${formatReadingAt(p.start_at)} – ${formatReadingAt(p.end_at)}</td>
                 <td>${Number(p.meter_kwh).toFixed(2)}</td>
                 <td>${Number(p.device_kwh).toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${cls}">${sign}${delta.toFixed(2)}</td>
@@ -340,10 +342,10 @@ if (meterSection) {
     };
 
     const collectFormRows = () => {
-        const dateEl = form.querySelector('[name="reading_date"]');
+        const dtEl = form.querySelector('[name="reading_at"]');
         const settlementEl = form.querySelector('[name="is_settlement"]');
-        const dateValue = (dateEl?.value || '').trim();
-        if (!dateValue) return [];
+        const dtValue = (dtEl?.value || '').trim();
+        if (!dtValue) return [];
         const isSettlement = !!settlementEl?.checked;
         const rows = [];
         form.querySelectorAll('[data-meter-row]').forEach((wrapper) => {
@@ -353,7 +355,7 @@ if (meterSection) {
             if (!valueRaw) return;
             rows.push({
                 apartment: apt,
-                reading_date: dateValue,
+                reading_at: dtValue,
                 reading_kwh: Number(valueRaw),
                 is_settlement: isSettlement,
             });
@@ -412,13 +414,11 @@ if (meterSection) {
         }
     });
 
-    // Pre-fill date input with today
-    const dateInput = meterSection.querySelector('[name="reading_date"]');
-    if (dateInput && !dateInput.value) {
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
-        dateInput.value = `${yyyy}-${mm}-${dd}`;
+    // Pre-fill datetime-local input with NOW
+    const dtInput = meterSection.querySelector('[name="reading_at"]');
+    if (dtInput && !dtInput.value) {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        dtInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
     }
 }
