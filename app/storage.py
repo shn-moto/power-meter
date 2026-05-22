@@ -739,8 +739,9 @@ def _validate_profile_document(path: Path, payload: dict[str, Any]) -> tuple[str
     if default_power_mode not in {"total", "current"}:
         raise ValueError(f"{path.name}: summary.default_power_mode must be 'total' or 'current'")
 
-    if summary.get("default_power_dps_key") in (None, ""):
-        raise ValueError(f"{path.name}: summary.default_power_dps_key is required")
+    is_energy_meter = bool(device.get("is_energy_meter", True))
+    if is_energy_meter and summary.get("default_power_dps_key") in (None, ""):
+        raise ValueError(f"{path.name}: summary.default_power_dps_key is required for energy meter devices")
 
     visualized_codes = summary.get("default_visualized_codes")
     if not isinstance(visualized_codes, list):
