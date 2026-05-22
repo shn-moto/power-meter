@@ -20,6 +20,8 @@ class TuyaDeviceConfig:
     visualized_codes: tuple[str, ...]
     power_type: str = "total"
     dps_request_modes: dict[str, str] = field(default_factory=dict)
+    is_gateway: bool = False
+    gateway_device_id: str | None = None
 
 
 @dataclass(slots=True)

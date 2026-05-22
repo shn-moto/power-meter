@@ -1,0 +1,77 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf01458654b95cf775wbgq",
+    "name": "Датчик движения",
+    "room": "Зал",
+    "device_kind": "sensor",
+    "is_energy_meter": false,
+    "category_code": "qt",
+    "product_id": "IDkXwcvanigdiTj3",
+    "product_name": "PIR motion sensor"
+  },
+  "connection": {
+    "local_key": "",
+    "local_ip": "",
+    "protocol_version": 3.3,
+    "ip_source": "gateway",
+    "last_verified_at": null,
+    "discovery_required": false,
+    "gateway_device_id": "bf34191ce15d382529lecl"
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": null,
+    "default_visualized_codes": ["101", "103"]
+  },
+  "dps": [
+    {
+      "dp_id": "101",
+      "code": "pir",
+      "name": "PIR",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "Enum",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "enum_values": ["pir", "none"],
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Движение",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "103",
+      "code": "va_battery",
+      "name": "Батарея",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "%",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 500,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Батарея",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": []
+}

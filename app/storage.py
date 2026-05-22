@@ -280,6 +280,8 @@ def upsert_managed_device(
     power_type: str = "total",
     visualized_codes: list[str] | tuple[str, ...],
     capabilities: list[dict[str, Any]],
+    is_gateway: bool = False,
+    gateway_device_id: str | None = None,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -287,9 +289,9 @@ def upsert_managed_device(
                 """
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
-                    is_energy_meter, is_charger, product_id, product_name, icon, onboarding_source, updated_at,
+                    is_energy_meter, is_charger, is_gateway, product_id, product_name, icon, onboarding_source, updated_at,
                     total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -301,6 +303,7 @@ def upsert_managed_device(
                     device_kind = EXCLUDED.device_kind,
                     is_energy_meter = EXCLUDED.is_energy_meter,
                     is_charger = EXCLUDED.is_charger,
+                    is_gateway = EXCLUDED.is_gateway,
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -319,6 +322,7 @@ def upsert_managed_device(
                     device_kind,
                     is_energy_meter,
                     is_charger,
+                    is_gateway,
                     product_id,
                     product_name,
                     icon,
@@ -332,8 +336,8 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -346,6 +350,7 @@ def upsert_managed_device(
                     END,
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
                     total_power_scale = EXCLUDED.total_power_scale,
+                    gateway_device_id = EXCLUDED.gateway_device_id,
                     updated_at = NOW()
                 """,
                 (
@@ -355,6 +360,7 @@ def upsert_managed_device(
                     version,
                     total_power_dps_key,
                     total_power_scale,
+                    gateway_device_id,
                 ),
             )
             cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
@@ -780,6 +786,7 @@ def materialize_device_profile(
         device_kind=str(device.get("device_kind") or "meter"),
         is_energy_meter=bool(device.get("is_energy_meter", True)),
         is_charger=bool(device.get("is_charger", False)),
+        is_gateway=bool(device.get("is_gateway", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
         icon=str(device.get("icon") or "").strip() or None,
@@ -792,6 +799,7 @@ def materialize_device_profile(
         power_type=power_type,
         visualized_codes=visualized_codes,
         capabilities=_profile_capabilities(payload),
+        gateway_device_id=(str(connection.get("gateway_device_id") or "").strip() or None),
     )
 
 def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None = None) -> list[str]:
@@ -1109,11 +1117,16 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_id,
-                       c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
-                      d.visualized_codes, d.power_type
+                SELECT d.name, d.room, d.device_id, d.is_gateway,
+                       COALESCE(NULLIF(c.local_key, ''), gc.local_key, '') AS local_key,
+                       COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
+                       COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
+                       c.total_power_dps_key, c.total_power_scale,
+                       c.gateway_device_id,
+                       d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
+                LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
                 WHERE d.device_id = %s
                 """,
                 (device_id,),
@@ -1136,6 +1149,8 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
         power_type=str(row.get("power_type") or "total"),
         dps_request_modes=request_modes,
+        is_gateway=bool(row.get("is_gateway")),
+        gateway_device_id=row.get("gateway_device_id"),
     )
 
 
@@ -1154,12 +1169,18 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_id,
-                       c.local_key, c.ip_address, c.version, c.total_power_dps_key, c.total_power_scale,
-                      d.visualized_codes, d.power_type
+                SELECT d.name, d.room, d.device_id, d.is_gateway,
+                       COALESCE(NULLIF(c.local_key, ''), gc.local_key, '') AS local_key,
+                       COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
+                       COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
+                       c.total_power_dps_key, c.total_power_scale,
+                       c.gateway_device_id,
+                       d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
-                WHERE c.local_key <> '' AND c.ip_address <> ''
+                LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
+                WHERE COALESCE(NULLIF(c.local_key, ''), gc.local_key, '') <> ''
+                  AND COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') <> ''
                 ORDER BY d.name
                 """
             )
@@ -1183,6 +1204,8 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 visualized_codes=tuple(str(key) for key in (row["visualized_codes"] or [])),
                 power_type=str(row.get("power_type") or "total"),
                 dps_request_modes=request_modes_by_device.get(row["device_id"], {}),
+                is_gateway=bool(row.get("is_gateway")),
+                gateway_device_id=row.get("gateway_device_id"),
             )
         )
     return devices

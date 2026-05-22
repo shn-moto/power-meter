@@ -1,0 +1,100 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf34191ce15d382529lecl",
+    "name": "Zigbee Gateway",
+    "room": "",
+    "device_kind": "gateway",
+    "is_energy_meter": false,
+    "is_gateway": true,
+    "category_code": "wg2",
+    "product_id": "dmmv7eacvbyyg9gl",
+    "product_name": "GW018-DM"
+  },
+  "connection": {
+    "local_key": "!=CEO:vzIvU{7s0r",
+    "local_ip": "192.168.1.128",
+    "protocol_version": 3.3,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": null,
+    "default_visualized_codes": ["32"]
+  },
+  "dps": [
+    {
+      "dp_id": "4",
+      "code": "switch_alarm_sound",
+      "name": "Звук тревоги",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Звук тревоги",
+      "display_order": 100,
+      "poll_priority": 100,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "32",
+      "code": "master_state",
+      "name": "Состояние",
+      "access": "rw",
+      "source_group": "status",
+      "value_type": "Enum",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "enum_values": ["normal", "alarm"],
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Состояние шлюза",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "45",
+      "code": "alarm_active",
+      "name": "Активная тревога",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "String",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Тревога",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": []
+}

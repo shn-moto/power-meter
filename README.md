@@ -56,6 +56,8 @@ are wiped and re-inserted on every sync).
 Fields the rest of the code reads:
 - `device.is_energy_meter` — sockets/breakers vs sensors.
 - `device.is_charger` — breakers that get the charger UI (line chart + sessions list on day view) instead of hourly bars.
+- `device.is_gateway` — Zigbee hub. Has its own `local_key` and `local_ip`; sub-devices live behind it.
+- `connection.gateway_device_id` — set on sub-devices (Zigbee child) instead of `local_key`/`local_ip`. At runtime the SQL JOIN in `get_polling_devices`/`get_control_device` inherits the gateway's endpoint and `tuya_service.fetch_status` opens an `OutletDevice` with `cid=device_id` so the gateway routes the query.
 - `summary.default_power_mode` → `power_type` (`current` | `total`).
 - `summary.default_power_dps_key` → which DPS to read for the device's power value (current power for `current`, energy counter for `total`).
 - `summary.default_visualized_codes` → DPS shown on the device detail page.
