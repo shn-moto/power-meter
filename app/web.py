@@ -1598,15 +1598,27 @@ def _build_sensor_page_payload(
         capabilities,
         local_raw_dps,
     ).get("image_url")
+    state_metric = _toggle_preview_metric(capabilities, local_raw_dps)
+
+    gateway_device_id = str(device.get("gateway_device_id") or "").strip() or None
+    if gateway_device_id:
+        gateway_name = str(device.get("gateway_name") or "").strip() or "шлюз"
+        connection_label = f"Zigbee через {gateway_name}"
+    elif device.get("connection_ready") and device.get("ip_address"):
+        connection_label = f"LAN: {device['ip_address']}"
+    else:
+        connection_label = "Не обнаружено"
 
     return {
         "metrics": metrics,
         "state_source": "Локальное устройство" if local_raw_dps else (cloud_source or "Нет данных"),
+        "state_label": state_metric.get("value") if state_metric else None,
         "last_update": _format_live_timestamp(config, last_update) if last_update else None,
         "last_update_age_seconds": get_sample_age_seconds(last_update, datetime.now(_get_timezone(config))) if last_update else None,
         "last_update_status": last_update_status,
         "connection_ready": bool(device.get("connection_ready")),
         "ip_address": str(device.get("ip_address") or "").strip() or None,
+        "connection_label": connection_label,
         "device_functions": device_functions,
         "image_url": state_aware_image,
     }

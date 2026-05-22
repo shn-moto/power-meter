@@ -968,13 +968,18 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                                    SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter, d.is_charger,
-                        d.product_name, d.category_code, d.product_id, d.icon,
-                        d.total_power_dps_key, d.visualized_codes, d.power_type,
-                       COALESCE(c.ip_address, '') AS ip_address,
-                       (COALESCE(c.ip_address, '') <> '') AS connection_ready
+                SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter, d.is_charger,
+                       d.is_gateway,
+                       d.product_name, d.category_code, d.product_id, d.icon,
+                       d.total_power_dps_key, d.visualized_codes, d.power_type,
+                       COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
+                       (COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') <> '') AS connection_ready,
+                       c.gateway_device_id,
+                       gd.name AS gateway_name
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
+                LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
+                LEFT JOIN devices gd ON gd.device_id = c.gateway_device_id
                 WHERE d.device_id = %s
                 """,
                 (device_id,),

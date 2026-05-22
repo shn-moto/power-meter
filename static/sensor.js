@@ -75,9 +75,11 @@ if (sensorPage) {
             sourceNode.textContent = payload.state_source || 'Нет данных';
         }
         if (connectionNode) {
-            connectionNode.textContent = payload.connection_ready && payload.ip_address
-                ? `LAN: ${payload.ip_address}`
-                : 'Не обнаружено';
+            connectionNode.textContent = payload.connection_label || 'Не обнаружено';
+        }
+        const stateNode = document.querySelector('[data-sensor-state]');
+        if (stateNode && payload.state_label) {
+            stateNode.textContent = payload.state_label;
         }
         if (lastUpdateNode) {
             lastUpdateNode.textContent = payload.last_update || 'Нет данных';

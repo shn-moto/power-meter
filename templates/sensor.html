@@ -21,9 +21,10 @@
             <h2>Состояние</h2>
             <dl class="summary-grid">
                 <div><dt>Тип</dt><dd>{{ device.product_name or device.device_kind }}</dd></div>
+                {% if sensor.state_label %}<div><dt>Состояние</dt><dd data-sensor-state>{{ sensor.state_label }}</dd></div>{% endif %}
                 <div><dt>Источник показаний</dt><dd data-sensor-source>{{ sensor.state_source }}</dd></div>
                 <div><dt>Последнее обновление</dt><dd class="reading-status is-{{ sensor.last_update_status }}" data-sensor-last-update>{{ sensor.last_update or 'Нет данных' }}</dd></div>
-                <div><dt>Локальное подключение</dt><dd data-sensor-connection>{% if sensor.connection_ready and sensor.ip_address %}LAN: {{ sensor.ip_address }}{% else %}Не обнаружено{% endif %}</dd></div>
+                <div><dt>Подключение</dt><dd data-sensor-connection>{{ sensor.connection_label or 'Не обнаружено' }}</dd></div>
             </dl>
         </div>
     </article>
