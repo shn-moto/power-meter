@@ -221,6 +221,7 @@ p {
 .sensor-metrics-panel,
 .sensor-notes-card {
     padding: 20px;
+    position: relative;
 }
 
 .sensor-metric-grid {
