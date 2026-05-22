@@ -1,0 +1,146 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bf8b09acfc214757b8iica",
+    "name": "Лампа",
+    "room": "Зал",
+    "device_kind": "sensor",
+    "is_energy_meter": false,
+    "category_code": "dj",
+    "product_id": "oe0cpnjg",
+    "product_name": "Smart Lighting"
+  },
+  "connection": {
+    "local_key": "",
+    "local_ip": "",
+    "protocol_version": 3.3,
+    "ip_source": "gateway",
+    "last_verified_at": null,
+    "discovery_required": false,
+    "gateway_device_id": "bf34191ce15d382529lecl"
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": null,
+    "default_visualized_codes": ["1", "3"]
+  },
+  "dps": [
+    {
+      "dp_id": "1",
+      "code": "switch_led",
+      "name": "Switch",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Boolean",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Питание",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "2",
+      "code": "work_mode",
+      "name": "Work mode",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Enum",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "enum_values": ["white", "colour", "music"],
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Режим",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "3",
+      "code": "bright_value",
+      "name": "Brightness",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Integer",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 10,
+      "max": 1000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Яркость",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "4",
+      "code": "temp_value",
+      "name": "Colour temperature",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "Integer",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 1000,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Тепло-холод",
+      "display_order": 40,
+      "poll_priority": 40,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    },
+    {
+      "dp_id": "5",
+      "code": "colour_data",
+      "name": "Colour",
+      "access": "rw",
+      "source_group": "functions",
+      "value_type": "String",
+      "unit": "",
+      "scale_digits": 0,
+      "step": 1,
+      "min": 0,
+      "max": 0,
+      "visualization_allowed": false,
+      "power_role": null,
+      "display_label": "Цвет",
+      "display_order": 50,
+      "poll_priority": 50,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": false
+      }
+    }
+  ],
+  "controls": []
+}

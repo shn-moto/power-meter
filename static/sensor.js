@@ -10,7 +10,21 @@ if (sensorPage) {
     const connectionNode = document.querySelector('[data-sensor-connection]');
     const metricsNode = document.querySelector('[data-sensor-metrics]');
     const emptyNode = document.querySelector('[data-sensor-empty]');
+    const functionsContainer = document.querySelector('[data-device-functions]');
+    const timerDialog = document.querySelector('[data-timer-dialog]');
+    const timerForm = document.querySelector('[data-timer-form]');
+    const timerCancel = document.querySelector('[data-timer-cancel]');
     const initialPayload = initialPayloadNode ? JSON.parse(initialPayloadNode.textContent) : null;
+    const deviceControls = (functionsContainer && window.DeviceControls)
+        ? window.DeviceControls.create({
+            deviceId,
+            container: functionsContainer,
+            timerDialog,
+            timerForm,
+            timerCancel,
+            onAfterCommand: () => loadSensor(),
+        })
+        : null;
     let isLoading = false;
     let latestPayload = initialPayload;
     let refreshTimerId = null;
@@ -72,6 +86,9 @@ if (sensorPage) {
             applyReadingStatus(lastUpdateNode, payload.last_update_status);
         }
         renderMetrics(payload.metrics || []);
+        if (deviceControls) {
+            deviceControls.sync(payload.device_functions || []);
+        }
         ensurePollingTimers();
     };
 

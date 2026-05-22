@@ -95,5 +95,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js" defer></script>
 <script type="application/json" data-initial-device-stats>{{ initial_stats_json | safe }}</script>
+<script src="/static/device_controls.js?v={{ static_asset_version }}" defer></script>
 <script src="/static/device.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

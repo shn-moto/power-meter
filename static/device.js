@@ -37,7 +37,6 @@ if (page) {
     let isLiveLoading = false;
     let pendingAggregateRequest = null;
     let latestAggregateRequestKey = null;
-    let timerFunction = null;
     let refreshTimerId = null;
     let liveAbortController = null;
     let aggregateAbortController = null;
@@ -350,138 +349,18 @@ if (page) {
         return 'месяцам';
     };
 
-    const setFunctionButtonState = (disabled) => {
-        functionsContainer.querySelectorAll('button, input[type="checkbox"]').forEach((node) => {
-            node.disabled = disabled;
-        });
-    };
-
-    const syncFunctionStates = (items) => {
-        const cards = [...functionsContainer.querySelectorAll('[data-function-code]')];
-        const cardsByCode = new Map(cards.map((node) => [node.dataset.functionCode, node]));
-        if (cards.length !== items.length || items.some((item) => !cardsByCode.has(item.code))) {
-            renderFunctions(items);
-            return;
-        }
-
-        items.forEach((item) => {
-            const card = cardsByCode.get(item.code);
-            if (!card) {
-                return;
-            }
-
-            const state = card.querySelector('.device-function-state');
-            if (state) {
-                state.textContent = item.current_label;
-            }
-
-            if (item.control_type === 'toggle') {
-                const checkbox = card.querySelector('input[type="checkbox"]');
-                const caption = card.querySelector('.switch-caption');
-                if (checkbox && document.activeElement !== checkbox) {
-                    checkbox.checked = Boolean(item.current_value);
-                }
-                if (caption && checkbox) {
-                    caption.textContent = checkbox.checked ? 'Вкл' : 'Выкл';
-                }
-            }
-        });
-    };
-
-    const runFunction = async (code, value) => {
-        setFunctionButtonState(true);
-        try {
-            const response = await fetch(`/api/devices/${deviceId}/functions/${code}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value }),
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                throw new Error(payload.detail || 'Не удалось выполнить действие.');
-            }
-            await Promise.all([
-                loadCurrentPeriod(),
-                loadLive(),
-            ]);
-        } catch (error) {
-            window.alert(error.message);
-        } finally {
-            setFunctionButtonState(false);
-        }
-    };
-
-    const renderFunctions = (items) => {
-        functionsContainer.innerHTML = '';
-        if (!items || !items.length) {
-            functionsContainer.innerHTML = '<p class="device-functions-empty">Для этого устройства управляемые функции пока не определены.</p>';
-            return;
-        }
-
-        items.forEach((item) => {
-            const card = document.createElement('section');
-            card.className = 'device-function-item';
-            card.dataset.functionCode = item.code;
-
-            const heading = document.createElement('div');
-            heading.className = 'device-function-head';
-
-            const titleWrap = document.createElement('div');
-            const title = document.createElement('h3');
-            title.textContent = item.label;
-            const description = document.createElement('p');
-            description.textContent = item.description;
-            titleWrap.append(title, description);
-
-            const state = document.createElement('strong');
-            state.className = 'device-function-state';
-            state.textContent = item.current_label;
-
-            heading.append(titleWrap, state);
-            card.appendChild(heading);
-
-            const controls = document.createElement('div');
-            controls.className = 'device-function-controls';
-
-            if (item.control_type === 'toggle') {
-                const label = document.createElement('label');
-                label.className = 'switch-control';
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.checked = Boolean(item.current_value);
-                checkbox.addEventListener('change', () => {
-                    runFunction(item.code, checkbox.checked);
-                });
-                const slider = document.createElement('span');
-                slider.className = 'switch-slider';
-                const caption = document.createElement('span');
-                caption.className = 'switch-caption';
-                caption.textContent = checkbox.checked ? 'Вкл' : 'Выкл';
-                checkbox.addEventListener('change', () => {
-                    caption.textContent = checkbox.checked ? 'Вкл' : 'Выкл';
-                });
-                label.append(checkbox, slider, caption);
-                controls.appendChild(label);
-            }
-
-            if (item.control_type === 'timer') {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.textContent = 'Задать таймер';
-                button.addEventListener('click', () => {
-                    timerFunction = item;
-                    timerForm.elements.minutes.value = String(Math.round((Number(item.current_value) || 0) / 60));
-                    if (typeof timerDialog.showModal === 'function') {
-                        timerDialog.showModal();
-                    }
-                });
-                controls.appendChild(button);
-            }
-
-            card.appendChild(controls);
-            functionsContainer.appendChild(card);
-        });
-    };
+    const deviceControls = window.DeviceControls.create({
+        deviceId,
+        container: functionsContainer,
+        timerDialog,
+        timerForm,
+        timerCancel,
+        onAfterCommand: async () => {
+            await Promise.all([loadCurrentPeriod(), loadLive()]);
+        },
+    });
+    const renderFunctions = (items) => deviceControls.render(items);
+    const syncFunctionStates = (items) => deviceControls.sync(items);
 
     const renderAggregateSummary = (payload) => {
         const fields = payload.summary;
@@ -1010,24 +889,6 @@ if (page) {
         updateDayNav();
         loadCurrentPeriod();
     });
-
-    if (timerCancel) {
-        timerCancel.addEventListener('click', () => {
-            timerDialog.close();
-        });
-    }
-
-    if (timerForm) {
-        timerForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            if (!timerFunction) {
-                return;
-            }
-            const minutes = Number(timerForm.elements.minutes.value || 0);
-            timerDialog.close();
-            await runFunction(timerFunction.code, Math.max(0, Math.round(minutes * 60)));
-        });
-    }
 
     if (initialPayload) {
         renderAggregateSummary(initialPayload);

@@ -417,6 +417,11 @@ p {
     gap: 14px;
 }
 
+.registry-grid[data-sensor-grid] {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    align-items: stretch;
+}
+
 .registry-item {
     padding: 18px 20px;
     display: flex;
@@ -434,42 +439,65 @@ p {
 }
 
 .sensor-summary-card {
+    padding: 0;
     display: grid;
-    grid-template-columns: minmax(140px, 180px) minmax(0, 1fr) auto;
-    align-items: stretch;
+    grid-template-rows: auto 1fr auto;
+    gap: 0;
+    overflow: hidden;
 }
 
 .sensor-summary-media {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 132px;
-    padding: 12px;
+    aspect-ratio: 4 / 3;
+    padding: 10px;
     text-decoration: none;
     color: var(--text);
     background:
         linear-gradient(180deg, rgba(19, 28, 39, 0.62), rgba(7, 12, 18, 0.96)),
         repeating-linear-gradient(0deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 18px),
         repeating-linear-gradient(90deg, rgba(127, 208, 255, 0.05) 0 1px, transparent 1px 18px);
-    border: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+}
+
+.sensor-summary-media .device-photo,
+.sensor-summary-media .device-placeholder {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    max-width: 100%;
 }
 
 .sensor-summary-body {
     display: grid;
-    gap: 12px;
+    gap: 8px;
+    padding: 12px 14px 10px;
+}
+
+.sensor-summary-body h3 {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.25;
+}
+
+.sensor-summary-body .device-room {
+    margin: 0;
+    font-size: 0.78rem;
 }
 
 .sensor-summary-metrics {
     display: grid;
-    gap: 10px;
+    gap: 6px;
+    font-size: 0.85rem;
 }
 
 .sensor-summary-metrics div {
     display: flex;
     justify-content: space-between;
-    gap: 20px;
+    gap: 12px;
     border-top: 1px solid var(--line);
-    padding-top: 10px;
+    padding-top: 6px;
 }
 
 .sensor-summary-metrics dt,
@@ -478,7 +506,15 @@ p {
 }
 
 .sensor-summary-meta {
-    min-width: 160px;
+    min-width: 0;
+    padding: 8px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    justify-items: stretch;
+    text-align: left;
+    border-top: 1px solid var(--line);
+    font-size: 0.75rem;
 }
 
 .sensor-link {
@@ -1200,6 +1236,37 @@ button:hover {
     color: #7ed68a;
 }
 
+.device-function-slider {
+    flex: 1 1 auto;
+    min-width: 120px;
+    accent-color: var(--accent);
+}
+
+.device-function-slider-value {
+    min-width: 44px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+}
+
+.device-function-select {
+    background: var(--surface-strong);
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 6px 10px;
+    font: inherit;
+    border-radius: 0;
+}
+
+.device-function-color {
+    width: 56px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--line);
+    background: var(--surface-strong);
+    cursor: pointer;
+}
+
 .timer-dialog {
     border: 1px solid var(--line);
     border-radius: 0;
@@ -1330,14 +1397,8 @@ button:hover {
         grid-template-columns: 1fr;
     }
 
-    .sensor-summary-card {
-        grid-template-columns: 1fr;
-    }
-
-    .sensor-summary-meta {
-        min-width: 0;
-        justify-items: start;
-        text-align: left;
+    .registry-grid[data-sensor-grid] {
+        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
     }
 
     .stats-grid {

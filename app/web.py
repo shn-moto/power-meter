@@ -148,7 +148,24 @@ FUNCTION_LABELS = {
 
 SUPPORTED_CONTROL_TYPES = {
     "switch": "toggle",
+    "switch_led": "toggle",
     "countdown_1": "timer",
+    "work_mode": "enum",
+    "bright_value": "slider",
+    "bright_value_v2": "slider",
+    "temp_value": "slider",
+    "temp_value_v2": "slider",
+    "colour_data": "color",
+    "colour_data_v2": "color",
+}
+
+ENUM_OPTION_LABELS = {
+    "work_mode": {
+        "white": "Белый",
+        "colour": "Цвет",
+        "music": "Музыка",
+        "scene": "Сцена",
+    },
 }
 
 
@@ -629,6 +646,13 @@ def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str
                 description = "Доступная функция устройства"
 
         values_json = capability.get("values_json") or {}
+        enum_options: list[dict[str, str]] = []
+        if control_type == "enum":
+            option_labels = ENUM_OPTION_LABELS.get(code, {})
+            for raw_option in values_json.get("range") or []:
+                option = str(raw_option)
+                enum_options.append({"value": option, "label": option_labels.get(option, option.capitalize())})
+
         functions.append(
             {
                 "code": code,
@@ -640,6 +664,7 @@ def _build_device_functions(capabilities: list[dict[str, Any]]) -> list[dict[str
                 "max": int(values_json.get("max", 0) or 0),
                 "step": int(values_json.get("step", 1) or 1),
                 "unit": UNIT_LABELS.get(str(values_json.get("unit") or "").strip(), str(values_json.get("unit") or "").strip()),
+                "options": enum_options,
             }
         )
 
@@ -760,6 +785,19 @@ def _attach_function_state(functions: list[dict[str, Any]], raw_dps: dict[str, A
             except (TypeError, ValueError):
                 current_value = 0
             current_label = _format_duration(current_value) if current_value else "Не задан"
+        elif item["control_type"] == "enum":
+            current_value = str(current_raw) if current_raw is not None else ""
+            option_labels = {opt["value"]: opt["label"] for opt in item.get("options") or []}
+            current_label = option_labels.get(current_value, current_value or "Нет данных")
+        elif item["control_type"] == "slider":
+            try:
+                current_value = int(current_raw or 0)
+            except (TypeError, ValueError):
+                current_value = 0
+            current_label = f"{current_value}"
+        elif item["control_type"] == "color":
+            current_value = str(current_raw) if current_raw is not None else ""
+            current_label = _format_colour_hex(current_value)
 
         enriched.append({
             **item,
@@ -771,13 +809,75 @@ def _attach_function_state(functions: list[dict[str, Any]], raw_dps: dict[str, A
 
 
 def _apply_device_command(device: tinytuya.Device, function_code: str, dp_id: int, value: Any) -> None:
-    if function_code == "switch":
+    control_type = SUPPORTED_CONTROL_TYPES.get(function_code)
+    if control_type == "toggle":
         device.set_status(bool(value), switch=dp_id)
         return
-    if function_code == "countdown_1":
+    if control_type == "timer":
         device.set_value(dp_id, int(value))
         return
+    if control_type == "enum":
+        device.set_value(dp_id, str(value))
+        return
+    if control_type == "slider":
+        device.set_value(dp_id, int(value))
+        return
+    if control_type == "color":
+        # Lamp expects the Tuya HSV-encoded payload — 12 hex chars: HHHH SSSS VVVV
+        # Hue 0..360, saturation/value 0..1000. Accept either pre-formatted hex or
+        # a "#RRGGBB" picker value and convert.
+        device.set_value(dp_id, _coerce_colour_payload(value))
+        return
     raise ValueError("Функция пока не поддерживается")
+
+
+def _format_colour_hex(value: str) -> str:
+    parsed = _parse_tuya_colour(value)
+    if not parsed:
+        return value or "Нет данных"
+    hue, sat, val = parsed
+    return f"H {hue}° S {sat // 10}% V {val // 10}%"
+
+
+def _parse_tuya_colour(value: str) -> tuple[int, int, int] | None:
+    if not isinstance(value, str) or len(value) < 12:
+        return None
+    try:
+        hue = int(value[0:4], 16)
+        sat = int(value[4:8], 16)
+        val = int(value[8:12], 16)
+    except ValueError:
+        return None
+    return hue, sat, val
+
+
+def _coerce_colour_payload(value: Any) -> str:
+    if isinstance(value, str) and value:
+        if value.startswith("#") and len(value) == 7:
+            hue, sat, val = _hex_rgb_to_tuya_hsv(value)
+            return f"{hue:04x}{sat:04x}{val:04x}"
+        if len(value) >= 12 and all(ch in "0123456789abcdefABCDEF" for ch in value[:12]):
+            return value[:12].lower()
+    raise ValueError("Неверный формат цвета")
+
+
+def _hex_rgb_to_tuya_hsv(hex_rgb: str) -> tuple[int, int, int]:
+    r = int(hex_rgb[1:3], 16) / 255.0
+    g = int(hex_rgb[3:5], 16) / 255.0
+    b = int(hex_rgb[5:7], 16) / 255.0
+    cmax = max(r, g, b)
+    cmin = min(r, g, b)
+    delta = cmax - cmin
+    if delta == 0:
+        hue = 0.0
+    elif cmax == r:
+        hue = 60.0 * (((g - b) / delta) % 6.0)
+    elif cmax == g:
+        hue = 60.0 * (((b - r) / delta) + 2.0)
+    else:
+        hue = 60.0 * (((r - g) / delta) + 4.0)
+    sat = 0.0 if cmax == 0 else delta / cmax
+    return int(round(hue)) % 360, int(round(sat * 1000)), int(round(cmax * 1000))
 
 
 def _resolve_period(config: AppConfig, period: str, start_raw: str | None, end_raw: str | None) -> tuple[datetime, datetime]:
@@ -1435,6 +1535,8 @@ def _build_sensor_page_payload(
         else _get_sensor_cloud_status_style(cloud_fetched_at) if cloud_status_items else "error"
     )
 
+    device_functions = _attach_function_state(_build_device_functions(capabilities), local_raw_dps)
+
     return {
         "metrics": metrics,
         "state_source": "Локальное устройство" if local_raw_dps else (cloud_source or "Нет данных"),
@@ -1443,6 +1545,7 @@ def _build_sensor_page_payload(
         "last_update_status": last_update_status,
         "connection_ready": bool(device.get("connection_ready")),
         "ip_address": str(device.get("ip_address") or "").strip() or None,
+        "device_functions": device_functions,
     }
 
 
@@ -2043,10 +2146,29 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
             value = int(payload.value)
             if value < function["min"] or (function["max"] and value > function["max"]):
                 raise ValueError("Значение таймера вне допустимого диапазона")
+        elif function["control_type"] == "slider":
+            value = int(payload.value)
+            if value < function["min"] or (function["max"] and value > function["max"]):
+                raise ValueError("Значение вне допустимого диапазона")
+        elif function["control_type"] == "enum":
+            value = str(payload.value)
+            allowed = {opt["value"] for opt in function.get("options") or []}
+            if allowed and value not in allowed:
+                raise ValueError("Недопустимое значение режима")
+        elif function["control_type"] == "color":
+            value = payload.value
         else:
             raise ValueError("Функция пока не поддерживается")
 
-        tinytuya_device = tinytuya.Device(device.device_id, device.ip_address, device.local_key)
+        if device.gateway_device_id:
+            tinytuya_device = tinytuya.OutletDevice(
+                dev_id=device.gateway_device_id,
+                address=device.ip_address,
+                local_key=device.local_key,
+                cid=device.device_id,
+            )
+        else:
+            tinytuya_device = tinytuya.Device(device.device_id, device.ip_address, device.local_key)
         tinytuya_device.set_version(device.version)
         tinytuya_device.set_socketTimeout(1.5)
         tinytuya_device.set_socketRetryLimit(1)

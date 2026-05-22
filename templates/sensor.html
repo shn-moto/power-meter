@@ -42,7 +42,33 @@
         </div>
         <p class="chart-empty" data-sensor-empty {% if sensor.metrics %}hidden{% endif %}>Показания датчика пока недоступны.</p>
     </article>
+
+    {% if sensor.device_functions %}
+    <article class="detail-card sensor-functions-panel">
+        <h2>Функции</h2>
+        <div class="device-functions" data-device-functions>
+            <p class="device-functions-empty">Загрузка функций...</p>
+        </div>
+    </article>
+    {% endif %}
 </section>
+
+<dialog class="timer-dialog" data-timer-dialog>
+    <form method="dialog" class="timer-dialog-form" data-timer-form>
+        <h3>Таймер отключения</h3>
+        <p class="hero-copy">Введите время в минутах. Значение 0 сбрасывает таймер.</p>
+        <label>
+            Минуты
+            <input type="number" name="minutes" min="0" step="1" required>
+        </label>
+        <div class="timer-dialog-actions">
+            <button type="button" data-timer-cancel>Отмена</button>
+            <button type="submit">Сохранить</button>
+        </div>
+    </form>
+</dialog>
+
 <script type="application/json" data-initial-sensor>{{ initial_sensor_json | safe }}</script>
+<script src="/static/device_controls.js?v={{ static_asset_version }}" defer></script>
 <script src="/static/sensor.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}
