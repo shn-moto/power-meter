@@ -10,6 +10,7 @@ if (sensorPage) {
     const connectionNode = document.querySelector('[data-sensor-connection]');
     const metricsNode = document.querySelector('[data-sensor-metrics]');
     const emptyNode = document.querySelector('[data-sensor-empty]');
+    const photoNode = document.querySelector('[data-device-photo]');
     const functionsContainer = document.querySelector('[data-device-functions]');
     const timerDialog = document.querySelector('[data-timer-dialog]');
     const timerForm = document.querySelector('[data-timer-form]');
@@ -86,6 +87,9 @@ if (sensorPage) {
             applyReadingStatus(lastUpdateNode, payload.last_update_status);
         }
         renderMetrics(payload.metrics || []);
+        if (photoNode && payload.image_url && photoNode.getAttribute('src') !== payload.image_url) {
+            photoNode.src = payload.image_url;
+        }
         if (deviceControls) {
             deviceControls.sync(payload.device_functions || []);
         }

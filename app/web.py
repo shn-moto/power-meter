@@ -324,6 +324,43 @@ def _resolve_device_image_url_by_key(image_key: str | None, directory_name: str)
     return None
 
 
+STATE_AWARE_TOGGLE_CODES = ("switch_led", "switch", "switch_1")
+
+
+def _state_image_suffix(capabilities: list[dict[str, Any]], raw_dps: dict[str, Any]) -> str | None:
+    if not isinstance(raw_dps, dict) or not raw_dps:
+        return None
+    for capability in capabilities:
+        code = str(capability.get("capability_code") or "")
+        if code not in STATE_AWARE_TOGGLE_CODES:
+            continue
+        dp_id = capability.get("dp_id")
+        if dp_id is None:
+            continue
+        value = raw_dps.get(str(dp_id))
+        if value is None:
+            continue
+        return "_on" if bool(value) else "_off"
+    return None
+
+
+def _apply_state_aware_image(
+    device: dict[str, Any],
+    capabilities: list[dict[str, Any]] | None,
+    raw_dps: dict[str, Any] | None,
+) -> dict[str, Any]:
+    device_id = str(device.get("device_id") or "").strip()
+    if not device_id:
+        return device
+    suffix = _state_image_suffix(capabilities or [], raw_dps or {})
+    if not suffix:
+        return device
+    state_url = _resolve_device_image_url_by_key(f"{device_id}{suffix}", "images")
+    if state_url:
+        device["image_url"] = state_url
+    return device
+
+
 def _decorate_device_media(device: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(device)
     device_id = str(enriched.get("device_id") or "").strip() or None
@@ -1301,7 +1338,7 @@ def _build_sensor_dashboard_entry(
     else:
         connection_label = "Облачное устройство"
 
-    return {
+    entry = {
         **device,
         "primary_metric": primary_metric,
         "secondary_metric": secondary_metric,
@@ -1309,6 +1346,7 @@ def _build_sensor_dashboard_entry(
         "last_seen": last_update,
         "last_seen_status": last_update_status,
     }
+    return _apply_state_aware_image(entry, capabilities, local_raw_dps)
 
 
 def _build_sensor_dashboard_entry_from_cache(
@@ -1337,7 +1375,7 @@ def _build_sensor_dashboard_entry_from_cache(
     else:
         connection_label = "Облачное устройство"
 
-    return {
+    entry = {
         **device,
         "primary_metric": primary_metric,
         "secondary_metric": secondary_metric,
@@ -1345,6 +1383,7 @@ def _build_sensor_dashboard_entry_from_cache(
         "last_seen": device.get("last_seen"),
         "last_seen_status": device.get("last_seen_status") or "error",
     }
+    return _apply_state_aware_image(entry, capabilities, local_raw_dps)
 
 
 def _decorate_sensor_dashboard_entries(request: Request, config: AppConfig, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1409,6 +1448,10 @@ def _apply_live_dashboard_overlay(request: Request, config: AppConfig, payload: 
         device["current_power_kw"] = live_device.get("current_power_kw", device.get("current_power_kw"))
         device["last_seen"] = live_device.get("last_seen", device.get("last_seen"))
         device["last_seen_status"] = live_device.get("last_seen_status", device.get("last_seen_status"))
+        live_sample = live_samples.get(str(device.get("device_id") or ""))
+        if live_sample is not None:
+            capabilities = _get_cached_device_capabilities(request, config, device["device_id"])
+            _apply_state_aware_image(device, capabilities, live_sample.raw_dps)
 
     for sensor in payload.get("sensor_devices", []):
         device_id = str(sensor.get("device_id") or "")
@@ -1536,6 +1579,11 @@ def _build_sensor_page_payload(
     )
 
     device_functions = _attach_function_state(_build_device_functions(capabilities), local_raw_dps)
+    state_aware_image = _apply_state_aware_image(
+        {"device_id": device.get("device_id"), "image_url": device.get("image_url")},
+        capabilities,
+        local_raw_dps,
+    ).get("image_url")
 
     return {
         "metrics": metrics,
@@ -1546,6 +1594,7 @@ def _build_sensor_page_payload(
         "connection_ready": bool(device.get("connection_ready")),
         "ip_address": str(device.get("ip_address") or "").strip() or None,
         "device_functions": device_functions,
+        "image_url": state_aware_image,
     }
 
 

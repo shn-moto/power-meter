@@ -12,7 +12,7 @@
     <article class="detail-card sensor-device-card">
         <div class="sensor-device-visual">
             {% if device.image_url %}
-            <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
+            <img class="device-photo" data-device-photo src="{{ sensor.image_url or device.image_url }}" alt="{{ device.name }}">
             {% else %}
             <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
             {% endif %}
