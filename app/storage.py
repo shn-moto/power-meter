@@ -346,7 +346,7 @@ def upsert_managed_device(
                         ELSE device_connections.ip_address
                     END,
                     version = CASE
-                        WHEN EXCLUDED.ip_address <> '' THEN EXCLUDED.version
+                        WHEN EXCLUDED.version > 0 THEN EXCLUDED.version
                         ELSE device_connections.version
                     END,
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
