@@ -808,12 +808,21 @@ def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None 
     loaded_device_ids: list[str] = []
     seen_device_ids: set[str] = set()
 
+    # Two passes — gateways first, then everything else — so a sub-device
+    # row whose connection FK points at the gateway can never insert before
+    # the gateway's `devices` row exists.
+    profile_docs: list[tuple[Path, str, int, dict[str, Any], str, bool]] = []
     for path in _profile_file_paths(root):
         device_id, profile_version, payload, content_hash = _load_profile_document(path)
         if device_id in seen_device_ids:
             raise ValueError(f"Duplicate profile device_id detected: {device_id}")
         seen_device_ids.add(device_id)
+        is_gateway = bool(((payload.get("device") or {}).get("is_gateway")))
+        profile_docs.append((path, device_id, profile_version, payload, content_hash, is_gateway))
 
+    profile_docs.sort(key=lambda item: (0 if item[5] else 1, item[1]))
+
+    for path, device_id, profile_version, payload, content_hash, _ in profile_docs:
         relative_path = path.relative_to(root.parent.parent).as_posix()
         upsert_device_profile(
             config,
