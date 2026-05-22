@@ -251,17 +251,16 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
         raise RuntimeError(f"Device {device_config.device_id} is offline")
 
     needs_piggyback = _has_trick678_modes(device_config)
-    # Sub-devices behind a Zigbee gateway: tinytuya expects dev_id to be the
-    # gateway's device_id (so the TCP session is opened against the hub) and
-    # cid to identify the child node. Reusing the sub-device id as dev_id
-    # makes the gateway refuse the session with Err 901.
+    # Sub-devices behind a Zigbee gateway: tinytuya needs dev_id = gateway and
+    # cid = the Zigbee node_id (a 16-char address, NOT the Tuya UUID). The
+    # gateway returns "devid not found" if we pass the UUID as the cid.
     is_sub_device = bool(device_config.gateway_device_id)
     if is_sub_device:
         device = tinytuya.OutletDevice(
             dev_id=device_config.gateway_device_id,
             address=device_config.ip_address,
             local_key=device_config.local_key,
-            cid=device_config.device_id,
+            cid=device_config.cid or device_config.device_id,
             connection_timeout=5.0,
         )
     else:

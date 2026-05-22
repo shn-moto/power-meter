@@ -282,6 +282,7 @@ def upsert_managed_device(
     capabilities: list[dict[str, Any]],
     is_gateway: bool = False,
     gateway_device_id: str | None = None,
+    cid: str | None = None,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -336,8 +337,8 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, cid, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -351,6 +352,7 @@ def upsert_managed_device(
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
                     total_power_scale = EXCLUDED.total_power_scale,
                     gateway_device_id = EXCLUDED.gateway_device_id,
+                    cid = EXCLUDED.cid,
                     updated_at = NOW()
                 """,
                 (
@@ -361,6 +363,7 @@ def upsert_managed_device(
                     total_power_dps_key,
                     total_power_scale,
                     gateway_device_id,
+                    cid,
                 ),
             )
             cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
@@ -801,6 +804,7 @@ def materialize_device_profile(
         visualized_codes=visualized_codes,
         capabilities=_profile_capabilities(payload),
         gateway_device_id=(str(connection.get("gateway_device_id") or "").strip() or None),
+        cid=(str(connection.get("cid") or "").strip() or None),
     )
 
 def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None = None) -> list[str]:
@@ -1132,7 +1136,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
                        COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
                        COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
                        c.total_power_dps_key, c.total_power_scale,
-                       c.gateway_device_id,
+                       c.gateway_device_id, c.cid,
                        d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
@@ -1161,6 +1165,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         dps_request_modes=request_modes,
         is_gateway=bool(row.get("is_gateway")),
         gateway_device_id=row.get("gateway_device_id"),
+        cid=row.get("cid"),
     )
 
 
@@ -1184,7 +1189,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                        COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
                        COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
                        c.total_power_dps_key, c.total_power_scale,
-                       c.gateway_device_id,
+                       c.gateway_device_id, c.cid,
                        d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
@@ -1216,6 +1221,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 dps_request_modes=request_modes_by_device.get(row["device_id"], {}),
                 is_gateway=bool(row.get("is_gateway")),
                 gateway_device_id=row.get("gateway_device_id"),
+                cid=row.get("cid"),
             )
         )
     return devices

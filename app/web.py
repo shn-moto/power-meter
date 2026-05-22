@@ -2165,7 +2165,7 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
                 dev_id=device.gateway_device_id,
                 address=device.ip_address,
                 local_key=device.local_key,
-                cid=device.device_id,
+                cid=device.cid or device.device_id,
             )
         else:
             tinytuya_device = tinytuya.Device(device.device_id, device.ip_address, device.local_key)

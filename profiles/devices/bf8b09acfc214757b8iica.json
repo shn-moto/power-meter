@@ -13,11 +13,12 @@
   "connection": {
     "local_key": "",
     "local_ip": "",
-    "protocol_version": 3.3,
+    "protocol_version": 3.4,
     "ip_source": "gateway",
     "last_verified_at": null,
     "discovery_required": false,
-    "gateway_device_id": "bf34191ce15d382529lecl"
+    "gateway_device_id": "bf34191ce15d382529lecl",
+    "cid": "a4c1388791c755b4"
   },
   "summary": {
     "default_power_mode": "current",

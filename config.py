@@ -22,6 +22,7 @@ class TuyaDeviceConfig:
     dps_request_modes: dict[str, str] = field(default_factory=dict)
     is_gateway: bool = False
     gateway_device_id: str | None = None
+    cid: str | None = None
 
 
 @dataclass(slots=True)
