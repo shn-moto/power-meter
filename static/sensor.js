@@ -8,8 +8,8 @@ if (sensorPage) {
     const sourceNode = document.querySelector('[data-sensor-source]');
     const lastUpdateNode = document.querySelector('[data-sensor-last-update]');
     const connectionNode = document.querySelector('[data-sensor-connection]');
+    const metricsPanel = document.querySelector('[data-sensor-metrics-panel]');
     const metricsNode = document.querySelector('[data-sensor-metrics]');
-    const emptyNode = document.querySelector('[data-sensor-empty]');
     const photoNode = document.querySelector('[data-device-photo]');
     const functionsContainer = document.querySelector('[data-device-functions]');
     const timerDialog = document.querySelector('[data-timer-dialog]');
@@ -51,17 +51,15 @@ if (sensorPage) {
         }
 
         if (!metrics || !metrics.length) {
-            metricsNode.hidden = true;
             metricsNode.innerHTML = '';
-            if (emptyNode) {
-                emptyNode.hidden = false;
+            if (metricsPanel) {
+                metricsPanel.hidden = true;
             }
             return;
         }
 
-        metricsNode.hidden = false;
-        if (emptyNode) {
-            emptyNode.hidden = true;
+        if (metricsPanel) {
+            metricsPanel.hidden = false;
         }
         metricsNode.innerHTML = metrics.map((metric) => `
             <section class="sensor-metric-card" data-sensor-metric data-sensor-code="${escapeHtml(metric.code)}">

@@ -28,9 +28,9 @@
         </div>
     </article>
 
-    <article class="detail-card lcd-panel sensor-metrics-panel">
+    <article class="detail-card lcd-panel sensor-metrics-panel" data-sensor-metrics-panel {% if not sensor.metrics %}hidden{% endif %}>
         <h2>Показания датчика</h2>
-        <div class="sensor-metric-grid" data-sensor-metrics {% if not sensor.metrics %}hidden{% endif %}>
+        <div class="sensor-metric-grid" data-sensor-metrics>
             {% if sensor.metrics %}
             {% for metric in sensor.metrics %}
             <section class="sensor-metric-card" data-sensor-metric data-sensor-code="{{ metric.code }}">
@@ -40,7 +40,6 @@
             {% endfor %}
             {% endif %}
         </div>
-        <p class="chart-empty" data-sensor-empty {% if sensor.metrics %}hidden{% endif %}>Показания датчика пока недоступны.</p>
     </article>
 
     {% if sensor.device_functions %}
