@@ -52,13 +52,15 @@ window.DeviceControls = (() => {
                 if (!response.ok) {
                     throw new Error(payload.detail || 'Не удалось выполнить действие.');
                 }
-                if (typeof onAfterCommand === 'function') {
-                    await onAfterCommand();
-                }
             } catch (error) {
                 window.alert(error.message);
             } finally {
                 setBusy(false);
+            }
+            // Fire the post-command refresh in the background so it doesn't
+            // gate re-enabling the controls.
+            if (typeof onAfterCommand === 'function') {
+                Promise.resolve(onAfterCommand()).catch(() => {});
             }
         };
 

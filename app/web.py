@@ -2173,7 +2173,16 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
         tinytuya_device.set_socketTimeout(1.5)
         tinytuya_device.set_socketRetryLimit(1)
         _apply_device_command(tinytuya_device, function_code, function["dp_id"], value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Не удалось выполнить команду: {error}") from error
 
+    # Post-apply: refresh the cached DPS so the UI shows the new state on its
+    # next poll. The device often refuses an immediate second LAN session
+    # (especially Zigbee sub-devices sharing the gateway's socket), so we
+    # treat failure here as non-fatal — the regular poll loop will catch up.
+    try:
         captured_at, power_w, raw_dps = build_sample(device)
         sample = DeviceSample(
             device_id=device.device_id,
@@ -2185,10 +2194,8 @@ def device_function_api(request: Request, device_id: str, function_code: str, pa
         save_sample(config, sample)
         request.app.state.last_saved_at[device.device_id] = captured_at
         _invalidate_aggregate_cache(request, device_id=device.device_id)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Не удалось выполнить команду: {error}") from error
+    except Exception as refresh_error:
+        LOGGER.info("Post-command refresh skipped for %s: %s", device.device_id, refresh_error)
 
     return JSONResponse({"status": "ok"})
 
