@@ -327,7 +327,7 @@ def _resolve_device_image_url_by_key(image_key: str | None, directory_name: str)
 STATE_AWARE_TOGGLE_CODES = ("switch_led", "switch", "switch_1")
 
 
-def _state_image_suffix(capabilities: list[dict[str, Any]], raw_dps: dict[str, Any]) -> str | None:
+def _find_toggle_state(capabilities: list[dict[str, Any]], raw_dps: dict[str, Any]) -> bool | None:
     if not isinstance(raw_dps, dict) or not raw_dps:
         return None
     for capability in capabilities:
@@ -340,8 +340,22 @@ def _state_image_suffix(capabilities: list[dict[str, Any]], raw_dps: dict[str, A
         value = raw_dps.get(str(dp_id))
         if value is None:
             continue
-        return "_on" if bool(value) else "_off"
+        return bool(value)
     return None
+
+
+def _state_image_suffix(capabilities: list[dict[str, Any]], raw_dps: dict[str, Any]) -> str | None:
+    state = _find_toggle_state(capabilities, raw_dps)
+    if state is None:
+        return None
+    return "_on" if state else "_off"
+
+
+def _toggle_preview_metric(capabilities: list[dict[str, Any]], raw_dps: dict[str, Any]) -> dict[str, str] | None:
+    state = _find_toggle_state(capabilities, raw_dps)
+    if state is None:
+        return None
+    return {"code": "switch_led", "label": "Состояние", "value": "Включено" if state else "Выключено"}
 
 
 def _apply_state_aware_image(
@@ -1321,7 +1335,7 @@ def _build_sensor_dashboard_entry(
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
 
-    primary_metric = preview_metrics[0] if preview_metrics else None
+    primary_metric = preview_metrics[0] if preview_metrics else _toggle_preview_metric(capabilities, local_raw_dps)
     secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
 
     if device.get("connection_ready") and device.get("last_seen"):
@@ -1367,7 +1381,7 @@ def _build_sensor_dashboard_entry_from_cache(
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
 
-    primary_metric = preview_metrics[0] if preview_metrics else None
+    primary_metric = preview_metrics[0] if preview_metrics else _toggle_preview_metric(capabilities, local_raw_dps)
     secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
 
     if device.get("connection_ready") and device.get("ip_address"):
