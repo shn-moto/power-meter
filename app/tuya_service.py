@@ -306,8 +306,10 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
     if not isinstance(dps, dict):
         raise ValueError("Device payload does not contain DPS data")
 
+    # Non-energy devices (sensors, Zigbee gateways) don't declare a power DPS
+    # — still want to capture their raw_dps each poll for live display.
     if not device_config.total_power_dps_key:
-        raise ValueError("Power DPS key is not configured")
+        return 0.0, dps
 
     if dps.get(device_config.total_power_dps_key) is None:
         raise ValueError("Selected power DPS key is missing in device payload")
