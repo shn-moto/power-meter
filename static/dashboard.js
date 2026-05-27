@@ -6,6 +6,8 @@ if (dashboardPage) {
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
     const deviceGrid = document.querySelector('[data-device-grid]');
+    const generatorGrid = document.querySelector('[data-generator-grid]');
+    const generatorSection = generatorGrid?.closest('.generator-section') || null;
     const sensorPanel = document.querySelector('[data-sensor-panel]');
     const sensorGrid = document.querySelector('[data-sensor-grid]');
     let isDashboardLoading = false;
@@ -145,6 +147,35 @@ if (dashboardPage) {
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
+    const syncGeneratorDevices = (devices) => {
+        if (!generatorGrid) {
+            return;
+        }
+        if (generatorSection) {
+            generatorSection.hidden = devices.length === 0;
+        }
+        if (!devices.length) {
+            generatorGrid.innerHTML = '';
+            return;
+        }
+        const existingCards = new Map(
+            [...generatorGrid.querySelectorAll('[data-generator-card]')].map((card) => [card.dataset.deviceId, card])
+        );
+        if (existingCards.size !== devices.length || devices.some((device) => !existingCards.has(device.device_id))) {
+            generatorGrid.innerHTML = '';
+            devices.forEach((device) => {
+                const card = document.createElement('article');
+                card.className = 'device-card generator-card';
+                card.dataset.generatorCard = '';
+                card.dataset.deviceId = device.device_id;
+                card.innerHTML = renderCardMarkup(device);
+                generatorGrid.appendChild(card);
+            });
+            return;
+        }
+        devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
+    };
+
     const meterUnderpayment = dashboardPage.querySelector('[data-summary-meter-underpayment]');
 
     const applyDashboardPayload = (payload) => {
@@ -156,6 +187,7 @@ if (dashboardPage) {
             meterUnderpayment.textContent = (upCost !== null && upCost !== undefined) ? Number(upCost).toFixed(2) : '—';
         }
         syncDevices(payload.devices || []);
+        syncGeneratorDevices(payload.generator_devices || []);
         syncSensorDevices(payload.sensor_devices || []);
     };
 

@@ -23,6 +23,7 @@ class TuyaDeviceConfig:
     is_gateway: bool = False
     gateway_device_id: str | None = None
     cid: str | None = None
+    is_generator: bool = False
 
 
 @dataclass(slots=True)

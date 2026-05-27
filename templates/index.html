@@ -50,8 +50,11 @@
     </div>
     <div class="hero-grid stats-grid">
         <article class="stat-card lcd-panel">
-            <span class="stat-label">Энергия за месяц</span>
+            <span class="stat-label">Энергия за месяц (нетто)</span>
             <strong class="stat-value" data-summary-month-energy>{{ summary.month_energy_kwh }} кВт·ч</strong>
+            {% if summary.generated_energy_kwh and summary.generated_energy_kwh > 0 %}
+            <span class="stat-sub" data-summary-month-breakdown>+{{ summary.consumed_energy_kwh }} − {{ summary.generated_energy_kwh }}</span>
+            {% endif %}
         </article>
         <article class="stat-card lcd-panel">
             <span class="stat-label">Оценка стоимости</span>
@@ -194,6 +197,51 @@
         </details>
     </div>
 </details>
+
+{% if summary.generator_devices %}
+<section class="device-section generator-section">
+    <div class="section-heading">
+        <p class="eyebrow">Генерация</p>
+        <h2>Солнечная энергия</h2>
+        <span class="section-heading-meta">−{{ summary.generated_energy_kwh }} кВт·ч за месяц</span>
+    </div>
+    <div class="device-grid" data-generator-grid>
+        {% for device in summary.generator_devices %}
+        <article class="device-card generator-card" data-generator-card data-device-id="{{ device.device_id }}">
+            <a class="device-image" href="/devices/{{ device.device_id }}" aria-label="Открыть детали устройства {{ device.name }}">
+                {% if device.image_url %}
+                <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
+                {% else %}
+                <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
+                {% endif %}
+            </a>
+            <div class="device-card-body">
+                <div>
+                    <p class="device-room" data-device-room>{{ device.room }}</p>
+                    <h3 data-device-name>{{ device.name }}</h3>
+                </div>
+                <dl class="device-metrics">
+                    {% if device.current_power_kw is defined and device.current_power_kw is not none %}
+                    <div>
+                        <dt>Сейчас отдаёт</dt>
+                        <dd data-device-current-power>{{ device.current_power_kw }} кВт</dd>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <dt>Сгенерировано за месяц</dt>
+                        <dd data-device-month-energy>{{ device.month_energy_kwh }} кВт·ч</dd>
+                    </div>
+                    <div>
+                        <dt>Последний замер</dt>
+                        <dd class="reading-status is-{{ device.last_seen_status }}" data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</dd>
+                    </div>
+                </dl>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
 
 <section class="device-section">
     <div class="section-heading">

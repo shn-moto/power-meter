@@ -268,6 +268,7 @@ def upsert_managed_device(
     device_kind: str,
     is_energy_meter: bool,
     is_charger: bool,
+    is_generator: bool,
     product_id: str | None,
     product_name: str | None,
     icon: str | None,
@@ -290,9 +291,9 @@ def upsert_managed_device(
                 """
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
-                    is_energy_meter, is_charger, is_gateway, product_id, product_name, icon, onboarding_source, updated_at,
+                    is_energy_meter, is_charger, is_gateway, is_generator, product_id, product_name, icon, onboarding_source, updated_at,
                     total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -305,6 +306,7 @@ def upsert_managed_device(
                     is_energy_meter = EXCLUDED.is_energy_meter,
                     is_charger = EXCLUDED.is_charger,
                     is_gateway = EXCLUDED.is_gateway,
+                    is_generator = EXCLUDED.is_generator,
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -324,6 +326,7 @@ def upsert_managed_device(
                     is_energy_meter,
                     is_charger,
                     is_gateway,
+                    is_generator,
                     product_id,
                     product_name,
                     icon,
@@ -790,6 +793,7 @@ def materialize_device_profile(
         device_kind=str(device.get("device_kind") or "meter"),
         is_energy_meter=bool(device.get("is_energy_meter", True)),
         is_charger=bool(device.get("is_charger", False)),
+        is_generator=bool(device.get("is_generator", False)),
         is_gateway=bool(device.get("is_gateway", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
@@ -950,7 +954,7 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger,
+                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
                         d.product_name, d.category_code, d.device_id,
                         d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -968,7 +972,7 @@ def get_device_row(config: AppConfig, device_id: str) -> dict[str, Any] | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter, d.is_charger,
+                SELECT d.name, d.room, d.device_id, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
                        d.is_gateway,
                        d.product_name, d.category_code, d.product_id, d.icon,
                        d.total_power_dps_key, d.visualized_codes, d.power_type,
@@ -1675,7 +1679,7 @@ def _get_dashboard_summary_context(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger,
+                SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
                     d.product_name, d.category_code, d.device_id,
                       d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -1741,8 +1745,10 @@ def get_dashboard_summary(
     live_samples: dict[str, DeviceSample] | None = None,
 ) -> dict[str, Any]:
     devices = []
+    generator_devices = []
     sensor_devices = []
-    total_energy_wh = 0.0
+    consumed_energy_wh = 0.0
+    generated_energy_wh = 0.0
     total_power_w = 0.0
     online_device_count = 0
     live_samples = live_samples or {}
@@ -1795,9 +1801,14 @@ def get_dashboard_summary(
                 "day",
                 energy_counter_meta,
             )
-            total_energy_wh += device_energy_wh
+            is_generator = bool(device.get("is_generator"))
+            if is_generator:
+                generated_energy_wh += device_energy_wh
+            else:
+                consumed_energy_wh += device_energy_wh
             device_entry: dict[str, Any] = {
                 **base_entry,
+                "is_generator": is_generator,
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
             }
             if energy_counter_meta is None:
@@ -1807,18 +1818,28 @@ def get_dashboard_summary(
                     else 0.0
                 )
                 device_entry["current_power_kw"] = round(current_power_w / 1000.0, 3)
-                total_power_w += current_power_w
-            devices.append(device_entry)
+                if is_generator:
+                    total_power_w -= current_power_w
+                else:
+                    total_power_w += current_power_w
+            if is_generator:
+                generator_devices.append(device_entry)
+            else:
+                devices.append(device_entry)
             continue
 
         sensor_devices.append(base_entry)
 
+    net_energy_wh = consumed_energy_wh - generated_energy_wh
     return {
         "home_name": config.home_name,
-        "month_energy_kwh": round(total_energy_wh / 1000.0, 3),
-        "estimated_cost": round((total_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
+        "month_energy_kwh": round(net_energy_wh / 1000.0, 3),
+        "consumed_energy_kwh": round(consumed_energy_wh / 1000.0, 3),
+        "generated_energy_kwh": round(generated_energy_wh / 1000.0, 3),
+        "estimated_cost": round((net_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
         "device_count": online_device_count,
         "devices": devices,
+        "generator_devices": generator_devices,
         "sensor_devices": sensor_devices,
     }
 

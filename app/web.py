@@ -1215,6 +1215,7 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
     device_rows_by_id: dict[str, dict[str, Any]] = request.app.state.device_rows_by_id
     now = datetime.now(_get_timezone(config))
     devices: list[dict[str, Any]] = []
+    generator_devices: list[dict[str, Any]] = []
     sensor_devices: list[dict[str, Any]] = []
     total_power_w = 0.0
     online_device_count = 0
@@ -1243,13 +1244,15 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
                 current_power_w = _read_measurement_from_capabilities(sample.raw_dps, capabilities, "cur_power")
                 if current_power_w is None:
                     current_power_w = 0.0
-            total_power_w += float(current_power_w or 0.0)
-            devices.append(
-                {
-                    **entry,
-                    "current_power_kw": round(float(current_power_w or 0.0) / 1000.0, 3),
-                }
-            )
+            is_generator = bool(device.get("is_generator"))
+            entry["is_generator"] = is_generator
+            entry["current_power_kw"] = round(float(current_power_w or 0.0) / 1000.0, 3)
+            if is_generator:
+                total_power_w -= float(current_power_w or 0.0)
+                generator_devices.append(entry)
+            else:
+                total_power_w += float(current_power_w or 0.0)
+                devices.append(entry)
             continue
 
         sensor_devices.append(entry)
@@ -1258,6 +1261,7 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
         "current_power_kw": round(total_power_w / 1000.0, 3),
         "device_count": online_device_count,
         "devices": devices,
+        "generator_devices": generator_devices,
         "sensor_devices": sensor_devices,
     }
 
@@ -1438,6 +1442,7 @@ def _copy_dashboard_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     return {
         **summary,
         "devices": [dict(device) for device in summary.get("devices", [])],
+        "generator_devices": [dict(device) for device in summary.get("generator_devices", [])],
         "sensor_devices": [dict(device) for device in summary.get("sensor_devices", [])],
     }
 
@@ -1452,10 +1457,10 @@ def _apply_live_dashboard_overlay(request: Request, config: AppConfig, payload: 
 
     live_devices_by_id = {
         str(device.get("device_id") or ""): device
-        for device in live_payload.get("devices", [])
+        for device in (*live_payload.get("devices", []), *live_payload.get("generator_devices", []))
         if device.get("device_id")
     }
-    for device in payload.get("devices", []):
+    for device in (*payload.get("devices", []), *payload.get("generator_devices", [])):
         live_device = live_devices_by_id.get(str(device.get("device_id") or ""))
         if not live_device:
             continue
@@ -1491,6 +1496,7 @@ def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[s
 
     payload = _copy_dashboard_summary_payload(summary)
     payload["devices"] = _decorate_devices_media(payload.get("devices", []))
+    payload["generator_devices"] = _decorate_devices_media(payload.get("generator_devices", []))
     payload["sensor_devices"] = _decorate_sensor_dashboard_entries_from_cache(
         request,
         config,
@@ -1676,7 +1682,7 @@ def _build_device_stats_payload(
     if not device:
         return None
     is_current_power_charger = (
-        bool(device.get("is_charger"))
+        (bool(device.get("is_charger")) or bool(device.get("is_generator")))
         and str(device.get("power_type") or "total").strip().lower() == "current"
     )
     charger_day_eligible = is_current_power_charger and (
@@ -1901,6 +1907,7 @@ def dashboard(request: Request) -> HTMLResponse:
         summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
     summary["devices"] = _decorate_devices_media(summary.get("devices", []))
+    summary["generator_devices"] = _decorate_devices_media(summary.get("generator_devices", []))
     summary["sensor_devices"] = _decorate_sensor_dashboard_entries(
         request,
         config,

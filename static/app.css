@@ -224,6 +224,30 @@ p {
     position: relative;
 }
 
+.stat-sub {
+    display: block;
+    color: var(--muted);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    margin-top: 6px;
+}
+
+.generator-section .section-heading {
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.section-heading-meta {
+    color: #d7a23e;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+.generator-card {
+    border-color: rgba(232, 168, 56, 0.34);
+}
+
 .sensor-metric-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
