@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
+from time import monotonic
 import base64
+import logging
 import socket
+import threading
 from typing import Any, Optional, Tuple, Dict, List
 
 import tinytuya
@@ -11,6 +14,8 @@ from config import TuyaDeviceConfig
 PHASE_VISUAL_DPS_GROUP = (6, 7, 8)
 PRIVATE_TUYA_PORTS = (6668, 6669, 7000)
 
+logger = logging.getLogger(__name__)
+
 
 def _is_tuya_host_reachable(ip_address: str, timeout: float = 0.15) -> bool:
     for port in PRIVATE_TUYA_PORTS:
@@ -19,6 +24,69 @@ def _is_tuya_host_reachable(ip_address: str, timeout: float = 0.15) -> bool:
             if sock.connect_ex((ip_address, port)) == 0:
                 return True
     return False
+
+
+# Per-gateway cache of the subdev_query result, refreshed every 30 s. Even
+# when a Zigbee child is physically off, the gateway sometimes replies to
+# status() with the last-known DPS snapshot — without consulting subdev_query
+# we'd treat that as a fresh reading and the dashboard would pretend the
+# device is still alive.
+_GATEWAY_SUBDEV_CACHE_TTL = 30.0
+_gateway_subdev_cache: dict[str, tuple[float, set[str]]] = {}
+_gateway_subdev_lock = threading.Lock()
+
+
+def _is_subdev_reported_online(
+    gateway_device_id: str,
+    gateway_ip: str,
+    gateway_local_key: str,
+    gateway_version: float,
+    cid: str,
+) -> bool:
+    if not cid:
+        return True
+    now = monotonic()
+    with _gateway_subdev_lock:
+        cached = _gateway_subdev_cache.get(gateway_device_id)
+    if cached and (now - cached[0] < _GATEWAY_SUBDEV_CACHE_TTL):
+        return cid in cached[1]
+
+    online: set[str] | None = None
+    try:
+        gw = tinytuya.OutletDevice(
+            dev_id=gateway_device_id,
+            address=gateway_ip,
+            local_key=gateway_local_key,
+            connection_timeout=3.0,
+        )
+        gw.set_version(gateway_version)
+        gw.set_socketTimeout(3.0)
+        gw.set_socketRetryLimit(1)
+        try:
+            response = gw.subdev_query()
+        finally:
+            try:
+                gw.close()
+            except Exception:
+                pass
+        if isinstance(response, dict):
+            data = response.get("data")
+            if isinstance(data, dict):
+                online_list = data.get("online") or []
+                if isinstance(online_list, list):
+                    online = {str(item) for item in online_list}
+    except Exception as exc:
+        logger.debug("subdev_query failed for %s: %s", gateway_device_id, exc)
+
+    if online is None:
+        # Network hiccup; fall back to the previous result if we have one,
+        # otherwise assume online so a transient gateway error doesn't mask
+        # an actually-alive child.
+        return cid in cached[1] if cached else True
+
+    with _gateway_subdev_lock:
+        _gateway_subdev_cache[gateway_device_id] = (now, online)
+    return cid in online
 
 
 def _normalize_voltage(raw_value: Any) -> float:
@@ -256,11 +324,26 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     # gateway returns "devid not found" if we pass the UUID as the cid.
     is_sub_device = bool(device_config.gateway_device_id)
     if is_sub_device:
+        cid = device_config.cid or device_config.device_id
+        # Ask the gateway who's actually online — when a Zigbee child is in
+        # a box with no battery, the gateway still happily replies to status()
+        # with the last DPS it ever saw, which would let us record bogus
+        # "fresh" samples for a device that's been dead for days.
+        if not _is_subdev_reported_online(
+            device_config.gateway_device_id,
+            device_config.ip_address,
+            device_config.local_key,
+            device_config.version,
+            cid,
+        ):
+            raise RuntimeError(
+                f"Sub-device {device_config.device_id} reported offline by gateway"
+            )
         device = tinytuya.OutletDevice(
             dev_id=device_config.gateway_device_id,
             address=device_config.ip_address,
             local_key=device_config.local_key,
-            cid=device_config.cid or device_config.device_id,
+            cid=cid,
             connection_timeout=5.0,
         )
     else:
