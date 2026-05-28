@@ -91,8 +91,13 @@ if (dashboardPage) {
         </div>
     `;
 
+    const applyCardStatus = (card, device) => {
+        card.dataset.lastSeenStatus = device.last_seen_status || 'error';
+    };
+
     const updateCard = (card, device) => {
         card.innerHTML = renderCardMarkup(device);
+        applyCardStatus(card, device);
     };
 
     const syncSensorDevices = (devices) => {
@@ -113,6 +118,7 @@ if (dashboardPage) {
                 card.dataset.sensorCard = '';
                 card.dataset.deviceId = device.device_id;
                 card.innerHTML = renderSensorMarkup(device);
+                applyCardStatus(card, device);
                 sensorGrid.appendChild(card);
             });
             return;
@@ -122,6 +128,7 @@ if (dashboardPage) {
             const card = existingCards.get(device.device_id);
             if (card) {
                 card.innerHTML = renderSensorMarkup(device);
+                applyCardStatus(card, device);
             }
         });
     };
@@ -139,6 +146,7 @@ if (dashboardPage) {
                 card.dataset.deviceCard = '';
                 card.dataset.deviceId = device.device_id;
                 card.innerHTML = renderCardMarkup(device);
+                applyCardStatus(card, device);
                 deviceGrid.appendChild(card);
             });
             return;
@@ -169,12 +177,30 @@ if (dashboardPage) {
                 card.dataset.generatorCard = '';
                 card.dataset.deviceId = device.device_id;
                 card.innerHTML = renderCardMarkup(device);
+                applyCardStatus(card, device);
                 generatorGrid.appendChild(card);
             });
             return;
         }
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
+
+    const hideOfflineToggle = document.querySelector('[data-hide-offline]');
+    const HIDE_OFFLINE_KEY = 'powermeter:hideOfflineDevices';
+    const applyHideOfflineState = (enabled) => {
+        document.body.classList.toggle('hide-offline', !!enabled);
+    };
+    if (hideOfflineToggle) {
+        const stored = window.localStorage?.getItem(HIDE_OFFLINE_KEY) === '1';
+        hideOfflineToggle.checked = stored;
+        applyHideOfflineState(stored);
+        hideOfflineToggle.addEventListener('change', () => {
+            applyHideOfflineState(hideOfflineToggle.checked);
+            try {
+                window.localStorage?.setItem(HIDE_OFFLINE_KEY, hideOfflineToggle.checked ? '1' : '0');
+            } catch (_) {}
+        });
+    }
 
     const meterUnderpayment = dashboardPage.querySelector('[data-summary-meter-underpayment]');
 

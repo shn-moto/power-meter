@@ -248,6 +248,30 @@ p {
     border-color: rgba(232, 168, 56, 0.34);
 }
 
+.visibility-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.visibility-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
+body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
+body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]) {
+    display: none;
+}
+
 .sensor-metric-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
