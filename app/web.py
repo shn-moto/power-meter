@@ -1333,10 +1333,11 @@ def _build_sensor_dashboard_entry(
     cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, device_id)
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
 
-    preview_metrics = [
-        metric for metric in metrics
-        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_humidity", "va_battery"}
-    ]
+    preview_priority = ("va_temperature", "temp_current", "va_humidity", "humidity_value", "va_battery")
+    preview_metrics = sorted(
+        (metric for metric in metrics if metric.get("code") in preview_priority),
+        key=lambda metric: preview_priority.index(str(metric.get("code"))),
+    )
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
 
@@ -1379,10 +1380,11 @@ def _build_sensor_dashboard_entry_from_cache(
     local_raw_dps = raw_dps if isinstance(raw_dps, dict) else {}
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, [])
 
-    preview_metrics = [
-        metric for metric in metrics
-        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_humidity", "va_battery"}
-    ]
+    preview_priority = ("va_temperature", "temp_current", "va_humidity", "humidity_value", "va_battery")
+    preview_metrics = sorted(
+        (metric for metric in metrics if metric.get("code") in preview_priority),
+        key=lambda metric: preview_priority.index(str(metric.get("code"))),
+    )
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
 
