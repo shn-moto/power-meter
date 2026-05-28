@@ -1635,7 +1635,9 @@ def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
     age_seconds = get_sample_age_seconds(captured_at, now)
     if age_seconds is None:
         return "error"
-    if age_seconds > 3600:
+    # We poll every few seconds, so anything older than 5 minutes is a clear
+    # offline (broken connection / disconnected device).
+    if age_seconds > 300:
         return "error"
     if age_seconds > 60:
         return "warning"
