@@ -122,6 +122,7 @@ DPS_LABELS = {
     "va_temperature": "Температура",
     "temp_current": "Температура",
     "humidity_value": "Влажность",
+    "va_humidity": "Влажность",
     "va_battery": "Батарея",
     "temp_unit_convert": "Единицы температуры",
 }
@@ -1334,7 +1335,7 @@ def _build_sensor_dashboard_entry(
 
     preview_metrics = [
         metric for metric in metrics
-        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_battery"}
+        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_humidity", "va_battery"}
     ]
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
@@ -1380,7 +1381,7 @@ def _build_sensor_dashboard_entry_from_cache(
 
     preview_metrics = [
         metric for metric in metrics
-        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_battery"}
+        if metric.get("code") in {"va_temperature", "temp_current", "humidity_value", "va_humidity", "va_battery"}
     ]
     if not preview_metrics:
         preview_metrics = [metric for metric in metrics if metric.get("code") != "temp_unit_convert"]
