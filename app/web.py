@@ -38,6 +38,7 @@ from app.storage import (
     get_dashboard_summary,
     get_meter_status,
     get_meter_discrepancy_periods,
+    get_period_breakdown,
     list_meter_readings,
     save_meter_reading,
     delete_meter_reading,
@@ -1924,6 +1925,97 @@ def dashboard(request: Request) -> HTMLResponse:
             "summary": summary,
             "page_title": "Учет электроэнергии",
             "month_label": _format_month_label(now),
+        },
+    )
+
+
+@app.get("/report", response_class=HTMLResponse)
+def monthly_report(request: Request) -> HTMLResponse:
+    config: AppConfig = request.app.state.app_config
+    tz = _get_timezone(config)
+    now = datetime.now(tz)
+
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    prev_month_end = month_start
+    prev_month_start = (prev_month_end - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    daily = get_period_breakdown(config, month_start, now, "day")
+    monthly_current_year = get_period_breakdown(config, year_start, now, "month")
+
+    # Past 12 full months (excluding current) for the average baseline.
+    avg_window_start = (month_start - timedelta(days=365)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    avg_window = get_period_breakdown(config, avg_window_start, month_start, "month")
+    avg_net_kwh = (
+        sum(item["net_kwh"] for item in avg_window) / len(avg_window)
+        if avg_window
+        else 0.0
+    )
+
+    def _sum(items: list[dict[str, Any]], key: str) -> float:
+        return round(sum(float(item.get(key) or 0.0) for item in items), 3)
+
+    current_consumed = _sum(daily, "consumed_kwh")
+    current_generated = _sum(daily, "generated_kwh")
+    current_net = round(current_consumed - current_generated, 3)
+
+    prev_daily = get_period_breakdown(config, prev_month_start, prev_month_end, "day")
+    prev_consumed = _sum(prev_daily, "consumed_kwh")
+    prev_generated = _sum(prev_daily, "generated_kwh")
+    prev_net = round(prev_consumed - prev_generated, 3)
+
+    delta_vs_prev = round(current_net - prev_net, 3)
+    delta_vs_prepaid = round(current_net - METER_PREPAID_KWH, 3)
+    delta_vs_avg = round(current_net - avg_net_kwh, 3)
+
+    tariff = float(config.tariff_per_kwh or 0.0)
+    payload = {
+        "month_label": _format_month_label(now),
+        "previous_label": _format_month_label(prev_month_start),
+        "year_label": str(now.year),
+        "current": {
+            "consumed_kwh": current_consumed,
+            "generated_kwh": current_generated,
+            "net_kwh": current_net,
+            "cost": round(current_net * tariff, 2),
+        },
+        "previous": {
+            "consumed_kwh": prev_consumed,
+            "generated_kwh": prev_generated,
+            "net_kwh": prev_net,
+            "cost": round(prev_net * tariff, 2),
+        },
+        "delta_prev": {
+            "kwh": delta_vs_prev,
+            "cost": round(delta_vs_prev * tariff, 2),
+        },
+        "prepaid": {
+            "kwh": METER_PREPAID_KWH,
+            "cost": round(METER_PREPAID_KWH * tariff, 2),
+        },
+        "delta_prepaid": {
+            "kwh": delta_vs_prepaid,
+            "cost": round(delta_vs_prepaid * tariff, 2),
+        },
+        "average": {
+            "kwh": round(avg_net_kwh, 3),
+            "months_in_window": len(avg_window),
+        },
+        "delta_avg": {
+            "kwh": delta_vs_avg,
+            "cost": round(delta_vs_avg * tariff, 2),
+        },
+        "daily_series": daily,
+        "monthly_series": monthly_current_year,
+        "tariff_per_kwh": tariff,
+    }
+    return templates.TemplateResponse(
+        request=request,
+        name="report.html",
+        context={
+            "page_title": "Отчёт за период",
+            "report": payload,
+            "report_json": json.dumps(jsonable_encoder(payload), ensure_ascii=False),
         },
     )
 

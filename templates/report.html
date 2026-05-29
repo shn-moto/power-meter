@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="report-page" data-report-page>
+    <div class="report-header">
+        <p class="eyebrow">{{ report.month_label }}</p>
+        <h1>Отчёт за период</h1>
+    </div>
+
+    <div class="report-grid">
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Текущий месяц, нетто</span>
+            <strong class="stat-value">{{ '%.1f'|format(report.current.net_kwh) }} кВт·ч</strong>
+            <span class="stat-sub">расход {{ '%.1f'|format(report.current.consumed_kwh) }} − генерация {{ '%.1f'|format(report.current.generated_kwh) }}</span>
+            <span class="stat-sub">≈ {{ '%.2f'|format(report.current.cost) }} zł</span>
+        </article>
+
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Прошлый месяц ({{ report.previous_label }})</span>
+            <strong class="stat-value">{{ '%.1f'|format(report.previous.net_kwh) }} кВт·ч</strong>
+            <span class="stat-sub {% if report.delta_prev.kwh > 0 %}is-negative{% elif report.delta_prev.kwh < 0 %}is-positive{% endif %}">
+                Δ {{ '%+.1f'|format(report.delta_prev.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_prev.cost) }} zł)
+            </span>
+        </article>
+
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Предоплачено</span>
+            <strong class="stat-value">{{ '%.0f'|format(report.prepaid.kwh) }} кВт·ч</strong>
+            <span class="stat-sub">≈ {{ '%.2f'|format(report.prepaid.cost) }} zł</span>
+            <span class="stat-sub {% if report.delta_prepaid.kwh > 0 %}is-negative{% elif report.delta_prepaid.kwh < 0 %}is-positive{% endif %}">
+                Δ {{ '%+.1f'|format(report.delta_prepaid.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_prepaid.cost) }} zł)
+            </span>
+        </article>
+
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Среднее за {{ report.average.months_in_window or 0 }} мес</span>
+            <strong class="stat-value">{{ '%.1f'|format(report.average.kwh) }} кВт·ч</strong>
+            <span class="stat-sub {% if report.delta_avg.kwh > 0 %}is-negative{% elif report.delta_avg.kwh < 0 %}is-positive{% endif %}">
+                Δ {{ '%+.1f'|format(report.delta_avg.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_avg.cost) }} zł)
+            </span>
+        </article>
+    </div>
+
+    <article class="detail-card report-chart-card">
+        <h2>Потребление и генерация по дням ({{ report.month_label }})</h2>
+        <div class="chart-frame">
+            <div class="chart-canvas" data-report-daily-chart></div>
+            <div class="chart-empty" data-report-daily-empty {% if report.daily_series %}hidden{% endif %}>За этот период данные пока не собраны.</div>
+        </div>
+    </article>
+
+    <article class="detail-card report-chart-card">
+        <h2>По месяцам, {{ report.year_label }}</h2>
+        <div class="chart-frame">
+            <div class="chart-canvas" data-report-monthly-chart></div>
+            <div class="chart-empty" data-report-monthly-empty {% if report.monthly_series %}hidden{% endif %}>За этот период данные пока не собраны.</div>
+        </div>
+    </article>
+</section>
+
+<script type="application/json" data-report-payload>{{ report_json | safe }}</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js" defer></script>
+<script src="/static/report.js?v={{ static_asset_version }}" defer></script>
+{% endblock %}

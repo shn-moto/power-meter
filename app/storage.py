@@ -1642,6 +1642,65 @@ def get_sample_status(captured_at: datetime | None, now: datetime) -> str:
     return "ok"
 
 
+def get_period_breakdown(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket: str,
+) -> list[dict[str, Any]]:
+    """Aggregate energy by time bucket across all energy meter devices,
+    splitting consumers from generators. Used by the month/year report."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.device_id, d.is_generator, d.power_type,
+                       c.total_power_dps_key, c.total_power_scale
+                FROM devices d
+                LEFT JOIN device_connections c ON c.device_id = d.device_id
+                WHERE d.is_energy_meter = TRUE
+                """
+            )
+            device_rows = cursor.fetchall()
+
+    is_generator_by_device = {
+        str(r.get("device_id") or ""): bool(r.get("is_generator")) for r in device_rows
+    }
+    counter_meta_by_device = _build_energy_counter_meta_by_device(device_rows)
+    device_ids = [d for d in is_generator_by_device if d]
+    if not device_ids:
+        return []
+
+    agg_rows = _read_aggregate_rows(config, device_ids, bucket, start, end)
+    rows_by_device = _group_aggregate_rows_by_device(agg_rows)
+
+    consumed_by_bucket: dict[datetime, float] = {}
+    generated_by_bucket: dict[datetime, float] = {}
+    for device_id, rows in rows_by_device.items():
+        counter_meta = counter_meta_by_device.get(device_id)
+        series = _build_chart_series_from_aggregate(rows, bucket, counter_meta)
+        target = generated_by_bucket if is_generator_by_device.get(device_id) else consumed_by_bucket
+        for item in series:
+            ts = _parse_dt(item["timestamp"])
+            ts = _normalize_bucket_for_timezone(config, ts, bucket)
+            target[ts] = target.get(ts, 0.0) + float(item["energy_kwh"] or 0.0)
+
+    timeline = sorted(set(consumed_by_bucket.keys()) | set(generated_by_bucket.keys()))
+    breakdown: list[dict[str, Any]] = []
+    for ts in timeline:
+        consumed = consumed_by_bucket.get(ts, 0.0)
+        generated = generated_by_bucket.get(ts, 0.0)
+        breakdown.append(
+            {
+                "bucket": ts.isoformat(),
+                "consumed_kwh": round(consumed, 3),
+                "generated_kwh": round(generated, 3),
+                "net_kwh": round(consumed - generated, 3),
+            }
+        )
+    return breakdown
+
+
 def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, float]]:
     metadata: dict[str, tuple[str, float]] = {}
     for row in rows:

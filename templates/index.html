@@ -53,13 +53,13 @@
         </label>
     </div>
     <div class="hero-grid stats-grid">
-        <article class="stat-card lcd-panel">
+        <a class="stat-card lcd-panel stat-card-link" href="/report" aria-label="Открыть отчёт за период">
             <span class="stat-label">Энергия за месяц (нетто)</span>
             <strong class="stat-value" data-summary-month-energy>{{ summary.month_energy_kwh }} кВт·ч</strong>
             {% if summary.generated_energy_kwh and summary.generated_energy_kwh > 0 %}
             <span class="stat-sub" data-summary-month-breakdown>+{{ summary.consumed_energy_kwh }} − {{ summary.generated_energy_kwh }}</span>
             {% endif %}
-        </article>
+        </a>
         <article class="stat-card lcd-panel">
             <span class="stat-label">Оценка стоимости</span>
             <strong class="stat-value" data-summary-estimated-cost>{{ summary.estimated_cost }}</strong>
