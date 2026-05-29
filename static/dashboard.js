@@ -10,18 +10,6 @@ if (dashboardPage) {
     const generatorSection = generatorGrid?.closest('.generator-section') || null;
     const sensorPanel = document.querySelector('[data-sensor-panel]');
     const sensorGrid = document.querySelector('[data-sensor-grid]');
-    const hideOfflineToggle = document.querySelector('[data-hide-offline]');
-    const HIDE_OFFLINE_KEY = 'dashboard:hide-offline';
-    if (hideOfflineToggle) {
-        const storedHide = window.localStorage?.getItem(HIDE_OFFLINE_KEY) === '1';
-        hideOfflineToggle.checked = storedHide;
-        document.body.classList.toggle('hide-offline', storedHide);
-        hideOfflineToggle.addEventListener('change', () => {
-            const on = hideOfflineToggle.checked;
-            document.body.classList.toggle('hide-offline', on);
-            try { window.localStorage?.setItem(HIDE_OFFLINE_KEY, on ? '1' : '0'); } catch (e) {}
-        });
-    }
     let isDashboardLoading = false;
     let dashboardTimerId = null;
     let dashboardAbortController = null;

@@ -1741,12 +1741,13 @@ def _get_dashboard_summary_context(
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
                     d.product_name, d.category_code, d.device_id,
                       d.power_type,
-                       COALESCE(c.ip_address, '') AS ip_address,
-                      (COALESCE(c.ip_address, '') <> '') AS connection_ready,
+                       COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
+                      (COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') <> '') AS connection_ready,
                       c.total_power_dps_key,
                       c.total_power_scale
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
+                LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
                 ORDER BY name
                 """
             )
