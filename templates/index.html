@@ -212,34 +212,26 @@
     <div class="device-grid" data-generator-grid>
         {% for device in summary.generator_devices %}
         <article class="device-card generator-card" data-generator-card data-device-id="{{ device.device_id }}" data-last-seen-status="{{ device.last_seen_status }}">
-            <a class="device-image" href="/devices/{{ device.device_id }}" aria-label="Открыть детали устройства {{ device.name }}">
+            <a class="device-image generator-card-media" href="/devices/{{ device.device_id }}" aria-label="Открыть детали устройства {{ device.name }}">
                 {% if device.image_url %}
                 <img class="device-photo" src="{{ device.image_url }}" alt="{{ device.name }}">
                 {% else %}
                 <div class="device-placeholder device-placeholder-{{ device.device_kind }}" aria-hidden="true"></div>
                 {% endif %}
             </a>
-            <div class="device-card-body">
-                <div>
-                    <p class="device-room" data-device-room>{{ device.room }}</p>
-                    <h3 data-device-name>{{ device.name }}</h3>
+            <div class="device-card-body generator-card-body">
+                <div class="generator-card-head">
+                    <div>
+                        <p class="device-room" data-device-room>{{ device.room }}</p>
+                        <h3 data-device-name>{{ device.name }}</h3>
+                    </div>
+                    <div class="generator-card-meta">
+                        <div class="generator-current-power" data-device-current-power>{{ device.current_power_kw if device.current_power_kw is defined and device.current_power_kw is not none else '—' }} кВт</div>
+                        <div class="generator-month-energy" data-device-month-energy>{{ device.month_energy_kwh }} кВт·ч / мес</div>
+                        <div class="reading-status is-{{ device.last_seen_status }}" data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</div>
+                    </div>
                 </div>
-                <dl class="device-metrics">
-                    {% if device.current_power_kw is defined and device.current_power_kw is not none %}
-                    <div>
-                        <dt>Сейчас отдаёт</dt>
-                        <dd data-device-current-power>{{ device.current_power_kw }} кВт</dd>
-                    </div>
-                    {% endif %}
-                    <div>
-                        <dt>Сгенерировано за месяц</dt>
-                        <dd data-device-month-energy>{{ device.month_energy_kwh }} кВт·ч</dd>
-                    </div>
-                    <div>
-                        <dt>Последний замер</dt>
-                        <dd class="reading-status is-{{ device.last_seen_status }}" data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</dd>
-                    </div>
-                </dl>
+                <div class="generator-chart" data-generator-chart></div>
             </div>
         </article>
         {% endfor %}
@@ -288,5 +280,6 @@
     </div>
 </section>
 
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js" defer></script>
 <script src="/static/dashboard.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

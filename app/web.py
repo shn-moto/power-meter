@@ -48,6 +48,7 @@ from app.storage import (
     get_device_rows,
     get_user_by_username,
     get_recent_raw_dps_samples,
+    get_recent_power_trace,
     get_device_stats,
     get_latest_sample,
     get_sample_age_seconds,
@@ -2280,6 +2281,16 @@ def device_summary_config_api(
             "power_type": power_type,
         }
     )
+
+
+@app.get("/api/devices/{device_id}/power-trace")
+def device_power_trace_api(request: Request, device_id: str, minutes: int = 60) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    minutes = max(1, min(int(minutes or 60), 1440))
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(minutes=minutes)
+    series = get_recent_power_trace(config, device_id, start, now)
+    return JSONResponse({"minutes": minutes, "series": series})
 
 
 @app.get("/api/devices/{device_id}/sensor")

@@ -155,6 +155,89 @@ if (dashboardPage) {
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
+    const renderGeneratorMarkup = (device) => `
+        <a class="device-image generator-card-media" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
+            ${renderDeviceMedia(device)}
+        </a>
+        <div class="device-card-body generator-card-body">
+            <div class="generator-card-head">
+                <div>
+                    <p class="device-room" data-device-room>${escapeHtml(device.room)}</p>
+                    <h3 data-device-name>${escapeHtml(device.name)}</h3>
+                </div>
+                <div class="generator-card-meta">
+                    <div class="generator-current-power" data-device-current-power>${escapeHtml(device.current_power_kw ?? '—')} кВт</div>
+                    <div class="generator-month-energy" data-device-month-energy>${escapeHtml(device.month_energy_kwh ?? '—')} кВт·ч / мес</div>
+                    <div class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen title="${escapeHtml(device.last_seen || 'Пока нет данных')}">${escapeHtml(device.last_seen || 'Пока нет данных')}</div>
+                </div>
+            </div>
+            <div class="generator-chart" data-generator-chart></div>
+        </div>
+    `;
+
+    const generatorChartInstances = new Map();
+    const generatorChartFetchedAt = new Map();
+    const GENERATOR_TRACE_REFRESH_MS = 30000;
+
+    const initGeneratorChart = (card, deviceId) => {
+        const container = card.querySelector('[data-generator-chart]');
+        if (!container || !window.echarts) {
+            return null;
+        }
+        const existing = generatorChartInstances.get(deviceId);
+        if (existing) {
+            try { existing.dispose(); } catch (_) {}
+        }
+        const chart = window.echarts.init(container);
+        chart.setOption({
+            grid: { left: 8, right: 8, top: 6, bottom: 6, containLabel: false },
+            animation: false,
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: 'rgba(11, 18, 26, 0.92)',
+                borderColor: 'rgba(127, 208, 255, 0.22)',
+                textStyle: { color: '#e8f0fa' },
+                formatter: (params) => {
+                    if (!params || !params.length) return '';
+                    const p = params[0];
+                    const t = new Date(p.value[0]);
+                    const hh = String(t.getHours()).padStart(2, '0');
+                    const mm = String(t.getMinutes()).padStart(2, '0');
+                    return `${hh}:${mm} — ${Number(p.value[1]).toFixed(3)} кВт`;
+                },
+            },
+            xAxis: { type: 'time', show: false },
+            yAxis: { type: 'value', show: false, min: 0 },
+            series: [{
+                type: 'line',
+                smooth: true,
+                symbol: 'none',
+                lineStyle: { color: '#67b86b', width: 2 },
+                areaStyle: { color: 'rgba(103, 184, 107, 0.22)' },
+                data: [],
+            }],
+        });
+        generatorChartInstances.set(deviceId, chart);
+        return chart;
+    };
+
+    const refreshGeneratorTrace = async (deviceId, force = false) => {
+        const chart = generatorChartInstances.get(deviceId);
+        if (!chart) return;
+        const last = generatorChartFetchedAt.get(deviceId) || 0;
+        if (!force && (Date.now() - last) < GENERATOR_TRACE_REFRESH_MS) {
+            return;
+        }
+        generatorChartFetchedAt.set(deviceId, Date.now());
+        try {
+            const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/power-trace?minutes=60`, { cache: 'no-store' });
+            if (!r.ok) return;
+            const data = await r.json();
+            const points = (data.series || []).map((p) => [Date.parse(p.timestamp), Number(p.power_kw || 0)]);
+            chart.setOption({ series: [{ data: points }] });
+        } catch (_) { /* swallow */ }
+    };
+
     const syncGeneratorDevices = (devices) => {
         if (!generatorGrid) {
             return;
@@ -163,26 +246,64 @@ if (dashboardPage) {
             generatorSection.hidden = devices.length === 0;
         }
         if (!devices.length) {
+            // Tear down any chart instances
+            generatorChartInstances.forEach((chart) => { try { chart.dispose(); } catch (_) {} });
+            generatorChartInstances.clear();
+            generatorChartFetchedAt.clear();
             generatorGrid.innerHTML = '';
             return;
         }
         const existingCards = new Map(
             [...generatorGrid.querySelectorAll('[data-generator-card]')].map((card) => [card.dataset.deviceId, card])
         );
-        if (existingCards.size !== devices.length || devices.some((device) => !existingCards.has(device.device_id))) {
+        const rebuildAll =
+            existingCards.size !== devices.length ||
+            devices.some((device) => !existingCards.has(device.device_id));
+        if (rebuildAll) {
+            generatorChartInstances.forEach((chart) => { try { chart.dispose(); } catch (_) {} });
+            generatorChartInstances.clear();
             generatorGrid.innerHTML = '';
             devices.forEach((device) => {
                 const card = document.createElement('article');
                 card.className = 'device-card generator-card';
                 card.dataset.generatorCard = '';
                 card.dataset.deviceId = device.device_id;
-                card.innerHTML = renderCardMarkup(device);
+                card.innerHTML = renderGeneratorMarkup(device);
                 applyCardStatus(card, device);
                 generatorGrid.appendChild(card);
+                initGeneratorChart(card, device.device_id);
+                refreshGeneratorTrace(device.device_id, true);
             });
             return;
         }
-        devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
+        devices.forEach((device) => {
+            const card = existingCards.get(device.device_id);
+            if (!card) return;
+            // Only update the text cells so the chart canvas stays alive.
+            const room = card.querySelector('[data-device-room]');
+            if (room) room.textContent = device.room || '';
+            const nameEl = card.querySelector('[data-device-name]');
+            if (nameEl) nameEl.textContent = device.name || '';
+            const cp = card.querySelector('[data-device-current-power]');
+            if (cp) cp.textContent = `${device.current_power_kw ?? '—'} кВт`;
+            const me = card.querySelector('[data-device-month-energy]');
+            if (me) me.textContent = `${device.month_energy_kwh ?? '—'} кВт·ч / мес`;
+            const ls = card.querySelector('[data-device-last-seen]');
+            if (ls) {
+                ls.textContent = device.last_seen || 'Пока нет данных';
+                ls.title = device.last_seen || 'Пока нет данных';
+                ls.classList.remove('is-ok', 'is-warning', 'is-error');
+                ls.classList.add(`is-${device.last_seen_status || 'error'}`);
+            }
+            applyCardStatus(card, device);
+            // Make sure the chart still exists (e.g. after a tab visibility swap)
+            if (!generatorChartInstances.has(device.device_id)) {
+                initGeneratorChart(card, device.device_id);
+                refreshGeneratorTrace(device.device_id, true);
+            } else {
+                refreshGeneratorTrace(device.device_id, false);
+            }
+        });
     };
 
     const hideOfflineToggle = document.querySelector('[data-hide-offline]');

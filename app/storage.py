@@ -1276,6 +1276,47 @@ def get_latest_sample(config: AppConfig, device_id: str) -> dict[str, Any] | Non
             return cursor.fetchone()
 
 
+def get_recent_power_trace(
+    config: AppConfig,
+    device_id: str,
+    start: datetime,
+    end: datetime,
+    max_points: int = 360,
+) -> list[dict[str, Any]]:
+    """Recent (captured_at, power_w) samples for sparkline/line charts.
+    If there are more samples than max_points we downsample by simple stride
+    so the JSON payload stays small without blurring the trend."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT captured_at, power_w
+                FROM samples
+                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
+                """,
+                (device_id, start, end),
+            )
+            rows = cursor.fetchall()
+    if not rows:
+        return []
+    stride = max(1, len(rows) // max_points) if max_points > 0 else 1
+    series: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if index % stride != 0 and index != len(rows) - 1:
+            continue
+        captured_at = row.get("captured_at")
+        if not isinstance(captured_at, datetime):
+            captured_at = _parse_dt(captured_at)
+        series.append(
+            {
+                "timestamp": captured_at.isoformat(),
+                "power_kw": round(float(row.get("power_w") or 0.0) / 1000.0, 3),
+            }
+        )
+    return series
+
+
 def get_recent_raw_dps_samples(config: AppConfig, device_id: str, limit: int = 12) -> list[dict[str, Any]]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
