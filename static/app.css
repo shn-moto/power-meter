@@ -166,6 +166,19 @@ p {
     color: rgba(47, 36, 8, 0.72);
 }
 
+.lcd-panel .stat-sub {
+    color: rgba(47, 36, 8, 0.78);
+    font-weight: 500;
+}
+
+.lcd-panel .stat-sub.is-positive {
+    color: #2f6e34;
+}
+
+.lcd-panel .stat-sub.is-negative {
+    color: #8b2424;
+}
+
 .lcd-panel .stat-value,
 .lcd-panel .summary-grid dd,
 .lcd-panel h2 {
@@ -319,26 +332,8 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     height: 100%;
 }
 
-.stat-sub.is-positive { color: #67b86b; }
-.stat-sub.is-negative { color: #d76d6d; }
-
-.visibility-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    color: var(--muted);
-    font-size: 0.82rem;
-    cursor: pointer;
-    user-select: none;
-}
-
-.visibility-toggle input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--accent);
-    cursor: pointer;
-}
+.stat-sub.is-positive { color: #8edb95; }
+.stat-sub.is-negative { color: #f08c8c; }
 
 body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
 body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
