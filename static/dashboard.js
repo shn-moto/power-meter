@@ -179,6 +179,22 @@ if (dashboardPage) {
     const generatorChartFetchedAt = new Map();
     const GENERATOR_TRACE_REFRESH_MS = 30000;
 
+    const generatorChartData = new Map(); // device_id -> {gen, cons, surplus} sorted arrays
+
+    const nearestValue = (sorted, ts) => {
+        if (!sorted || !sorted.length) return null;
+        let lo = 0, hi = sorted.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (sorted[mid][0] < ts) lo = mid + 1; else hi = mid;
+        }
+        const cand = sorted[lo];
+        if (lo > 0 && Math.abs(sorted[lo - 1][0] - ts) < Math.abs(cand[0] - ts)) {
+            return sorted[lo - 1][1];
+        }
+        return cand[1];
+    };
+
     const initGeneratorChart = (card, deviceId) => {
         const container = card.querySelector('[data-generator-chart]');
         if (!container || !window.echarts) {
@@ -199,15 +215,20 @@ if (dashboardPage) {
                 textStyle: { color: '#e8f0fa' },
                 formatter: (params) => {
                     if (!params || !params.length) return '';
-                    const t = new Date(params[0].value[0]);
+                    const ts = params[0].axisValue;
+                    const t = new Date(ts);
                     const hh = String(t.getHours()).padStart(2, '0');
                     const mm = String(t.getMinutes()).padStart(2, '0');
-                    const lines = [`<strong>${hh}:${mm}</strong>`];
-                    params.forEach((p) => {
-                        const v = Number(p.value[1] || 0);
-                        lines.push(`${p.marker} ${p.seriesName}: ${Math.abs(v).toFixed(3)} кВт`);
-                    });
-                    return lines.join('<br/>');
+                    const store = generatorChartData.get(deviceId) || {};
+                    const gen = nearestValue(store.gen, ts) ?? 0;
+                    const cons = nearestValue(store.cons, ts) ?? 0;
+                    const surplus = Math.max(gen - cons, 0);
+                    return [
+                        `<strong>${hh}:${mm}</strong>`,
+                        `<span style="color:#67b86b">●</span> Генерация: ${gen.toFixed(3)} кВт`,
+                        `<span style="color:#e8a838">●</span> Потребление: ${cons.toFixed(3)} кВт`,
+                        `<span style="color:#f04848">●</span> Профицит: ${surplus.toFixed(3)} кВт`,
+                    ].join('<br/>');
                 },
             },
             xAxis: { type: 'time', show: false },
@@ -279,6 +300,14 @@ if (dashboardPage) {
                 const diff = gen - cons;
                 return [ts, diff > 0 ? diff : null];
             });
+            // Stash sorted-by-x copies for the tooltip lookup so every series
+            // shows a value at whichever timestamp the cursor lands on.
+            const consAbs = consPoints.map(([ts, v]) => [ts, Math.abs(v)]);
+            generatorChartData.set(deviceId, {
+                gen: [...genPoints].sort((a, b) => a[0] - b[0]),
+                cons: consAbs.sort((a, b) => a[0] - b[0]),
+                surplus: surplusPoints.filter((p) => p[1] !== null).sort((a, b) => a[0] - b[0]),
+            });
             chart.setOption({
                 series: [
                     { data: genPoints },
@@ -300,6 +329,7 @@ if (dashboardPage) {
             // Tear down any chart instances
             generatorChartInstances.forEach((chart) => { try { chart.dispose(); } catch (_) {} });
             generatorChartInstances.clear();
+            generatorChartData.clear();
             generatorChartFetchedAt.clear();
             generatorGrid.innerHTML = '';
             return;
@@ -313,6 +343,7 @@ if (dashboardPage) {
         if (rebuildAll) {
             generatorChartInstances.forEach((chart) => { try { chart.dispose(); } catch (_) {} });
             generatorChartInstances.clear();
+            generatorChartData.clear();
             generatorGrid.innerHTML = '';
             devices.forEach((device) => {
                 const card = document.createElement('article');

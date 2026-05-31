@@ -466,6 +466,21 @@ if (page) {
         const dayStart = new Date(allXs.length ? Math.min(...allXs) : Date.now());
         dayStart.setHours(0, 0, 0, 0);
         const dayEnd = dayStart.getTime() + 24 * 60 * 60 * 1000;
+        const lineNearest = (sorted, ts) => {
+            if (!sorted || !sorted.length) return null;
+            let lo = 0, hi = sorted.length - 1;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (sorted[mid][0] < ts) lo = mid + 1; else hi = mid;
+            }
+            const cand = sorted[lo];
+            if (lo > 0 && Math.abs(sorted[lo - 1][0] - ts) < Math.abs(cand[0] - ts)) {
+                return sorted[lo - 1][1];
+            }
+            return cand[1];
+        };
+        const genSorted = [...points].sort((a, b) => a[0] - b[0]);
+        const consAbsSorted = consPoints.map(([ts, v]) => [ts, Math.abs(v)]).sort((a, b) => a[0] - b[0]);
         chartInstance?.setOption({
             animation: false,
             grid: { left: 60, right: 20, top: 18, bottom: 56 },
@@ -475,9 +490,23 @@ if (page) {
                 borderWidth: 0,
                 textStyle: { color: '#d7ecff', fontFamily: 'Bahnschrift, Segoe UI, sans-serif' },
                 formatter: (params) => {
-                    const p = Array.isArray(params) ? params[0] : params;
-                    const ts = new Date(p.value[0]);
-                    return `<strong>${formatClock(ts)}:${String(ts.getSeconds()).padStart(2,'0')}</strong><br/>${formatNumber(p.value[1])} ${chartConfig.unit || 'кВт'}`;
+                    const arr = Array.isArray(params) ? params : [params];
+                    if (!arr.length) return '';
+                    const ts = arr[0].axisValue ?? (arr[0].value && arr[0].value[0]);
+                    const t = new Date(ts);
+                    const head = `<strong>${formatClock(t)}:${String(t.getSeconds()).padStart(2,'0')}</strong>`;
+                    if (consAbsSorted.length) {
+                        const gen = lineNearest(genSorted, ts) ?? 0;
+                        const cons = lineNearest(consAbsSorted, ts) ?? 0;
+                        const surplus = Math.max(gen - cons, 0);
+                        return [
+                            head,
+                            `<span style="color:#67b86b">●</span> Генерация: ${formatNumber(gen)} ${chartConfig.unit || 'кВт'}`,
+                            `<span style="color:#e8a838">●</span> Потребление: ${formatNumber(cons)} ${chartConfig.unit || 'кВт'}`,
+                            `<span style="color:#f04848">●</span> Профицит: ${formatNumber(surplus)} ${chartConfig.unit || 'кВт'}`,
+                        ].join('<br/>');
+                    }
+                    return `${head}<br/>${formatNumber(arr[0].value[1])} ${chartConfig.unit || 'кВт'}`;
                 },
             },
             toolbox: {
