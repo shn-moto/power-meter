@@ -269,6 +269,7 @@ def upsert_managed_device(
     is_energy_meter: bool,
     is_charger: bool,
     is_generator: bool,
+    is_solar_consumer: bool,
     product_id: str | None,
     product_name: str | None,
     icon: str | None,
@@ -291,9 +292,9 @@ def upsert_managed_device(
                 """
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
-                    is_energy_meter, is_charger, is_gateway, is_generator, product_id, product_name, icon, onboarding_source, updated_at,
+                    is_energy_meter, is_charger, is_gateway, is_generator, is_solar_consumer, product_id, product_name, icon, onboarding_source, updated_at,
                     total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -307,6 +308,7 @@ def upsert_managed_device(
                     is_charger = EXCLUDED.is_charger,
                     is_gateway = EXCLUDED.is_gateway,
                     is_generator = EXCLUDED.is_generator,
+                    is_solar_consumer = EXCLUDED.is_solar_consumer,
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -327,6 +329,7 @@ def upsert_managed_device(
                     is_charger,
                     is_gateway,
                     is_generator,
+                    is_solar_consumer,
                     product_id,
                     product_name,
                     icon,
@@ -794,6 +797,7 @@ def materialize_device_profile(
         is_energy_meter=bool(device.get("is_energy_meter", True)),
         is_charger=bool(device.get("is_charger", False)),
         is_generator=bool(device.get("is_generator", False)),
+        is_solar_consumer=bool(device.get("is_solar_consumer", False)),
         is_gateway=bool(device.get("is_gateway", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
@@ -1315,6 +1319,71 @@ def get_recent_power_trace(
             }
         )
     return series
+
+
+def get_solar_consumers_power_trace(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_seconds: int = 30,
+    max_points: int = 360,
+) -> list[dict[str, Any]]:
+    """Combined instantaneous draw of devices tagged is_solar_consumer over
+    the given window, bucketed by bucket_seconds. Used by the dashboard
+    sparkline and the generator detail page to overlay consumption against
+    the panel's generation curve."""
+    bucket_seconds = max(5, int(bucket_seconds or 30))
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id
+                FROM devices
+                WHERE is_solar_consumer = TRUE AND is_energy_meter = TRUE
+                """
+            )
+            device_ids = [str(r.get("device_id") or "") for r in cursor.fetchall() if r.get("device_id")]
+            if not device_ids:
+                return []
+            cursor.execute(
+                """
+                SELECT captured_at, device_id, power_w
+                FROM samples
+                WHERE device_id = ANY(%s) AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
+                """,
+                (device_ids, start, end),
+            )
+            rows = cursor.fetchall()
+    if not rows:
+        return []
+
+    # bucket the timeline; within a bucket keep the latest power per device,
+    # then sum across devices for that bucket.
+    buckets: dict[datetime, dict[str, float]] = {}
+    for row in rows:
+        captured_at = row.get("captured_at")
+        if not isinstance(captured_at, datetime):
+            captured_at = _parse_dt(captured_at)
+        epoch = int(captured_at.timestamp())
+        bucket_epoch = (epoch // bucket_seconds) * bucket_seconds
+        bucket_ts = datetime.fromtimestamp(bucket_epoch, tz=captured_at.tzinfo or timezone.utc)
+        device_id = str(row.get("device_id") or "")
+        bucket_entry = buckets.setdefault(bucket_ts, {})
+        bucket_entry[device_id] = float(row.get("power_w") or 0.0)
+
+    timeline = sorted(buckets)
+    if max_points > 0 and len(timeline) > max_points:
+        stride = max(1, len(timeline) // max_points)
+        timeline = [ts for index, ts in enumerate(timeline) if index % stride == 0 or index == len(timeline) - 1]
+
+    return [
+        {
+            "timestamp": ts.isoformat(),
+            "power_kw": round(sum(buckets[ts].values()) / 1000.0, 3),
+        }
+        for ts in timeline
+    ]
 
 
 def get_recent_raw_dps_samples(config: AppConfig, device_id: str, limit: int = 12) -> list[dict[str, Any]]:

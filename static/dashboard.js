@@ -199,23 +199,42 @@ if (dashboardPage) {
                 textStyle: { color: '#e8f0fa' },
                 formatter: (params) => {
                     if (!params || !params.length) return '';
-                    const p = params[0];
-                    const t = new Date(p.value[0]);
+                    const t = new Date(params[0].value[0]);
                     const hh = String(t.getHours()).padStart(2, '0');
                     const mm = String(t.getMinutes()).padStart(2, '0');
-                    return `${hh}:${mm} — ${Number(p.value[1]).toFixed(3)} кВт`;
+                    const lines = [`<strong>${hh}:${mm}</strong>`];
+                    params.forEach((p) => {
+                        const v = Number(p.value[1] || 0);
+                        lines.push(`${p.marker} ${p.seriesName}: ${Math.abs(v).toFixed(3)} кВт`);
+                    });
+                    return lines.join('<br/>');
                 },
             },
             xAxis: { type: 'time', show: false },
-            yAxis: { type: 'value', show: false, min: 0 },
-            series: [{
-                type: 'line',
-                smooth: true,
-                symbol: 'none',
-                lineStyle: { color: '#67b86b', width: 2 },
-                areaStyle: { color: 'rgba(103, 184, 107, 0.22)' },
-                data: [],
-            }],
+            yAxis: { type: 'value', show: false },
+            series: [
+                {
+                    name: 'Генерация',
+                    type: 'line', smooth: true, symbol: 'none',
+                    lineStyle: { color: '#67b86b', width: 2 },
+                    areaStyle: { color: 'rgba(103, 184, 107, 0.22)' },
+                    data: [],
+                },
+                {
+                    name: 'Потребление',
+                    type: 'line', smooth: true, symbol: 'none',
+                    lineStyle: { color: '#e8a838', width: 1.4 },
+                    areaStyle: { color: 'rgba(232, 168, 56, 0.18)' },
+                    data: [],
+                },
+                {
+                    name: 'Профицит',
+                    type: 'line', smooth: true, symbol: 'none',
+                    lineStyle: { color: '#f04848', width: 1.6 },
+                    areaStyle: { color: 'rgba(240, 72, 72, 0.22)', origin: 0 },
+                    data: [],
+                },
+            ],
         });
         generatorChartInstances.set(deviceId, chart);
         return chart;
@@ -233,8 +252,40 @@ if (dashboardPage) {
             const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/power-trace?minutes=60`, { cache: 'no-store' });
             if (!r.ok) return;
             const data = await r.json();
-            const points = (data.series || []).map((p) => [Date.parse(p.timestamp), Number(p.power_kw || 0)]);
-            chart.setOption({ series: [{ data: points }] });
+            const genPoints = (data.series || []).map((p) => [Date.parse(p.timestamp), Number(p.power_kw || 0)]);
+            const consMap = new Map();
+            (data.consumers_series || []).forEach((p) => consMap.set(Date.parse(p.timestamp), Number(p.power_kw || 0)));
+            // For consumption, plot as NEGATIVE so it goes below zero on the same axis.
+            const consPoints = (data.consumers_series || []).map((p) => [Date.parse(p.timestamp), -Number(p.power_kw || 0)]);
+            // Surplus: where generation exceeds consumption at that bucket.
+            // Use nearest consumer point (within 60s) for each generator point.
+            const consSorted = Array.from(consMap.entries()).sort((a, b) => a[0] - b[0]);
+            const findNearest = (ts) => {
+                // binary search since consSorted is sorted by ts
+                if (!consSorted.length) return 0;
+                let lo = 0, hi = consSorted.length - 1;
+                while (lo < hi) {
+                    const mid = (lo + hi) >> 1;
+                    if (consSorted[mid][0] < ts) lo = mid + 1; else hi = mid;
+                }
+                const cand = consSorted[lo];
+                if (lo > 0 && Math.abs(consSorted[lo - 1][0] - ts) < Math.abs(cand[0] - ts)) {
+                    return consSorted[lo - 1][1];
+                }
+                return cand[1];
+            };
+            const surplusPoints = genPoints.map(([ts, gen]) => {
+                const cons = findNearest(ts);
+                const diff = gen - cons;
+                return [ts, diff > 0 ? diff : null];
+            });
+            chart.setOption({
+                series: [
+                    { data: genPoints },
+                    { data: consPoints },
+                    { data: surplusPoints },
+                ],
+            });
         } catch (_) { /* swallow */ }
     };
 

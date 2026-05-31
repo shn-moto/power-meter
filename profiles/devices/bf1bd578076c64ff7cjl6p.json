@@ -6,6 +6,7 @@
     "room": "Детская",
     "device_kind": "socket",
     "is_energy_meter": true,
+    "is_solar_consumer": true,
     "category_code": "cz",
     "product_id": "wv7sdupzj13kxc6b",
     "product_name": "Smart Plug"

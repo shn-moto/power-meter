@@ -49,6 +49,7 @@ from app.storage import (
     get_user_by_username,
     get_recent_raw_dps_samples,
     get_recent_power_trace,
+    get_solar_consumers_power_trace,
     get_device_stats,
     get_latest_sample,
     get_sample_age_seconds,
@@ -1704,6 +1705,10 @@ def _build_device_stats_payload(
             "sessions": charger_stats["sessions"],
             "chart": charger_stats["chart"],
         }
+        if bool(device.get("is_generator")):
+            stats["solar_consumers_series"] = get_solar_consumers_power_trace(
+                config, range_start, range_end, bucket_seconds=30, max_points=720,
+            )
     stats = _apply_live_stats(config, stats, live_sample)
     stats["summary"]["latest_raw_dps"] = _hydrate_recent_visualized_dps(
         config,
@@ -2290,7 +2295,12 @@ def device_power_trace_api(request: Request, device_id: str, minutes: int = 60) 
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=minutes)
     series = get_recent_power_trace(config, device_id, start, now)
-    return JSONResponse({"minutes": minutes, "series": series})
+    payload: dict[str, Any] = {"minutes": minutes, "series": series}
+
+    device_row = get_device_row(config, device_id)
+    if device_row and device_row.get("is_generator"):
+        payload["consumers_series"] = get_solar_consumers_power_trace(config, start, now)
+    return JSONResponse(payload)
 
 
 @app.get("/api/devices/{device_id}/sensor")

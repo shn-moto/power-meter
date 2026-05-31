@@ -423,11 +423,37 @@ if (page) {
         chargerSessionTotal.textContent = `Итого: ${formatNumber(totalEnergy)} кВт·ч за ${sessions.length} ${sessions.length === 1 ? 'сессию' : 'сессии'}`;
     };
 
-    const renderLineChart = (series, chartConfig, sessions) => {
+    const renderLineChart = (series, chartConfig, sessions, consumersSeries) => {
         const points = series
             .map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0)])
             .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
-        if (!points.length) {
+        const consPoints = (consumersSeries || [])
+            .map((item) => [Date.parse(item.timestamp), -Number(item.power_kw ?? 0)])
+            .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+        const consMap = new Map(
+            (consumersSeries || []).map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0)])
+        );
+        const consSorted = Array.from(consMap.entries()).sort((a, b) => a[0] - b[0]);
+        const findNearestCons = (ts) => {
+            if (!consSorted.length) return 0;
+            let lo = 0, hi = consSorted.length - 1;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (consSorted[mid][0] < ts) lo = mid + 1; else hi = mid;
+            }
+            const cand = consSorted[lo];
+            if (lo > 0 && Math.abs(consSorted[lo - 1][0] - ts) < Math.abs(cand[0] - ts)) {
+                return consSorted[lo - 1][1];
+            }
+            return cand[1];
+        };
+        const surplusPoints = consSorted.length
+            ? points.map(([ts, gen]) => {
+                const diff = gen - findNearestCons(ts);
+                return [ts, diff > 0 ? diff : null];
+            })
+            : [];
+        if (!points.length && !consPoints.length) {
             chartEmpty.hidden = false;
             chartMeta.textContent = chartConfig.label || 'Мгновенная мощность';
             chartInstance?.clear();
@@ -436,7 +462,8 @@ if (page) {
         }
         chartEmpty.hidden = true;
         chartMeta.textContent = `${chartConfig.label || 'Мгновенная мощность'}, ${chartConfig.unit || 'кВт'}`;
-        const dayStart = new Date(points[0][0]);
+        const allXs = [...points.map((p) => p[0]), ...consPoints.map((p) => p[0])];
+        const dayStart = new Date(allXs.length ? Math.min(...allXs) : Date.now());
         dayStart.setHours(0, 0, 0, 0);
         const dayEnd = dayStart.getTime() + 24 * 60 * 60 * 1000;
         chartInstance?.setOption({
@@ -489,36 +516,57 @@ if (page) {
             },
             yAxis: {
                 type: 'value',
-                min: 0,
+                min: consPoints.length ? null : 0,
                 splitNumber: 4,
                 axisLabel: {
                     color: '#7cbcff',
                     fontFamily: 'Bahnschrift, Segoe UI, sans-serif',
-                    formatter: (value) => `${formatNumber(Number(value))} ${chartConfig.unit || 'кВт'}`,
+                    formatter: (value) => `${formatNumber(Math.abs(Number(value)))} ${chartConfig.unit || 'кВт'}`,
                 },
                 splitLine: { lineStyle: { color: 'rgba(112, 183, 255, 0.12)' } },
             },
-            series: [{
-                type: 'line',
-                data: points,
-                showSymbol: false,
-                smooth: false,
-                step: 'end',
-                lineStyle: { width: 1.5, color: '#7fd0ff' },
-                areaStyle: {
-                    color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                        { offset: 0, color: 'rgba(127, 208, 255, 0.45)' },
-                        { offset: 1, color: 'rgba(45, 120, 181, 0.05)' },
-                    ]),
-                },
-            }],
+            series: consPoints.length
+                ? [
+                    {
+                        name: 'Генерация',
+                        type: 'line', data: points, showSymbol: false, smooth: true,
+                        lineStyle: { width: 1.8, color: '#67b86b' },
+                        areaStyle: { color: 'rgba(103, 184, 107, 0.22)', origin: 0 },
+                    },
+                    {
+                        name: 'Потребление',
+                        type: 'line', data: consPoints, showSymbol: false, smooth: true,
+                        lineStyle: { width: 1.6, color: '#e8a838' },
+                        areaStyle: { color: 'rgba(232, 168, 56, 0.18)', origin: 0 },
+                    },
+                    {
+                        name: 'Профицит',
+                        type: 'line', data: surplusPoints, showSymbol: false, smooth: true, connectNulls: false,
+                        lineStyle: { width: 1.8, color: '#f04848' },
+                        areaStyle: { color: 'rgba(240, 72, 72, 0.24)', origin: 0 },
+                    },
+                ]
+                : [{
+                    type: 'line',
+                    data: points,
+                    showSymbol: false,
+                    smooth: false,
+                    step: 'end',
+                    lineStyle: { width: 1.5, color: '#7fd0ff' },
+                    areaStyle: {
+                        color: new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(127, 208, 255, 0.45)' },
+                            { offset: 1, color: 'rgba(45, 120, 181, 0.05)' },
+                        ]),
+                    },
+                }],
         }, true);
         renderChargerSessions(sessions);
     };
 
     const renderChart = (series, chartConfig, extra) => {
         if (chartConfig?.kind === 'line') {
-            renderLineChart(series, chartConfig, extra?.sessions || []);
+            renderLineChart(series, chartConfig, extra?.sessions || [], extra?.solar_consumers_series);
             return;
         }
         if (chargerSessions) {
@@ -749,7 +797,7 @@ if (page) {
                 return;
             }
             renderAggregateSummary(payload);
-            renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' }, { sessions: payload.sessions });
+            renderChart(payload.series, payload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'day' }, { sessions: payload.sessions, solar_consumers_series: payload.solar_consumers_series });
         } catch (error) {
             if (error?.name !== 'AbortError') {
                 console.error(error);
@@ -893,7 +941,7 @@ if (page) {
     if (initialPayload) {
         renderAggregateSummary(initialPayload);
         renderLiveSummary(initialPayload);
-        renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' }, { sessions: initialPayload.sessions });
+        renderChart(initialPayload.series, initialPayload.chart || { label: 'Потребление', unit: 'кВт·ч', bucket: 'hour' }, { sessions: initialPayload.sessions, solar_consumers_series: initialPayload.solar_consumers_series });
         updateDayNav();
         lastAggregateRefreshAt = Date.now();
     } else {

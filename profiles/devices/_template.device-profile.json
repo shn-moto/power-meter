@@ -7,6 +7,8 @@
     "device_kind": "meter",
     "is_energy_meter": true,
     "is_charger": false,
+    "is_generator": false,
+    "is_solar_consumer": false,
     "category_code": "",
     "product_id": "",
     "product_name": ""
