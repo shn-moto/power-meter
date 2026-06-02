@@ -3,8 +3,28 @@
 {% block content %}
 <section class="report-page" data-report-page>
     <div class="report-header">
-        <p class="eyebrow">{{ report.month_label }}</p>
-        <h1>Отчёт за период</h1>
+        <div>
+            <p class="eyebrow">{{ report.month_label }}</p>
+            <h1>Отчёт за период</h1>
+        </div>
+        <form class="report-period-form" data-report-period-form>
+            <label class="report-period-field">
+                <span>Год</span>
+                <select name="year" data-report-year>
+                    {% for y in report.year_choices %}
+                    <option value="{{ y }}" {% if y == report.selected_year %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="report-period-field">
+                <span>Месяц</span>
+                <select name="month" data-report-month>
+                    {% for opt in report.month_choices %}
+                    <option value="{{ opt.value }}" {% if opt.value == report.selected_month %}selected{% endif %}>{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </form>
     </div>
 
     <div class="report-grid">
@@ -51,6 +71,7 @@
 
     <article class="detail-card report-chart-card">
         <h2>По месяцам, {{ report.year_label }}</h2>
+        <p class="chart-meta">Клик по столбцу — отчёт за этот месяц.</p>
         <div class="chart-frame">
             <div class="chart-canvas" data-report-monthly-chart></div>
             <div class="chart-empty" data-report-monthly-empty {% if report.monthly_series %}hidden{% endif %}>За этот период данные пока не собраны.</div>

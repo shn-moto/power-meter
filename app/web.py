@@ -1936,20 +1936,39 @@ def dashboard(request: Request) -> HTMLResponse:
 
 
 @app.get("/report", response_class=HTMLResponse)
-def monthly_report(request: Request) -> HTMLResponse:
+def monthly_report(
+    request: Request,
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+) -> HTMLResponse:
     config: AppConfig = request.app.state.app_config
     tz = _get_timezone(config)
     now = datetime.now(tz)
 
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    target_year = int(year) if year else now.year
+    target_month = int(month) if month else now.month
+    target_month = max(1, min(12, target_month))
+    target_year = max(2020, min(now.year + 1, target_year))
+
+    month_start = datetime(target_year, target_month, 1, tzinfo=tz)
+    if target_month == 12:
+        month_end = datetime(target_year + 1, 1, 1, tzinfo=tz)
+    else:
+        month_end = datetime(target_year, target_month + 1, 1, tzinfo=tz)
+    # For the in-flight month don't reach into the future
+    window_end = min(month_end, now)
+    is_current_month = (target_year == now.year and target_month == now.month)
+
     prev_month_end = month_start
     prev_month_start = (prev_month_end - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    year_start = datetime(target_year, 1, 1, tzinfo=tz)
+    year_end_for_chart = datetime(target_year + 1, 1, 1, tzinfo=tz)
+    year_end_for_chart = min(year_end_for_chart, now) if target_year >= now.year else year_end_for_chart
 
-    daily = get_period_breakdown(config, month_start, now, "day")
-    monthly_current_year = get_period_breakdown(config, year_start, now, "month")
+    daily = get_period_breakdown(config, month_start, window_end, "day")
+    monthly_year_series = get_period_breakdown(config, year_start, year_end_for_chart, "month")
 
-    # Past 12 full months (excluding current) for the average baseline.
+    # Past 12 full months (before the selected month) for the average baseline.
     avg_window_start = (month_start - timedelta(days=365)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     avg_window = get_period_breakdown(config, avg_window_start, month_start, "month")
     avg_net_kwh = (
@@ -1975,10 +1994,23 @@ def monthly_report(request: Request) -> HTMLResponse:
     delta_vs_avg = round(current_net - avg_net_kwh, 3)
 
     tariff = float(config.tariff_per_kwh or 0.0)
+
+    # Build year choices: current ±4 (cap at current year)
+    year_choices = list(range(max(2020, now.year - 4), now.year + 1))
+    month_choices = [
+        {"value": idx + 1, "label": RUSSIAN_MONTHS[idx + 1]}
+        for idx in range(12)
+    ]
+
     payload = {
-        "month_label": _format_month_label(now),
+        "selected_year": target_year,
+        "selected_month": target_month,
+        "is_current_month": is_current_month,
+        "month_label": _format_month_label(month_start),
         "previous_label": _format_month_label(prev_month_start),
-        "year_label": str(now.year),
+        "year_label": str(target_year),
+        "year_choices": year_choices,
+        "month_choices": month_choices,
         "current": {
             "consumed_kwh": current_consumed,
             "generated_kwh": current_generated,
@@ -2012,7 +2044,7 @@ def monthly_report(request: Request) -> HTMLResponse:
             "cost": round(delta_vs_avg * tariff, 2),
         },
         "daily_series": daily,
-        "monthly_series": monthly_current_year,
+        "monthly_series": monthly_year_series,
         "tariff_per_kwh": tariff,
     }
     return templates.TemplateResponse(

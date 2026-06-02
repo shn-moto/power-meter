@@ -375,8 +375,38 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     gap: 18px;
 }
 
+.report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
 .report-header h1 {
     margin: 0;
+}
+
+.report-period-form {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+}
+
+.report-period-field {
+    display: grid;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.report-period-field select {
+    background: var(--surface-strong);
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 6px 10px;
+    font: inherit;
+    border-radius: 0;
 }
 
 .report-grid {

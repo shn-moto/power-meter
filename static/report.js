@@ -2,6 +2,27 @@ const reportPage = document.querySelector('[data-report-page]');
 
 if (reportPage) {
     const payloadNode = document.querySelector('[data-report-payload]');
+    const yearSelect = document.querySelector('[data-report-year]');
+    const monthSelect = document.querySelector('[data-report-month]');
+
+    const navigateToPeriod = (year, month) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('year', String(year));
+        url.searchParams.set('month', String(month));
+        window.location.href = url.toString();
+    };
+
+    if (yearSelect) {
+        yearSelect.addEventListener('change', () => {
+            navigateToPeriod(Number(yearSelect.value), Number(monthSelect?.value || 1));
+        });
+    }
+    if (monthSelect) {
+        monthSelect.addEventListener('change', () => {
+            navigateToPeriod(Number(yearSelect?.value || new Date().getFullYear()), Number(monthSelect.value));
+        });
+    }
+
     if (!payloadNode) {
         // nothing to render
     } else {
@@ -33,7 +54,7 @@ if (reportPage) {
             }
         };
 
-        const buildBarChart = (container, series, formatter, emptyNode) => {
+        const buildBarChart = (container, series, formatter, emptyNode, onBarClick) => {
             if (!container) {
                 return;
             }
@@ -98,7 +119,23 @@ if (reportPage) {
                     },
                 ],
             });
+            if (typeof onBarClick === 'function') {
+                chart.getZr().setCursorStyle('pointer');
+                chart.on('click', (params) => {
+                    if (params && typeof params.dataIndex === 'number') {
+                        const item = series[params.dataIndex];
+                        if (item) onBarClick(item);
+                    }
+                });
+            }
             window.addEventListener('resize', () => chart.resize());
+        };
+
+        const handleMonthlyBarClick = (item) => {
+            const d = new Date(item.bucket);
+            if (Number.isFinite(d.getTime())) {
+                navigateToPeriod(d.getFullYear(), d.getMonth() + 1);
+            }
         };
 
         const render = () => {
@@ -113,6 +150,7 @@ if (reportPage) {
                 payload.monthly_series,
                 formatMonth,
                 document.querySelector('[data-report-monthly-empty]'),
+                handleMonthlyBarClick,
             );
         };
 
