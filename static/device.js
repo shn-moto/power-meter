@@ -32,7 +32,9 @@ if (page) {
     let currentStart = null;
     let currentEnd = null;
     let selectedDayKey = null;
+    let selectedWeekKey = null; // Monday of the chosen ISO week
     let selectedMonthKey = null;
+    let selectedYearKey = null;
     let isAggregateLoading = false;
     let isLiveLoading = false;
     let pendingAggregateRequest = null;
@@ -132,6 +134,47 @@ if (page) {
         return { start, end };
     };
 
+    const getWeekStart = (date) => {
+        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+        const dow = d.getDay(); // 0=Sun..6=Sat — treat Monday as start
+        const delta = (dow + 6) % 7;
+        d.setDate(d.getDate() - delta);
+        return d;
+    };
+
+    const getCurrentWeekKey = () => toDateKey(getWeekStart(new Date()));
+    const getCurrentYearKey = () => String(new Date().getFullYear());
+
+    const getEffectiveWeekKey = () => selectedWeekKey || getCurrentWeekKey();
+    const getEffectiveMonthKey = () => selectedMonthKey || getCurrentMonthKey();
+    const getEffectiveYearKey = () => selectedYearKey || getCurrentYearKey();
+
+    const getWeekRange = (weekKey) => {
+        const start = parseDateKey(weekKey);
+        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 12, 0, 0, 0);
+        return { start: toDateKey(start), end: toDateKey(end) };
+    };
+
+    const getYearRange = (yearKey) => {
+        const year = Number(yearKey);
+        return {
+            start: `${year}-01-01`,
+            end: `${year}-12-31`,
+        };
+    };
+
+    const formatWeekLabel = (weekKey) => {
+        const start = parseDateKey(weekKey);
+        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 12, 0, 0, 0);
+        const fmt = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short' });
+        return `${fmt.format(start)} — ${fmt.format(end)}`;
+    };
+
+    const formatMonthLabel = (monthKey) => {
+        const date = parseMonthKey(monthKey);
+        return new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(date);
+    };
+
     const getAggregateRequest = () => {
         if (currentPeriod === 'custom') {
             return { period: 'custom', start: currentStart, end: currentEnd };
@@ -139,8 +182,14 @@ if (page) {
         if (currentPeriod === DAY_PERIOD && selectedDayKey) {
             return { period: 'custom', start: selectedDayKey, end: selectedDayKey };
         }
+        if (currentPeriod === 'week' && selectedWeekKey) {
+            return { period: 'custom', ...getWeekRange(selectedWeekKey) };
+        }
         if (currentPeriod === MONTH_PERIOD && selectedMonthKey) {
             return { period: 'custom', ...getMonthRange(selectedMonthKey) };
+        }
+        if (currentPeriod === YEAR_PERIOD && selectedYearKey) {
+            return { period: 'custom', ...getYearRange(selectedYearKey) };
         }
         return { period: currentPeriod, start: null, end: null };
     };
@@ -152,8 +201,14 @@ if (page) {
         if (currentPeriod === DAY_PERIOD) {
             return !selectedDayKey || selectedDayKey >= todayKey;
         }
+        if (currentPeriod === 'week') {
+            return !selectedWeekKey || selectedWeekKey >= getCurrentWeekKey();
+        }
         if (currentPeriod === MONTH_PERIOD) {
             return !selectedMonthKey || selectedMonthKey >= getCurrentMonthKey();
+        }
+        if (currentPeriod === YEAR_PERIOD) {
+            return !selectedYearKey || selectedYearKey >= getCurrentYearKey();
         }
         if (currentPeriod === 'custom') {
             return Boolean(currentStart && currentEnd && currentStart <= todayKey && currentEnd >= todayKey);
@@ -168,16 +223,42 @@ if (page) {
     };
 
     const updateDayNav = () => {
-        const isDayView = currentPeriod === DAY_PERIOD;
-        dayNav.hidden = !isDayView;
-        if (!isDayView) {
+        if (!dayNav) {
             return;
         }
-
-        const dayKey = getEffectiveDayKey();
-        dayNavLabel.textContent = dateFormatter.format(parseDateKey(dayKey));
-        dayNavPrev.disabled = isAggregateLoading;
-        dayNavNext.disabled = isAggregateLoading || dayKey >= getTodayKey();
+        if (currentPeriod === DAY_PERIOD) {
+            const dayKey = getEffectiveDayKey();
+            dayNavLabel.textContent = dateFormatter.format(parseDateKey(dayKey));
+            dayNav.hidden = false;
+            dayNavPrev.disabled = isAggregateLoading;
+            dayNavNext.disabled = isAggregateLoading || dayKey >= getTodayKey();
+            return;
+        }
+        if (currentPeriod === 'week') {
+            const weekKey = getEffectiveWeekKey();
+            dayNavLabel.textContent = formatWeekLabel(weekKey);
+            dayNav.hidden = false;
+            dayNavPrev.disabled = isAggregateLoading;
+            dayNavNext.disabled = isAggregateLoading || weekKey >= getCurrentWeekKey();
+            return;
+        }
+        if (currentPeriod === MONTH_PERIOD) {
+            const monthKey = getEffectiveMonthKey();
+            dayNavLabel.textContent = formatMonthLabel(monthKey);
+            dayNav.hidden = false;
+            dayNavPrev.disabled = isAggregateLoading;
+            dayNavNext.disabled = isAggregateLoading || monthKey >= getCurrentMonthKey();
+            return;
+        }
+        if (currentPeriod === YEAR_PERIOD) {
+            const yearKey = getEffectiveYearKey();
+            dayNavLabel.textContent = yearKey;
+            dayNav.hidden = false;
+            dayNavPrev.disabled = isAggregateLoading;
+            dayNavNext.disabled = isAggregateLoading || yearKey >= getCurrentYearKey();
+            return;
+        }
+        dayNav.hidden = true;
     };
 
     const drillToDay = (timestamp) => {
@@ -919,7 +1000,9 @@ if (page) {
             currentStart = null;
             currentEnd = null;
             selectedDayKey = null;
+            selectedWeekKey = null;
             selectedMonthKey = null;
+            selectedYearKey = null;
             customRangeForm.reset();
             updateDayNav();
             loadCurrentPeriod();
@@ -941,13 +1024,53 @@ if (page) {
             currentStart = start;
             currentEnd = end;
             selectedDayKey = null;
+            selectedWeekKey = null;
             selectedMonthKey = null;
+            selectedYearKey = null;
             updateDayNav();
             loadPeriod(currentPeriod, currentStart, currentEnd);
         });
     });
 
+    const shiftPeriod = (direction) => {
+        if (currentPeriod === DAY_PERIOD) {
+            const currentDate = parseDateKey(getEffectiveDayKey());
+            currentDate.setDate(currentDate.getDate() + direction);
+            const nextKey = toDateKey(currentDate);
+            if (direction > 0 && nextKey > getTodayKey()) return;
+            selectedDayKey = (direction > 0 && nextKey === getTodayKey()) ? null : nextKey;
+        } else if (currentPeriod === 'week') {
+            const currentDate = parseDateKey(getEffectiveWeekKey());
+            currentDate.setDate(currentDate.getDate() + 7 * direction);
+            const nextKey = toDateKey(currentDate);
+            const currentWeekKey = getCurrentWeekKey();
+            if (direction > 0 && nextKey > currentWeekKey) return;
+            selectedWeekKey = (direction > 0 && nextKey === currentWeekKey) ? null : nextKey;
+        } else if (currentPeriod === MONTH_PERIOD) {
+            const currentDate = parseMonthKey(getEffectiveMonthKey());
+            currentDate.setMonth(currentDate.getMonth() + direction);
+            const nextKey = toMonthKey(currentDate);
+            const currentMonthKey = getCurrentMonthKey();
+            if (direction > 0 && nextKey > currentMonthKey) return;
+            selectedMonthKey = (direction > 0 && nextKey === currentMonthKey) ? null : nextKey;
+        } else if (currentPeriod === YEAR_PERIOD) {
+            const year = Number(getEffectiveYearKey()) + direction;
+            const nextKey = String(year);
+            const currentYearKey = getCurrentYearKey();
+            if (direction > 0 && nextKey > currentYearKey) return;
+            selectedYearKey = (direction > 0 && nextKey === currentYearKey) ? null : nextKey;
+        } else {
+            return;
+        }
+        updateDayNav();
+        loadCurrentPeriod();
+    };
+
     dayNavPrev?.addEventListener('click', () => {
+        if (currentPeriod !== DAY_PERIOD) {
+            shiftPeriod(-1);
+            return;
+        }
         const currentDate = parseDateKey(getEffectiveDayKey());
         currentDate.setDate(currentDate.getDate() - 1);
         selectedDayKey = toDateKey(currentDate);
@@ -956,6 +1079,10 @@ if (page) {
     });
 
     dayNavNext?.addEventListener('click', () => {
+        if (currentPeriod !== DAY_PERIOD) {
+            shiftPeriod(1);
+            return;
+        }
         const currentDate = parseDateKey(getEffectiveDayKey());
         currentDate.setDate(currentDate.getDate() + 1);
         const nextKey = toDateKey(currentDate);
