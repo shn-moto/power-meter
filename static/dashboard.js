@@ -34,11 +34,18 @@ if (dashboardPage) {
         return `<div class="device-placeholder device-placeholder-${escapeHtml(device.device_kind || 'switch')}" aria-hidden="true"></div>`;
     };
 
+    const fmtWatts = (kw) => (kw === undefined || kw === null) ? '—' : Math.round(Number(kw) * 1000);
+    const fmtWh = (kwh) => Math.round(Number(kwh || 0) * 1000);
+
     const renderCardMarkup = (device) => {
         const currentPowerRow = (device.current_power_kw !== undefined && device.current_power_kw !== null)
             ? `<div>
                     <dt>Текущая мощность</dt>
-                    <dd data-device-current-power>${escapeHtml(device.current_power_kw)} кВт</dd>
+                    <dd data-device-current-power>${fmtWatts(device.current_power_kw)} Вт</dd>
+                </div>
+                <div>
+                    <dt>Энергия за день</dt>
+                    <dd data-device-day-energy>${fmtWh(device.day_energy_kwh)} Вт·ч</dd>
                 </div>`
             : '';
         return `
@@ -166,8 +173,8 @@ if (dashboardPage) {
                     <h3 data-device-name>${escapeHtml(device.name)}</h3>
                 </div>
                 <div class="generator-card-meta">
-                    <div class="generator-current-power" data-device-current-power>${escapeHtml(device.current_power_kw ?? '—')} кВт</div>
-                    <div class="generator-month-energy" data-device-month-energy>${escapeHtml(device.month_energy_kwh ?? '—')} кВт·ч / мес</div>
+                    <div class="generator-current-power" data-device-current-power>${fmtWatts(device.current_power_kw)} Вт</div>
+                    <div class="generator-month-energy" data-device-day-energy>${fmtWh(device.day_energy_kwh)} Вт·ч / день</div>
                     <div class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen title="${escapeHtml(device.last_seen || 'Пока нет данных')}">${escapeHtml(device.last_seen || 'Пока нет данных')}</div>
                 </div>
             </div>
@@ -367,9 +374,9 @@ if (dashboardPage) {
             const nameEl = card.querySelector('[data-device-name]');
             if (nameEl) nameEl.textContent = device.name || '';
             const cp = card.querySelector('[data-device-current-power]');
-            if (cp) cp.textContent = `${device.current_power_kw ?? '—'} кВт`;
-            const me = card.querySelector('[data-device-month-energy]');
-            if (me) me.textContent = `${device.month_energy_kwh ?? '—'} кВт·ч / мес`;
+            if (cp) cp.textContent = `${fmtWatts(device.current_power_kw)} Вт`;
+            const de = card.querySelector('[data-device-day-energy]');
+            if (de) de.textContent = `${fmtWh(device.day_energy_kwh)} Вт·ч / день`;
             const ls = card.querySelector('[data-device-last-seen]');
             if (ls) {
                 ls.textContent = device.last_seen || 'Пока нет данных';

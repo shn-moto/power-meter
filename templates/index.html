@@ -226,8 +226,8 @@
                         <h3 data-device-name>{{ device.name }}</h3>
                     </div>
                     <div class="generator-card-meta">
-<div class="generator-current-power" data-device-current-power>{{ (device.current_power_kw * 1000)|round(0) if device.current_power_kw is defined and device.current_power_kw is not none else '—' }} Вт</div>
-<div class="generator-month-energy" data-device-month-energy>{{ (device.month_energy_kwh * 1000)|round(0) }} Вт·ч / день</div>
+                        <div class="generator-current-power" data-device-current-power>{{ (device.current_power_kw * 1000)|round(0) if device.current_power_kw is defined and device.current_power_kw is not none else '—' }} Вт</div>
+                        <div class="generator-month-energy" data-device-day-energy>{{ (device.day_energy_kwh * 1000)|round(0) if device.day_energy_kwh is defined and device.day_energy_kwh is not none else 0 }} Вт·ч / день</div>
                         <div class="reading-status is-{{ device.last_seen_status }}" data-device-last-seen>{{ device.last_seen or 'Пока нет данных' }}</div>
                     </div>
                 </div>
@@ -260,14 +260,14 @@
                 </div>
                 <dl class="device-metrics">
                     {% if device.current_power_kw is defined and device.current_power_kw is not none %}
-<div>
-    <dt>Текущая мощность</dt>
-    <dd data-device-current-power>{{ (device.current_power_kw * 1000)|round(0) }} Вт</dd>
-</div>
-<div>
-    <dt>Энергия за день</dt>
-    <dd data-device-month-energy>{{ (device.month_energy_kwh * 1000)|round(0) }} Вт·ч</dd>
-</div>
+                    <div>
+                        <dt>Текущая мощность</dt>
+                        <dd data-device-current-power>{{ (device.current_power_kw * 1000)|round(0) }} Вт</dd>
+                    </div>
+                    <div>
+                        <dt>Энергия за день</dt>
+                        <dd data-device-day-energy>{{ (device.day_energy_kwh * 1000)|round(0) if device.day_energy_kwh is defined and device.day_energy_kwh is not none else 0 }} Вт·ч</dd>
+                    </div>
                     {% endif %}
                     <div>
                         <dt>Энергия за месяц</dt>

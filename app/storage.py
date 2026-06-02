@@ -1971,6 +1971,16 @@ def get_dashboard_summary(
                 "day",
                 energy_counter_meta,
             )
+            today_local_date = now.astimezone(_get_timezone(config)).date()
+            today_rows = [
+                row for row in bucket_rows
+                if (
+                    (_parse_dt(row["bucket"]) if not isinstance(row["bucket"], datetime) else row["bucket"])
+                    .astimezone(_get_timezone(config))
+                    .date()
+                ) == today_local_date
+            ]
+            day_energy_wh = _aggregate_energy_wh(today_rows, "day", energy_counter_meta)
             is_generator = bool(device.get("is_generator"))
             if is_generator:
                 generated_energy_wh += device_energy_wh
@@ -1980,6 +1990,7 @@ def get_dashboard_summary(
                 **base_entry,
                 "is_generator": is_generator,
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
+                "day_energy_kwh": round(day_energy_wh / 1000.0, 3),
             }
             if energy_counter_meta is None:
                 current_power_w = (
