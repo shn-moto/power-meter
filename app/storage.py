@@ -308,7 +308,9 @@ def upsert_managed_device(
                     is_charger = EXCLUDED.is_charger,
                     is_gateway = EXCLUDED.is_gateway,
                     is_generator = EXCLUDED.is_generator,
-                    is_solar_consumer = EXCLUDED.is_solar_consumer,
+                    -- is_solar_consumer is intentionally NOT updated here:
+                    -- it's user-toggleable from the dashboard checkbox, and
+                    -- the value in the profile is only the initial seed.
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -959,6 +961,7 @@ def get_device_rows(config: AppConfig) -> list[dict[str, Any]]:
             cursor.execute(
                 """
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
+                        d.is_solar_consumer,
                         d.product_name, d.category_code, d.device_id,
                         d.total_power_dps_key, d.visualized_codes, d.power_type,
                        COALESCE(c.ip_address, '') AS ip_address,
@@ -1384,6 +1387,20 @@ def get_solar_consumers_power_trace(
         }
         for ts in timeline
     ]
+
+
+def set_device_solar_consumer(config: AppConfig, device_id: str, enabled: bool) -> bool:
+    """Toggle the is_solar_consumer flag from the UI. Returns True if the
+    row existed and was updated."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE devices SET is_solar_consumer = %s, updated_at = NOW() WHERE device_id = %s",
+                (bool(enabled), device_id),
+            )
+            updated = cursor.rowcount > 0
+        connection.commit()
+    return updated
 
 
 def get_recent_raw_dps_samples(config: AppConfig, device_id: str, limit: int = 12) -> list[dict[str, Any]]:
@@ -1849,6 +1866,7 @@ def _get_dashboard_summary_context(
             cursor.execute(
                 """
                 SELECT d.name, d.room, d.device_kind, d.is_energy_meter, d.is_charger, d.is_generator,
+                    d.is_solar_consumer,
                     d.product_name, d.category_code, d.device_id,
                       d.power_type,
                        COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
@@ -1989,6 +2007,7 @@ def get_dashboard_summary(
             device_entry: dict[str, Any] = {
                 **base_entry,
                 "is_generator": is_generator,
+                "is_solar_consumer": bool(device.get("is_solar_consumer")),
                 "month_energy_kwh": round(device_energy_wh / 1000.0, 3),
                 "day_energy_kwh": round(day_energy_wh / 1000.0, 3),
             }

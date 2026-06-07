@@ -257,6 +257,36 @@ p {
     margin-left: auto;
 }
 
+.device-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.solar-consumer-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--muted);
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+.solar-consumer-toggle input[type="checkbox"] {
+    accent-color: #e8a838;
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+.solar-consumer-toggle input[type="checkbox"]:checked + span {
+    color: #ffce5a;
+    text-shadow: 0 0 8px rgba(232, 168, 56, 0.4);
+}
+
 .generator-card {
     border-color: rgba(232, 168, 56, 0.34);
     display: grid;

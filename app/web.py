@@ -50,6 +50,7 @@ from app.storage import (
     get_recent_raw_dps_samples,
     get_recent_power_trace,
     get_solar_consumers_power_trace,
+    set_device_solar_consumer,
     get_device_stats,
     get_latest_sample,
     get_sample_age_seconds,
@@ -185,6 +186,10 @@ class DeviceSummaryConfigPayload(BaseModel):
 
 class DeviceFunctionPayload(BaseModel):
     value: Any
+
+
+class SolarConsumerTogglePayload(BaseModel):
+    enabled: bool
 
 
 def _hash_password(password: str) -> str:
@@ -1250,6 +1255,7 @@ def _build_dashboard_live_payload(request: Request, config: AppConfig) -> dict[s
                     current_power_w = 0.0
             is_generator = bool(device.get("is_generator"))
             entry["is_generator"] = is_generator
+            entry["is_solar_consumer"] = bool(device.get("is_solar_consumer"))
             entry["current_power_kw"] = round(float(current_power_w or 0.0) / 1000.0, 3)
             if is_generator:
                 total_power_w -= float(current_power_w or 0.0)
@@ -2352,6 +2358,24 @@ def sensor_device_api(request: Request, device_id: str) -> JSONResponse:
         request.app.state.live_samples.get(device_id),
     )
     return JSONResponse(jsonable_encoder(payload))
+
+
+@app.post("/api/devices/{device_id}/solar-consumer")
+def device_solar_consumer_api(request: Request, device_id: str, payload: SolarConsumerTogglePayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    if not device.get("is_energy_meter"):
+        raise HTTPException(status_code=400, detail="Только устройства учёта энергии могут быть помечены как потребитель солнца")
+    updated = set_device_solar_consumer(config, device_id, payload.enabled)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    refreshed = get_device_row(config, device_id)
+    if refreshed:
+        request.app.state.device_rows_by_id[device_id] = refreshed
+    _invalidate_aggregate_cache(request, device_id=device_id)
+    return JSONResponse({"status": "ok", "is_solar_consumer": bool(payload.enabled)})
 
 
 @app.post("/api/devices/{device_id}/functions/{function_code}")

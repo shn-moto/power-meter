@@ -37,6 +37,33 @@ if (dashboardPage) {
     const fmtWatts = (kw) => (kw === undefined || kw === null) ? '—' : Math.round(Number(kw) * 1000);
     const fmtWh = (kwh) => Math.round(Number(kwh || 0) * 1000);
 
+    deviceGrid?.addEventListener('change', async (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || !input.matches('[data-solar-consumer-toggle]')) {
+            return;
+        }
+        const card = input.closest('[data-device-card]');
+        const deviceId = card?.dataset.deviceId;
+        if (!deviceId) return;
+        const next = input.checked;
+        input.disabled = true;
+        try {
+            const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/solar-consumer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: next }),
+            });
+            if (!response.ok) {
+                throw new Error((await response.json().catch(() => ({}))).detail || 'Не удалось обновить');
+            }
+        } catch (err) {
+            input.checked = !next;
+            window.alert(err.message);
+        } finally {
+            input.disabled = false;
+        }
+    });
+
     const renderCardMarkup = (device) => {
         const currentPowerRow = (device.current_power_kw !== undefined && device.current_power_kw !== null)
             ? `<div>
@@ -53,9 +80,15 @@ if (dashboardPage) {
             ${renderDeviceMedia(device)}
         </a>
         <div class="device-card-body">
-            <div>
-                <p class="device-room" data-device-room>${escapeHtml(device.room)}</p>
-                <h3 data-device-name>${escapeHtml(device.name)}</h3>
+            <div class="device-card-head">
+                <div>
+                    <p class="device-room" data-device-room>${escapeHtml(device.room)}</p>
+                    <h3 data-device-name>${escapeHtml(device.name)}</h3>
+                </div>
+                <label class="solar-consumer-toggle" title="Потребляет солнечную энергию">
+                    <input type="checkbox" data-solar-consumer-toggle${device.is_solar_consumer ? ' checked' : ''}>
+                    <span>☀</span>
+                </label>
             </div>
             <dl class="device-metrics">
                 ${currentPowerRow}

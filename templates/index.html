@@ -254,9 +254,15 @@
                 {% endif %}
             </a>
             <div class="device-card-body">
-                <div>
-                    <p class="device-room" data-device-room>{{ device.room }}</p>
-                    <h3 data-device-name>{{ device.name }}</h3>
+                <div class="device-card-head">
+                    <div>
+                        <p class="device-room" data-device-room>{{ device.room }}</p>
+                        <h3 data-device-name>{{ device.name }}</h3>
+                    </div>
+                    <label class="solar-consumer-toggle" title="Потребляет солнечную энергию">
+                        <input type="checkbox" data-solar-consumer-toggle {% if device.is_solar_consumer %}checked{% endif %}>
+                        <span>☀</span>
+                    </label>
                 </div>
                 <dl class="device-metrics">
                     {% if device.current_power_kw is defined and device.current_power_kw is not none %}
