@@ -58,6 +58,52 @@ if (page) {
         year: 'numeric',
     });
 
+    // Snapshot of the user's current zoom on the day/period chart, so a
+    // periodic re-render with setOption(notMerge=true) doesn't blow away
+    // their selection every few seconds.
+    const captureZoom = () => {
+        if (!chartInstance) return null;
+        try {
+            const opt = chartInstance.getOption();
+            const zooms = Array.isArray(opt?.dataZoom) ? opt.dataZoom : [];
+            const captured = zooms.map((dz) => ({
+                start: typeof dz.start === 'number' ? dz.start : null,
+                end: typeof dz.end === 'number' ? dz.end : null,
+                startValue: dz.startValue ?? null,
+                endValue: dz.endValue ?? null,
+            }));
+            // If everything is at the default 0..100 range, there's nothing to
+            // restore — treat as "no user zoom" so we don't fight subsequent
+            // resets.
+            const userTouched = captured.some((c) => (
+                (c.start !== null && c.start > 0)
+                || (c.end !== null && c.end < 100)
+                || c.startValue !== null
+                || c.endValue !== null
+            ));
+            return userTouched ? captured : null;
+        } catch (_) {
+            return null;
+        }
+    };
+
+    const restoreZoom = (captured) => {
+        if (!chartInstance || !captured || !captured.length) return;
+        captured.forEach((dz, idx) => {
+            const action = { type: 'dataZoom', dataZoomIndex: idx };
+            if (dz.startValue !== null && dz.endValue !== null) {
+                action.startValue = dz.startValue;
+                action.endValue = dz.endValue;
+            } else if (dz.start !== null && dz.end !== null) {
+                action.start = dz.start;
+                action.end = dz.end;
+            } else {
+                return;
+            }
+            try { chartInstance.dispatchAction(action); } catch (_) {}
+        });
+    };
+
     const formatValue = (value, suffix = '') => {
         if (value === null || value === undefined || Number.isNaN(value)) {
             return '--';
@@ -562,6 +608,7 @@ if (page) {
         };
         const genSorted = [...points].sort((a, b) => a[0] - b[0]);
         const consAbsSorted = consPoints.map(([ts, v]) => [ts, Math.abs(v)]).sort((a, b) => a[0] - b[0]);
+        const savedZoom = captureZoom();
         chartInstance?.setOption({
             animation: false,
             grid: { left: 60, right: 20, top: 18, bottom: 56 },
@@ -671,6 +718,7 @@ if (page) {
                     },
                 }],
         }, true);
+        restoreZoom(savedZoom);
         renderChargerSessions(sessions);
     };
 
@@ -718,6 +766,7 @@ if (page) {
             { offset: 0, color: '#7fd0ff' },
             { offset: 1, color: '#2d78b5' },
         ]);
+        const savedZoomBar = captureZoom();
         chartInstance?.setOption({
             animation: false,
             grid: {
@@ -869,6 +918,7 @@ if (page) {
                 },
             ],
         }, true);
+        restoreZoom(savedZoomBar);
     };
 
     const loadCurrentPeriod = () => {
