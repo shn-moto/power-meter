@@ -37,6 +37,27 @@ if (dashboardPage) {
     const fmtWatts = (kw) => (kw === undefined || kw === null) ? '—' : Math.round(Number(kw) * 1000);
     const fmtWh = (kwh) => Math.round(Number(kwh || 0) * 1000);
 
+    const postSolarConsumer = async (deviceId, enabled) => {
+        const url = `/api/devices/${encodeURIComponent(deviceId)}/solar-consumer`;
+        const body = JSON.stringify({ enabled });
+        const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, cache: 'no-store' };
+        let lastError;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                const response = await fetch(url, opts);
+                if (response.ok) return response;
+                const detail = (await response.json().catch(() => ({}))).detail || `HTTP ${response.status}`;
+                throw new Error(detail);
+            } catch (err) {
+                lastError = err;
+                if (attempt === 0) {
+                    await new Promise((r) => setTimeout(r, 350));
+                }
+            }
+        }
+        throw lastError;
+    };
+
     deviceGrid?.addEventListener('change', async (event) => {
         const input = event.target;
         if (!(input instanceof HTMLInputElement) || !input.matches('[data-solar-consumer-toggle]')) {
@@ -48,17 +69,10 @@ if (dashboardPage) {
         const next = input.checked;
         input.disabled = true;
         try {
-            const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/solar-consumer`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: next }),
-            });
-            if (!response.ok) {
-                throw new Error((await response.json().catch(() => ({}))).detail || 'Не удалось обновить');
-            }
+            await postSolarConsumer(deviceId, next);
         } catch (err) {
             input.checked = !next;
-            window.alert(err.message);
+            window.alert(`Не удалось обновить ☀: ${err.message || err}`);
         } finally {
             input.disabled = false;
         }
