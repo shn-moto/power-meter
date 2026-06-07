@@ -142,6 +142,7 @@ UNIT_LABELS = {
 
 FUNCTION_LABELS = {
     "switch": ("Питание", "Включение и выключение устройства"),
+    "switch_1": ("Питание", "Включение и выключение устройства"),
     "countdown_1": ("Таймер", "Отложенное отключение по таймеру"),
     "bright_value": ("Яркость", "Регулировка яркости"),
     "temp_value": ("Цветовая температура", "Настройка теплоты света"),
@@ -153,6 +154,7 @@ FUNCTION_LABELS = {
 
 SUPPORTED_CONTROL_TYPES = {
     "switch": "toggle",
+    "switch_1": "toggle",
     "switch_led": "toggle",
     "countdown_1": "timer",
     "work_mode": "enum",
