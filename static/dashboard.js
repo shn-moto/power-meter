@@ -58,6 +58,27 @@ if (dashboardPage) {
         throw lastError;
     };
 
+    // Devices the user toggled but for which the server-side state hasn't
+    // propagated through the next poll yet. Stops the 1-second refresh from
+    // briefly flicking the checkbox back to the stale value.
+    const pendingSolarToggles = new Map(); // deviceId -> {expected: bool, releaseAt: ms}
+    const PENDING_TOGGLE_LOCK_MS = 4000;
+
+    const enforcePendingSolarToggles = () => {
+        const now = Date.now();
+        pendingSolarToggles.forEach((entry, deviceId) => {
+            if (entry.releaseAt < now) {
+                pendingSolarToggles.delete(deviceId);
+                return;
+            }
+            const card = deviceGrid?.querySelector(`[data-device-card][data-device-id="${CSS.escape(deviceId)}"]`);
+            const cb = card?.querySelector('[data-solar-consumer-toggle]');
+            if (cb && cb.checked !== entry.expected) {
+                cb.checked = entry.expected;
+            }
+        });
+    };
+
     deviceGrid?.addEventListener('change', async (event) => {
         const input = event.target;
         if (!(input instanceof HTMLInputElement) || !input.matches('[data-solar-consumer-toggle]')) {
@@ -67,10 +88,15 @@ if (dashboardPage) {
         const deviceId = card?.dataset.deviceId;
         if (!deviceId) return;
         const next = input.checked;
+        pendingSolarToggles.set(deviceId, { expected: next, releaseAt: Date.now() + PENDING_TOGGLE_LOCK_MS });
         input.disabled = true;
         try {
             await postSolarConsumer(deviceId, next);
+            // Server confirmed; let the next poll converge but keep a short
+            // lock so we don't blink during the cache-warmup window.
+            pendingSolarToggles.set(deviceId, { expected: next, releaseAt: Date.now() + 1500 });
         } catch (err) {
+            pendingSolarToggles.delete(deviceId);
             input.checked = !next;
             window.alert(`Не удалось обновить ☀: ${err.message || err}`);
         } finally {
@@ -472,6 +498,7 @@ if (dashboardPage) {
         syncDevices(payload.devices || []);
         syncGeneratorDevices(payload.generator_devices || []);
         syncSensorDevices(payload.sensor_devices || []);
+        enforcePendingSolarToggles();
     };
 
     const clearDashboardTimer = () => {

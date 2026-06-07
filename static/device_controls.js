@@ -40,8 +40,17 @@ window.DeviceControls = (() => {
             });
         };
 
+        // Function code -> {expected: any, releaseAt: ms}. Prevents the
+        // periodic sync from flipping a control back to its old value
+        // before the device finishes reporting the new one.
+        const pendingControls = new Map();
+        const PENDING_LOCK_MS = 4000;
+        const PENDING_LOCK_AFTER_OK_MS = 1500;
+
         const runFunction = async (code, value) => {
+            pendingControls.set(code, { expected: value, releaseAt: Date.now() + PENDING_LOCK_MS });
             setBusy(true);
+            let ok = false;
             try {
                 const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/functions/${encodeURIComponent(code)}`, {
                     method: 'POST',
@@ -52,16 +61,31 @@ window.DeviceControls = (() => {
                 if (!response.ok) {
                     throw new Error(payload.detail || 'Не удалось выполнить действие.');
                 }
+                ok = true;
             } catch (error) {
+                pendingControls.delete(code);
                 window.alert(error.message);
             } finally {
                 setBusy(false);
+            }
+            if (ok) {
+                pendingControls.set(code, { expected: value, releaseAt: Date.now() + PENDING_LOCK_AFTER_OK_MS });
             }
             // Fire the post-command refresh in the background so it doesn't
             // gate re-enabling the controls.
             if (typeof onAfterCommand === 'function') {
                 Promise.resolve(onAfterCommand()).catch(() => {});
             }
+        };
+
+        const isPending = (code) => {
+            const entry = pendingControls.get(code);
+            if (!entry) return false;
+            if (entry.releaseAt < Date.now()) {
+                pendingControls.delete(code);
+                return false;
+            }
+            return true;
         };
 
         const render = (items) => {
@@ -188,6 +212,12 @@ window.DeviceControls = (() => {
             items.forEach((item) => {
                 const card = byCode.get(item.code);
                 if (!card) {
+                    return;
+                }
+                // Mid-flight or just-completed user toggle — leave its DOM
+                // alone so the poll's stale snapshot doesn't blink the
+                // control back to the old value.
+                if (isPending(item.code)) {
                     return;
                 }
                 const state = card.querySelector('.device-function-state');
