@@ -1717,6 +1717,16 @@ def _build_device_stats_payload(
             stats["solar_consumers_series"] = get_solar_consumers_power_trace(
                 config, range_start, range_end, bucket_seconds=30, max_points=720,
             )
+
+    # Relabel for generator/charger devices so the chart heading and the
+    # summary energy row read correctly.
+    if bool(device.get("is_generator")):
+        chart_obj = stats.get("chart") or {}
+        chart_obj["label"] = "Генерация"
+        stats["chart"] = chart_obj
+        stats.setdefault("summary", {})["energy_label"] = "Сгенерировано"
+    else:
+        stats.setdefault("summary", {})["energy_label"] = "Потреблено"
     stats = _apply_live_stats(config, stats, live_sample)
     stats["summary"]["latest_raw_dps"] = _hydrate_recent_visualized_dps(
         config,

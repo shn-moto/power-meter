@@ -49,6 +49,16 @@ if (page) {
         sampleCount: '--',
         latestSample: '--',
         latestSampleStatus: 'error',
+        energyKwh: null,
+        energyLabel: null,
+    };
+
+    const periodLabelRu = {
+        day: 'день',
+        week: 'неделю',
+        month: 'месяц',
+        year: 'год',
+        custom: 'период',
     };
 
     const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -462,6 +472,11 @@ if (page) {
             summary.appendChild(createSummaryRow('Поля визуализации', 'Не выбраны'));
         }
 
+        if (summaryState.energyKwh !== null && summaryState.energyKwh !== undefined) {
+            const periodWord = periodLabelRu[currentPeriod] || 'период';
+            const verb = summaryState.energyLabel || 'Энергия';
+            summary.appendChild(createSummaryRow(`${verb} за ${periodWord}`, `${formatNumber(Number(summaryState.energyKwh))} кВт·ч`));
+        }
         summary.appendChild(createSummaryRow('Замеров', String(summaryState.sampleCount ?? '--')));
         summary.appendChild(createSummaryRow('Последний замер', summaryState.latestSample || '--', summaryState.latestSampleStatus));
     };
@@ -492,6 +507,8 @@ if (page) {
     const renderAggregateSummary = (payload) => {
         const fields = payload.summary;
         summaryState.sampleCount = String(fields.sample_count ?? '--');
+        summaryState.energyKwh = (fields.energy_kwh ?? null);
+        summaryState.energyLabel = fields.energy_label || 'Энергия';
         renderSummaryPanel();
     };
 
