@@ -2128,6 +2128,7 @@ def get_device_context_and_stats(
             cursor.execute(
                 """
                 SELECT name, room, device_id, device_kind, is_energy_meter, is_charger,
+                      is_generator,
                       product_name, category_code, product_id, icon,
                       total_power_dps_key, visualized_codes, power_type
                 FROM devices
