@@ -1,0 +1,102 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "bff9e5598e9abd78268oze",
+    "name": "Питон(CW24/CW20)",
+    "room": "Зал",
+    "device_kind": "meter",
+    "is_energy_meter": true,
+    "category_code": "cz",
+    "product_id": "6irqu0m73u9s3yfu",
+    "product_name": "Atorch CW24/CW20"
+  },
+  "connection": {
+    "local_key": "W5Z;$8EWHUpg3x0=",
+    "local_ip": "192.168.1.149",
+    "protocol_version": 3.5,
+    "ip_source": "manual-seed",
+    "last_verified_at": null,
+    "discovery_required": false
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": "19",
+    "default_visualized_codes": [
+      "20",
+      "18",
+      "19"
+    ]
+  },
+  "dps": [
+    {
+      "dp_id": "20",
+      "code": "cur_voltage",
+      "name": "Voltage",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "V",
+      "scale_digits": 2,
+      "step": 1,
+      "min": 0,
+      "max": 100000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Напряжение батареи",
+      "display_order": 10,
+      "poll_priority": 10,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "18",
+      "code": "cur_current",
+      "name": "Current",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "A",
+      "scale_digits": 3,
+      "step": 1,
+      "min": -1200000,
+      "max": 1200000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Ток",
+      "display_order": 20,
+      "poll_priority": 20,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
+    {
+      "dp_id": "19",
+      "code": "cur_power",
+      "name": "Power",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "W",
+      "scale_digits": 2,
+      "step": 1,
+      "min": -50400000,
+      "max": 50400000,
+      "visualization_allowed": true,
+      "power_role": "current",
+      "display_label": "Мощность",
+      "display_order": 30,
+      "poll_priority": 30,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    }
+  ],
+  "controls": []
+}

@@ -3,7 +3,7 @@
   "device": {
     "device_id": "bfc9695cf761b8244cw1xn",
     "name": "72V Charger",
-    "room": "Балкон",
+    "room": "Зал",
     "device_kind": "socket",
     "is_energy_meter": true,
     "is_charger": true,
