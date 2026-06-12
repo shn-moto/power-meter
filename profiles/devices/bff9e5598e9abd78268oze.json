@@ -22,12 +22,36 @@
     "default_power_mode": "current",
     "default_power_dps_key": null,
     "default_visualized_codes": [
+      "103",
       "20",
       "19",
       "18"
     ]
   },
   "dps": [
+    {
+      "dp_id": "103",
+      "code": "state_of_charge",
+      "name": "State of Charge",
+      "access": "ro",
+      "source_group": "status",
+      "value_type": "value",
+      "unit": "%",
+      "scale_digits": 1,
+      "step": 1,
+      "min": 0,
+      "max": 1000,
+      "visualization_allowed": true,
+      "power_role": null,
+      "display_label": "Заряд",
+      "display_order": 5,
+      "poll_priority": 5,
+      "lan": {
+        "read_strategy": "status",
+        "batch_group": null,
+        "required": true
+      }
+    },
     {
       "dp_id": "20",
       "code": "cur_voltage",
