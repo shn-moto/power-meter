@@ -95,19 +95,31 @@ async def scheduler_loop(app: FastAPI) -> None:
         try:
             tz = zoneinfo.ZoneInfo("UTC")
             now = datetime.now(tz)
+            running: set[str] = app.state.automation_running_slugs
             for row in list_automations(config):
                 if not row.get("enabled"):
                     continue
+                slug = row["slug"]
+                if slug in running:
+                    continue  # already in flight (could be hours for charger)
                 next_at = row.get("next_run_at")
                 if next_at is None:
                     update_automation_next_run(
-                        config, row["slug"], _next_fire_time(row["cron_schedule"], now)
+                        config, slug, _next_fire_time(row["cron_schedule"], now)
                     )
                     continue
                 if next_at.tzinfo is None:
                     next_at = next_at.replace(tzinfo=tz)
                 if next_at <= now:
-                    asyncio.create_task(_run_one(app, row["slug"]))
+                    running.add(slug)
+
+                    async def _run_and_release(s=slug):
+                        try:
+                            await _run_one(app, s)
+                        finally:
+                            running.discard(s)
+
+                    asyncio.create_task(_run_and_release())
         except Exception:
             logger.exception("Scheduler iteration failed")
         await asyncio.sleep(30)  # check twice per minute is enough

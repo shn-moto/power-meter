@@ -1840,6 +1840,7 @@ async def lifespan(app: FastAPI):
     app.state.invoke_device_function = lambda device_id, function_code, value: invoke_device_function_via_app(
         app, device_id, function_code, value
     )
+    app.state.automation_running_slugs = set()
     app.state.scheduler = asyncio.create_task(scheduler_loop(app))
     yield
     app.state.poller.cancel()
@@ -2253,29 +2254,28 @@ async def automations_run_api(request: Request, slug: str) -> JSONResponse:
     row = get_automation(config, slug)
     if not row:
         raise HTTPException(status_code=404, detail="Автоматизация не найдена")
-    from app.automations import REGISTRY, AutomationContext
-    cls = REGISTRY.get(slug)
-    if cls is None:
+    from app.automations import REGISTRY
+    if slug not in REGISTRY:
         raise HTTPException(status_code=500, detail="Скрипт не зарегистрирован в коде")
 
-    async def _invoke(device_id: str, function_code: str, value):  # noqa: ANN001
-        return await request.app.state.invoke_device_function(device_id, function_code, value)
+    # Long-running scripts (the charger one polls SoC for hours) shouldn't
+    # block the HTTP request. Kick off in the background through the
+    # scheduler's helper so the result lands in last_run_log via the same
+    # path as cron-triggered runs.
+    running: set[str] = request.app.state.automation_running_slugs
+    if slug in running:
+        raise HTTPException(status_code=409, detail="Скрипт уже выполняется")
+    running.add(slug)
 
-    ctx = AutomationContext(
-        config=config,
-        bound_device_id=row.get("bound_device_id"),
-        config_json=row.get("config_json") or {},
-        invoke_device_function=_invoke,
-    )
-    try:
-        result = await cls().run(ctx)
-    except Exception as exc:
-        LOGGER.exception("Manual run of %s crashed", slug)
-        result = type("Result", (), {"status": "error", "log": f"Crash: {exc}", "details": {}})()
-    from app.scheduler import _next_fire_time
-    next_at = _next_fire_time(row.get("cron_schedule") or "0 2 * * *", datetime.now(timezone.utc))
-    record_automation_run(config, slug, status=result.status, log=result.log, next_run_at=next_at)
-    return JSONResponse({"status": result.status, "log": result.log})
+    from app.scheduler import _run_one
+    async def _run_and_release() -> None:
+        try:
+            await _run_one(request.app, slug)
+        finally:
+            running.discard(slug)
+
+    asyncio.create_task(_run_and_release())
+    return JSONResponse({"status": "started"})
 
 
 @app.get("/connect-device", response_class=HTMLResponse)

@@ -47,7 +47,7 @@
                 </td>
                 <td>
                     {% if a.last_run_at %}{{ a.last_run_at.strftime('%d.%m %H:%M') }}{% else %}—{% endif %}
-                    <p class="hero-copy">{{ a.last_run_log or '' }}</p>
+                    {% if a.last_run_log %}<pre class="automations-log">{{ a.last_run_log }}</pre>{% endif %}
                 </td>
                 <td>
                     {% if a.last_run_status %}<span class="reading-status is-{{ 'ok' if a.last_run_status == 'ok' else 'error' }}">{{ a.last_run_status }}</span>{% else %}—{% endif %}

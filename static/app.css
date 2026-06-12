@@ -523,6 +523,16 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     color: var(--accent);
 }
 
+.automations-log {
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    margin: 6px 0 0;
+    max-width: 380px;
+    font-family: inherit;
+}
+
 body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
 body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
 body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]) {

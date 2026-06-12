@@ -48,11 +48,18 @@ if (page) {
             target.disabled = true;
             try {
                 const result = await post(`/api/automations/${encodeURIComponent(slug)}/run`, {});
-                window.alert(`${result.status}: ${result.log || '(нет лога)'}`);
-                window.location.reload();
+                if (result.status === 'started') {
+                    target.textContent = 'Выполняется…';
+                    // Reload after a short delay so the user sees the
+                    // last_run_at/status update once the script finishes.
+                    // For multi-hour runs you'd need to refresh manually.
+                    setTimeout(() => window.location.reload(), 4000);
+                } else {
+                    window.alert(`${result.status}: ${result.log || '(нет лога)'}`);
+                    window.location.reload();
+                }
             } catch (err) {
                 window.alert(err.message);
-            } finally {
                 target.disabled = false;
             }
         }
