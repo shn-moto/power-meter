@@ -987,41 +987,62 @@ def _device_lan_lock(app: FastAPI, device_id: str) -> asyncio.Lock:
 async def _poll_loop(app: FastAPI) -> None:
     config: AppConfig = app.state.app_config
 
+    async def poll_one(device: TuyaDeviceConfig) -> None:
+        try:
+            thread_lock = _device_lan_thread_lock(app, device.device_id)
+
+            def _locked_build_sample(d=device, lock=thread_lock):
+                with lock:
+                    return build_sample(d)
+
+            async with _device_lan_lock(app, device.device_id):
+                captured_at, power_w, raw_dps = await asyncio.to_thread(_locked_build_sample)
+            sample = DeviceSample(
+                device_id=device.device_id,
+                captured_at=captured_at,
+                power_w=power_w,
+                raw_dps=raw_dps,
+            )
+            app.state.live_samples[device.device_id] = sample
+            if has_trick678_request_mode(device):
+                app.state.raw_dps_latest[device.device_id] = RawDpsSnapshot(
+                    raw_dps=dict(raw_dps),
+                    captured_at=captured_at,
+                )
+
+            last_saved_at = app.state.last_saved_at.get(device.device_id)
+            should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
+            if should_save:
+                await asyncio.to_thread(save_sample, config, sample)
+                app.state.last_saved_at[device.device_id] = captured_at
+        except Exception:
+            LOGGER.exception("Polling device %s failed", device.device_id)
+
+    async def poll_group(group: list[TuyaDeviceConfig]) -> None:
+        # Devices that share the same LAN endpoint (a Wi-Fi IP or a Zigbee
+        # gateway) must talk to it one at a time — the breaker / gateway
+        # refuses overlapping TCP sessions. Within a group we keep the
+        # original sequential walk.
+        for device in group:
+            await poll_one(device)
+
     while True:
         started_at = monotonic()
         try:
             devices = await asyncio.to_thread(get_polling_devices, config)
+
+            # Bucket by LAN endpoint: gateway for sub-devices, ip for direct
+            # devices. Independent endpoints get polled in parallel.
+            groups: dict[str, list[TuyaDeviceConfig]] = {}
             for device in devices:
-                try:
-                    thread_lock = _device_lan_thread_lock(app, device.device_id)
+                key = device.gateway_device_id or device.ip_address or device.device_id
+                groups.setdefault(key, []).append(device)
 
-                    def _locked_build_sample(d=device, lock=thread_lock):
-                        with lock:
-                            return build_sample(d)
-
-                    async with _device_lan_lock(app, device.device_id):
-                        captured_at, power_w, raw_dps = await asyncio.to_thread(_locked_build_sample)
-                    sample = DeviceSample(
-                        device_id=device.device_id,
-                        captured_at=captured_at,
-                        power_w=power_w,
-                        raw_dps=raw_dps,
-                    )
-                    app.state.live_samples[device.device_id] = sample
-                    if has_trick678_request_mode(device):
-                        app.state.raw_dps_latest[device.device_id] = RawDpsSnapshot(
-                            raw_dps=dict(raw_dps),
-                            captured_at=captured_at,
-                        )
-
-                    last_saved_at = app.state.last_saved_at.get(device.device_id)
-                    should_save = last_saved_at is None or (captured_at - last_saved_at).total_seconds() >= config.sample_write_interval_seconds
-                    if should_save:
-                        await asyncio.to_thread(save_sample, config, sample)
-                        app.state.last_saved_at[device.device_id] = captured_at
-                except Exception:
-                    LOGGER.exception("Polling device %s failed", device.device_id)
-                    continue
+            if groups:
+                await asyncio.gather(
+                    *(poll_group(g) for g in groups.values()),
+                    return_exceptions=True,
+                )
         except Exception:
             LOGGER.exception("Polling loop iteration failed")
 
@@ -1760,6 +1781,15 @@ def _build_device_stats_payload(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # asyncio.to_thread defaults to min(32, cpu+4) workers — on a small
+    # container that's usually 5. The poll loop fans out across all
+    # LAN endpoints concurrently and each poll spends most of its time
+    # waiting on a socket, so a bigger pool keeps groups from queueing
+    # behind unrelated work (DB writes, on-demand fetches).
+    import concurrent.futures
+    asyncio.get_running_loop().set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="hpm")
+    )
     app.state.app_config = load_app_config()
     app.state.live_samples = {}
     app.state.live_visualized_cache = {}
