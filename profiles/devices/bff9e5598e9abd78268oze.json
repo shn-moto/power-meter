@@ -4,8 +4,8 @@
     "device_id": "bff9e5598e9abd78268oze",
     "name": "Питон(CW24/CW20)",
     "room": "Зал",
-    "device_kind": "meter",
-    "is_energy_meter": true,
+    "device_kind": "sensor",
+    "is_energy_meter": false,
     "category_code": "cz",
     "product_id": "6irqu0m73u9s3yfu",
     "product_name": "Atorch CW24/CW20"
@@ -20,11 +20,11 @@
   },
   "summary": {
     "default_power_mode": "current",
-    "default_power_dps_key": "19",
+    "default_power_dps_key": null,
     "default_visualized_codes": [
       "20",
-      "18",
-      "19"
+      "19",
+      "18"
     ]
   },
   "dps": [
