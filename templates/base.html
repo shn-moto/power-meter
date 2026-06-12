@@ -13,6 +13,7 @@
             <nav class="topbar-nav">
                 {% if request.state.current_user or request.state.is_local_request %}
                 {% if request.url.path == '/' %}
+                <a class="topbar-link" href="/automations">Автоматизации</a>
                 <a class="topbar-button" href="/connect-device">Подключить устройство</a>
                 {% else %}
                 <a class="topbar-link" href="/">На главный экран</a>

@@ -7,6 +7,7 @@
     "device_kind": "socket",
     "is_energy_meter": true,
     "is_charger": true,
+    "allow_custom_automation": true,
     "category_code": "cz",
     "product_id": "vSu2uIvNamkj9gdG",
     "product_name": "16A Estimate Socket"

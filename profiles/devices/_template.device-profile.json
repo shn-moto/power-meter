@@ -9,6 +9,7 @@
     "is_charger": false,
     "is_generator": false,
     "is_solar_consumer": false,
+    "allow_custom_automation": false,
     "category_code": "",
     "product_id": "",
     "product_name": ""

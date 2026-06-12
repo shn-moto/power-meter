@@ -51,6 +51,14 @@ from app.storage import (
     get_recent_power_trace,
     get_solar_consumers_power_trace,
     set_device_solar_consumer,
+    list_automations,
+    get_automation,
+    get_automation_candidates,
+    set_automation_bound_device,
+    set_automation_enabled,
+    set_automation_cron,
+    record_automation_run,
+    update_automation_next_run,
     get_device_stats,
     get_latest_sample,
     get_sample_age_seconds,
@@ -179,6 +187,18 @@ ENUM_OPTION_LABELS = {
 
 class ConnectDevicePayload(BaseModel):
     device_id: str
+
+
+class AutomationBindPayload(BaseModel):
+    device_id: str | None = None
+
+
+class AutomationEnabledPayload(BaseModel):
+    enabled: bool
+
+
+class AutomationCronPayload(BaseModel):
+    cron_schedule: str
 
 
 class DeviceSummaryConfigPayload(BaseModel):
@@ -1815,6 +1835,12 @@ async def lifespan(app: FastAPI):
     # populated directly by the poll loop after each successful build_sample.
     _ = select_listener_devices  # noqa: F841 — kept for future re-introduction
     app.state.poller = asyncio.create_task(_poll_loop(app))
+    # Custom automations scheduler
+    from app.scheduler import scheduler_loop, invoke_device_function_via_app
+    app.state.invoke_device_function = lambda device_id, function_code, value: invoke_device_function_via_app(
+        app, device_id, function_code, value
+    )
+    app.state.scheduler = asyncio.create_task(scheduler_loop(app))
     yield
     app.state.poller.cancel()
     with suppress(asyncio.CancelledError):
@@ -2161,6 +2187,95 @@ def device_details(request: Request, device_id: str) -> HTMLResponse:
             "page_title": f"{device['name']} - детали",
         },
     )
+
+
+@app.get("/automations", response_class=HTMLResponse)
+def automations_page(request: Request) -> HTMLResponse:
+    config: AppConfig = request.app.state.app_config
+    automations = list_automations(config)
+    candidates_by_type: dict[str, list[dict[str, Any]]] = {}
+    for a in automations:
+        device_type = str(a.get("device_type") or "any")
+        if device_type not in candidates_by_type:
+            candidates_by_type[device_type] = get_automation_candidates(config, device_type)
+    return templates.TemplateResponse(
+        request=request,
+        name="automations.html",
+        context={
+            "page_title": "Автоматизации",
+            "automations": automations,
+            "candidates_by_type": candidates_by_type,
+        },
+    )
+
+
+@app.get("/api/automations")
+def automations_list_api(request: Request) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    return JSONResponse(jsonable_encoder({"automations": list_automations(config)}))
+
+
+@app.post("/api/automations/{slug}/bind")
+def automations_bind_api(request: Request, slug: str, payload: AutomationBindPayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    if not get_automation(config, slug):
+        raise HTTPException(status_code=404, detail="Автоматизация не найдена")
+    set_automation_bound_device(config, slug, payload.device_id)
+    return JSONResponse({"status": "ok", "bound_device_id": payload.device_id})
+
+
+@app.post("/api/automations/{slug}/enable")
+def automations_enable_api(request: Request, slug: str, payload: AutomationEnabledPayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    if not get_automation(config, slug):
+        raise HTTPException(status_code=404, detail="Автоматизация не найдена")
+    set_automation_enabled(config, slug, payload.enabled)
+    return JSONResponse({"status": "ok", "enabled": payload.enabled})
+
+
+@app.post("/api/automations/{slug}/cron")
+def automations_cron_api(request: Request, slug: str, payload: AutomationCronPayload) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    if not get_automation(config, slug):
+        raise HTTPException(status_code=404, detail="Автоматизация не найдена")
+    try:
+        from croniter import croniter as _croniter
+        _croniter(payload.cron_schedule, datetime.now(timezone.utc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Невалидный cron: {exc}")
+    set_automation_cron(config, slug, payload.cron_schedule)
+    return JSONResponse({"status": "ok", "cron_schedule": payload.cron_schedule})
+
+
+@app.post("/api/automations/{slug}/run")
+async def automations_run_api(request: Request, slug: str) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    row = get_automation(config, slug)
+    if not row:
+        raise HTTPException(status_code=404, detail="Автоматизация не найдена")
+    from app.automations import REGISTRY, AutomationContext
+    cls = REGISTRY.get(slug)
+    if cls is None:
+        raise HTTPException(status_code=500, detail="Скрипт не зарегистрирован в коде")
+
+    async def _invoke(device_id: str, function_code: str, value):  # noqa: ANN001
+        return await request.app.state.invoke_device_function(device_id, function_code, value)
+
+    ctx = AutomationContext(
+        config=config,
+        bound_device_id=row.get("bound_device_id"),
+        config_json=row.get("config_json") or {},
+        invoke_device_function=_invoke,
+    )
+    try:
+        result = await cls().run(ctx)
+    except Exception as exc:
+        LOGGER.exception("Manual run of %s crashed", slug)
+        result = type("Result", (), {"status": "error", "log": f"Crash: {exc}", "details": {}})()
+    from app.scheduler import _next_fire_time
+    next_at = _next_fire_time(row.get("cron_schedule") or "0 2 * * *", datetime.now(timezone.utc))
+    record_automation_run(config, slug, status=result.status, log=result.log, next_run_at=next_at)
+    return JSONResponse({"status": result.status, "log": result.log})
 
 
 @app.get("/connect-device", response_class=HTMLResponse)

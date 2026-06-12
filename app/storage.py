@@ -270,6 +270,7 @@ def upsert_managed_device(
     is_charger: bool,
     is_generator: bool,
     is_solar_consumer: bool,
+    allow_custom_automation: bool,
     product_id: str | None,
     product_name: str | None,
     icon: str | None,
@@ -292,9 +293,10 @@ def upsert_managed_device(
                 """
                 INSERT INTO devices (
                     name, room, device_id, category_code, device_kind,
-                    is_energy_meter, is_charger, is_gateway, is_generator, is_solar_consumer, product_id, product_name, icon, onboarding_source, updated_at,
+                    is_energy_meter, is_charger, is_gateway, is_generator, is_solar_consumer, allow_custom_automation,
+                    product_id, product_name, icon, onboarding_source, updated_at,
                     total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -311,6 +313,7 @@ def upsert_managed_device(
                     -- is_solar_consumer is intentionally NOT updated here:
                     -- it's user-toggleable from the dashboard checkbox, and
                     -- the value in the profile is only the initial seed.
+                    allow_custom_automation = EXCLUDED.allow_custom_automation,
                     product_id = EXCLUDED.product_id,
                     product_name = EXCLUDED.product_name,
                     icon = EXCLUDED.icon,
@@ -332,6 +335,7 @@ def upsert_managed_device(
                     is_gateway,
                     is_generator,
                     is_solar_consumer,
+                    allow_custom_automation,
                     product_id,
                     product_name,
                     icon,
@@ -800,6 +804,7 @@ def materialize_device_profile(
         is_charger=bool(device.get("is_charger", False)),
         is_generator=bool(device.get("is_generator", False)),
         is_solar_consumer=bool(device.get("is_solar_consumer", False)),
+        allow_custom_automation=bool(device.get("allow_custom_automation", False)),
         is_gateway=bool(device.get("is_gateway", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
@@ -1387,6 +1392,169 @@ def get_solar_consumers_power_trace(
         }
         for ts in timeline
     ]
+
+
+def list_automations(config: AppConfig) -> list[dict[str, Any]]:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT a.id, a.slug, a.name, a.description, a.device_type,
+                       a.bound_device_id, a.cron_schedule, a.enabled,
+                       a.config_json, a.last_run_at, a.next_run_at,
+                       a.last_run_status, a.last_run_log,
+                       d.name AS bound_device_name
+                FROM automations a
+                LEFT JOIN devices d ON d.device_id = a.bound_device_id
+                ORDER BY a.name ASC
+                """
+            )
+            return cursor.fetchall()
+
+
+def get_automation(config: AppConfig, slug: str) -> dict[str, Any] | None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, slug, name, description, device_type,
+                       bound_device_id, cron_schedule, enabled,
+                       config_json, last_run_at, next_run_at,
+                       last_run_status, last_run_log
+                FROM automations
+                WHERE slug = %s
+                """,
+                (slug,),
+            )
+            return cursor.fetchone()
+
+
+def get_automation_candidates(config: AppConfig, device_type: str) -> list[dict[str, Any]]:
+    """Devices marked allow_custom_automation that match the given type.
+    device_type='charger' matches devices with is_charger=true; 'any' returns
+    every flagged device."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id, name, room, is_charger, is_generator, is_solar_consumer, device_kind
+                FROM devices
+                WHERE allow_custom_automation = TRUE
+                ORDER BY name ASC
+                """
+            )
+            rows = cursor.fetchall()
+    if device_type == "any":
+        return rows
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if device_type == "charger" and row.get("is_charger"):
+            filtered.append(row)
+        elif device_type == "generator" and row.get("is_generator"):
+            filtered.append(row)
+        elif device_type == row.get("device_kind"):
+            filtered.append(row)
+    return filtered
+
+
+def upsert_automation(
+    config: AppConfig,
+    *,
+    slug: str,
+    name: str,
+    description: str,
+    device_type: str,
+    default_cron: str,
+    default_config: dict[str, Any],
+) -> None:
+    """Seed an automation from the registry — only inserts new rows, leaves
+    user choices on existing ones intact."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO automations (slug, name, description, device_type, cron_schedule, config_json)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT(slug) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    device_type = EXCLUDED.device_type,
+                    updated_at = NOW()
+                """,
+                (slug, name, description, device_type, default_cron, Jsonb(default_config)),
+            )
+        connection.commit()
+
+
+def set_automation_bound_device(config: AppConfig, slug: str, device_id: str | None) -> bool:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE automations SET bound_device_id = %s, updated_at = NOW() WHERE slug = %s",
+                (device_id, slug),
+            )
+            updated = cursor.rowcount > 0
+        connection.commit()
+    return updated
+
+
+def set_automation_enabled(config: AppConfig, slug: str, enabled: bool) -> bool:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE automations SET enabled = %s, updated_at = NOW() WHERE slug = %s",
+                (bool(enabled), slug),
+            )
+            updated = cursor.rowcount > 0
+        connection.commit()
+    return updated
+
+
+def set_automation_cron(config: AppConfig, slug: str, cron_schedule: str) -> bool:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE automations SET cron_schedule = %s, updated_at = NOW() WHERE slug = %s",
+                (cron_schedule, slug),
+            )
+            updated = cursor.rowcount > 0
+        connection.commit()
+    return updated
+
+
+def record_automation_run(
+    config: AppConfig,
+    slug: str,
+    *,
+    status: str,
+    log: str,
+    next_run_at: datetime | None,
+) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE automations
+                SET last_run_at = NOW(),
+                    last_run_status = %s,
+                    last_run_log = %s,
+                    next_run_at = %s,
+                    updated_at = NOW()
+                WHERE slug = %s
+                """,
+                (status, log, next_run_at, slug),
+            )
+        connection.commit()
+
+
+def update_automation_next_run(config: AppConfig, slug: str, next_run_at: datetime | None) -> None:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE automations SET next_run_at = %s WHERE slug = %s",
+                (next_run_at, slug),
+            )
+        connection.commit()
 
 
 def set_device_solar_consumer(config: AppConfig, device_id: str, enabled: bool) -> bool:

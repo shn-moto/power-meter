@@ -466,6 +466,63 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
 .stat-sub.is-positive { color: #8edb95; }
 .stat-sub.is-negative { color: #f08c8c; }
 
+.automations-page {
+    padding: 18px 20px;
+}
+
+.automations-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+}
+
+.automations-table th,
+.automations-table td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+}
+
+.automations-table th {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.automations-table select,
+.automations-table input[type="text"] {
+    background: var(--surface-strong);
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 6px 10px;
+    font: inherit;
+    border-radius: 0;
+}
+
+.automations-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.automations-actions button {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 6px 12px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.automations-actions button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
 body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
 body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]) {

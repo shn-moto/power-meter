@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="detail-card automations-page" data-automations-page>
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Скрипты</p>
+            <h2>Автоматизации</h2>
+        </div>
+    </div>
+
+    {% if not automations %}
+    <p class="device-functions-empty">Зарегистрированных автоматизаций пока нет.</p>
+    {% else %}
+    <table class="automations-table">
+        <thead>
+            <tr>
+                <th>Скрипт</th>
+                <th>Тип</th>
+                <th>Привязка</th>
+                <th>Cron</th>
+                <th>Last run</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in automations %}
+            <tr data-automation-row data-slug="{{ a.slug }}">
+                <td>
+                    <strong>{{ a.name }}</strong>
+                    <p class="hero-copy">{{ a.description }}</p>
+                </td>
+                <td>{{ a.device_type }}</td>
+                <td>
+                    <select data-automation-bind>
+                        <option value="">— не выбрано —</option>
+                        {% for c in candidates_by_type[a.device_type] %}
+                        <option value="{{ c.device_id }}" {% if c.device_id == a.bound_device_id %}selected{% endif %}>
+                            {{ c.name }}{% if c.room %} ({{ c.room }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </td>
+                <td>
+                    <input type="text" data-automation-cron value="{{ a.cron_schedule }}" size="14">
+                </td>
+                <td>
+                    {% if a.last_run_at %}{{ a.last_run_at.strftime('%d.%m %H:%M') }}{% else %}—{% endif %}
+                    <p class="hero-copy">{{ a.last_run_log or '' }}</p>
+                </td>
+                <td>
+                    {% if a.last_run_status %}<span class="reading-status is-{{ 'ok' if a.last_run_status == 'ok' else 'error' }}">{{ a.last_run_status }}</span>{% else %}—{% endif %}
+                </td>
+                <td class="automations-actions">
+                    <label class="switch-control">
+                        <input type="checkbox" data-automation-enabled {% if a.enabled %}checked{% endif %}>
+                        <span class="switch-slider"></span>
+                        <span class="switch-caption">{{ 'Вкл' if a.enabled else 'Выкл' }}</span>
+                    </label>
+                    <button type="button" data-automation-run>Запустить</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+<script src="/static/automations.js?v={{ static_asset_version }}" defer></script>
+{% endblock %}
