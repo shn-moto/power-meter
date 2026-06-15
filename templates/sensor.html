@@ -51,6 +51,34 @@
         </div>
     </article>
     {% endif %}
+
+    <article class="detail-card sensor-history-card">
+        <div class="chart-toolbar">
+            <h2>История</h2>
+            <fieldset class="period-switcher" data-sensor-period-switcher>
+                <label class="period-option">
+                    <input type="radio" name="sensor-period" value="day" data-sensor-period checked>
+                    <span>День</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="sensor-period" value="week" data-sensor-period>
+                    <span>Неделя</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="sensor-period" value="month" data-sensor-period>
+                    <span>Месяц</span>
+                </label>
+                <label class="period-option">
+                    <input type="radio" name="sensor-period" value="year" data-sensor-period>
+                    <span>Год</span>
+                </label>
+            </fieldset>
+        </div>
+        <div class="chart-frame">
+            <div class="chart-canvas sensor-history-canvas" data-sensor-history-chart></div>
+            <div class="chart-empty" data-sensor-history-empty hidden>За этот период данные пока не собраны.</div>
+        </div>
+    </article>
 </section>
 
 <dialog class="timer-dialog" data-timer-dialog>
@@ -69,6 +97,7 @@
 </dialog>
 
 <script type="application/json" data-initial-sensor>{{ initial_sensor_json | safe }}</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js" defer></script>
 <script src="/static/device_controls.js?v={{ static_asset_version }}" defer></script>
 <script src="/static/sensor.js?v={{ static_asset_version }}" defer></script>
 {% endblock %}

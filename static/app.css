@@ -523,6 +523,28 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     color: var(--accent);
 }
 
+.sensor-history-card {
+    padding: 18px 20px;
+}
+
+.sensor-history-card .chart-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.sensor-history-card .chart-toolbar h2 {
+    margin: 0;
+}
+
+.sensor-history-canvas {
+    width: 100%;
+    height: 360px;
+}
+
 .automations-log {
     color: var(--muted);
     font-size: 0.78rem;

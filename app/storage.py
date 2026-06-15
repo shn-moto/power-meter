@@ -1329,6 +1329,134 @@ def get_recent_power_trace(
     return series
 
 
+def get_sensor_history(
+    config: AppConfig,
+    device_id: str,
+    capabilities: list[dict[str, Any]],
+    visualized_codes: list[str] | tuple[str, ...],
+    start: datetime,
+    end: datetime,
+    max_points: int = 720,
+) -> dict[str, Any]:
+    """Per-DP time series for the sensor page. Each requested code becomes
+    one series; values are averaged into time buckets sized so the result
+    fits inside max_points. Booleans get coerced to 0/1 so the lamp's
+    switch state plots as a step line."""
+    # Map code -> (dp_id, label, unit, scale, value_type)
+    cap_by_code: dict[str, dict[str, Any]] = {}
+    for cap in capabilities:
+        code = str(cap.get("capability_code") or "")
+        dp_id = cap.get("dp_id")
+        if not code or dp_id is None:
+            continue
+        if code in cap_by_code:
+            continue
+        cap_by_code[code] = {
+            "dp_id": str(dp_id),
+            "label": str(cap.get("capability_name") or code),
+            "values_json": cap.get("values_json") or {},
+            "value_type": str(cap.get("value_type") or "").lower(),
+        }
+
+    ordered_codes: list[str] = []
+    for code in visualized_codes:
+        s = str(code)
+        if s in cap_by_code and s not in ordered_codes:
+            ordered_codes.append(s)
+    if not ordered_codes:
+        # Fallback — show every status-side capability.
+        ordered_codes = list(cap_by_code.keys())
+    if not ordered_codes:
+        return {"bucket_seconds": 0, "series": []}
+
+    span_seconds = max(int((end - start).total_seconds()), 1)
+    bucket_seconds = max(span_seconds // max_points, 5)
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT captured_at, raw_dps
+                FROM samples
+                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
+                """,
+                (device_id, start, end),
+            )
+            rows = cursor.fetchall()
+
+    buckets: dict[str, dict[int, tuple[float, int]]] = {code: {} for code in ordered_codes}
+    for row in rows:
+        ts = row.get("captured_at")
+        if not isinstance(ts, datetime):
+            ts = _parse_dt(ts)
+        raw = row.get("raw_dps")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                continue
+        if not isinstance(raw, dict):
+            continue
+        epoch_bucket = (int(ts.timestamp()) // bucket_seconds) * bucket_seconds
+        for code in ordered_codes:
+            dp_id = cap_by_code[code]["dp_id"]
+            value = raw.get(dp_id)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                num = 1.0 if value else 0.0
+            elif isinstance(value, (int, float)):
+                num = float(value)
+            else:
+                try:
+                    num = float(value)
+                except (TypeError, ValueError):
+                    continue
+            agg = buckets[code].get(epoch_bucket)
+            if agg is None:
+                buckets[code][epoch_bucket] = (num, 1)
+            else:
+                buckets[code][epoch_bucket] = (agg[0] + num, agg[1] + 1)
+
+    series: list[dict[str, Any]] = []
+    for code in ordered_codes:
+        meta = cap_by_code[code]
+        values_json = meta["values_json"]
+        scale_digits = 0
+        try:
+            scale_digits = int(values_json.get("scale", 0) or 0)
+        except (TypeError, ValueError):
+            scale_digits = 0
+        divisor = 10 ** scale_digits if scale_digits > 0 else 1
+        unit = str(values_json.get("unit") or "").strip()
+        is_boolean = meta["value_type"] == "boolean"
+        points: list[list[float]] = []
+        for epoch in sorted(buckets[code].keys()):
+            total, count = buckets[code][epoch]
+            if count == 0:
+                continue
+            avg = (total / count) / divisor
+            points.append([epoch * 1000, round(avg, 4)])
+        series.append(
+            {
+                "code": code,
+                "label": meta["label"],
+                "dp_id": meta["dp_id"],
+                "unit": unit,
+                "is_boolean": is_boolean,
+                "data": points,
+            }
+        )
+
+    return {
+        "bucket_seconds": bucket_seconds,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "series": series,
+    }
+
+
 def get_solar_consumers_power_trace(
     config: AppConfig,
     start: datetime,

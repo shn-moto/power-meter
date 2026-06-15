@@ -49,6 +49,7 @@ from app.storage import (
     get_user_by_username,
     get_recent_raw_dps_samples,
     get_recent_power_trace,
+    get_sensor_history,
     get_solar_consumers_power_trace,
     set_device_solar_consumer,
     list_automations,
@@ -2497,6 +2498,57 @@ def device_power_trace_api(request: Request, device_id: str, minutes: int = 60) 
     if device_row and device_row.get("is_generator"):
         payload["consumers_series"] = get_solar_consumers_power_trace(config, start, now)
     return JSONResponse(payload)
+
+
+@app.get("/api/devices/{device_id}/sensor-history")
+def device_sensor_history_api(
+    request: Request,
+    device_id: str,
+    period: str = "day",
+    start: str | None = None,
+    end: str | None = None,
+) -> JSONResponse:
+    config: AppConfig = request.app.state.app_config
+    device = get_device_row(config, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Устройство не найдено")
+    tz = _get_timezone(config)
+    now = datetime.now(tz)
+    period = (period or "day").lower()
+    if period == "custom":
+        if not start or not end:
+            raise HTTPException(status_code=400, detail="Для custom периода нужны start и end")
+        try:
+            start_dt = datetime.fromisoformat(start).replace(tzinfo=tz)
+            end_dt = datetime.fromisoformat(end).replace(tzinfo=tz) + timedelta(days=1)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Неверная дата: {exc}")
+    elif period == "week":
+        start_dt = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now
+    elif period == "month":
+        start_dt = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now
+    elif period == "year":
+        start_dt = (now - timedelta(days=365)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now
+    else:
+        # day = last 24h
+        start_dt = (now - timedelta(hours=24))
+        end_dt = now
+
+    capabilities = get_device_capabilities(config, device_id)
+    visualized_codes = device.get("visualized_codes") or []
+    payload = get_sensor_history(
+        config,
+        device_id,
+        capabilities,
+        visualized_codes,
+        start_dt.astimezone(timezone.utc),
+        end_dt.astimezone(timezone.utc),
+    )
+    payload["period"] = period
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @app.get("/api/devices/{device_id}/sensor")
