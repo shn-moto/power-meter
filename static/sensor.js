@@ -37,9 +37,140 @@ if (sensorPage) {
     const historyChartEl = document.querySelector('[data-sensor-history-chart]');
     const historyEmptyEl = document.querySelector('[data-sensor-history-empty]');
     const historyPeriodInputs = [...document.querySelectorAll('[data-sensor-period]')];
+    const historyNavEl = document.querySelector('[data-sensor-history-nav]');
+    const historyNavPrev = document.querySelector('[data-sensor-history-prev]');
+    const historyNavNext = document.querySelector('[data-sensor-history-next]');
+    const historyNavLabel = document.querySelector('[data-sensor-history-label]');
     let historyChart = null;
     let historyPeriod = 'day';
     let historyAbortController = null;
+    let selectedDayKey = null;     // 'YYYY-MM-DD' or null = today
+    let selectedWeekKey = null;    // 'YYYY-MM-DD' of Monday or null = current week
+    let selectedMonthKey = null;   // 'YYYY-MM' or null = current month
+    let selectedYearKey = null;    // 'YYYY' or null = current year
+
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const toDateKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const toMonthKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+    const parseDateKey = (v) => {
+        const [y, m, d] = String(v || '').split('-').map(Number);
+        return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0, 0);
+    };
+    const parseMonthKey = (v) => {
+        const [y, m] = String(v || '').split('-').map(Number);
+        return new Date(y, (m || 1) - 1, 1, 12, 0, 0, 0);
+    };
+    const getTodayKey = () => toDateKey(new Date());
+    const getWeekStart = (date) => {
+        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0);
+        const delta = (d.getDay() + 6) % 7; // Monday = 0
+        d.setDate(d.getDate() - delta);
+        return d;
+    };
+    const getCurrentWeekKey = () => toDateKey(getWeekStart(new Date()));
+    const getCurrentMonthKey = () => toMonthKey(new Date());
+    const getCurrentYearKey = () => String(new Date().getFullYear());
+    const getEffectiveDayKey = () => selectedDayKey || getTodayKey();
+    const getEffectiveWeekKey = () => selectedWeekKey || getCurrentWeekKey();
+    const getEffectiveMonthKey = () => selectedMonthKey || getCurrentMonthKey();
+    const getEffectiveYearKey = () => selectedYearKey || getCurrentYearKey();
+
+    const getWeekRange = (weekKey) => {
+        const start = parseDateKey(weekKey);
+        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 12, 0, 0, 0);
+        return { start: toDateKey(start), end: toDateKey(end) };
+    };
+    const getMonthRange = (monthKey) => {
+        const d = parseMonthKey(monthKey);
+        const start = toDateKey(new Date(d.getFullYear(), d.getMonth(), 1, 12, 0, 0, 0));
+        const end = toDateKey(new Date(d.getFullYear(), d.getMonth() + 1, 0, 12, 0, 0, 0));
+        return { start, end };
+    };
+    const getYearRange = (yearKey) => {
+        const y = Number(yearKey);
+        return { start: `${y}-01-01`, end: `${y}-12-31` };
+    };
+    const formatWeekLabel = (weekKey) => {
+        const start = parseDateKey(weekKey);
+        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 12, 0, 0, 0);
+        const fmt = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short' });
+        return `${fmt.format(start)} — ${fmt.format(end)}`;
+    };
+    const formatMonthLabel = (monthKey) => {
+        const d = parseMonthKey(monthKey);
+        return new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(d);
+    };
+    const formatDayLabel = (dayKey) => {
+        return new Intl.DateTimeFormat('ru-RU', { weekday: 'long', day: '2-digit', month: 'long' }).format(parseDateKey(dayKey));
+    };
+
+    const updateHistoryNav = () => {
+        if (!historyNavEl) return;
+        let label = '';
+        let canGoNext = false;
+        if (historyPeriod === 'day') {
+            const k = getEffectiveDayKey();
+            label = formatDayLabel(k);
+            canGoNext = k < getTodayKey();
+        } else if (historyPeriod === 'week') {
+            const k = getEffectiveWeekKey();
+            label = formatWeekLabel(k);
+            canGoNext = k < getCurrentWeekKey();
+        } else if (historyPeriod === 'month') {
+            const k = getEffectiveMonthKey();
+            label = formatMonthLabel(k);
+            canGoNext = k < getCurrentMonthKey();
+        } else if (historyPeriod === 'year') {
+            const k = getEffectiveYearKey();
+            label = k;
+            canGoNext = k < getCurrentYearKey();
+        }
+        historyNavLabel.textContent = label;
+        historyNavNext.disabled = !canGoNext;
+    };
+
+    const buildHistoryQuery = () => {
+        if (historyPeriod === 'day') {
+            const k = getEffectiveDayKey();
+            return { period: 'custom', start: k, end: k };
+        }
+        if (historyPeriod === 'week') return { period: 'custom', ...getWeekRange(getEffectiveWeekKey()) };
+        if (historyPeriod === 'month') return { period: 'custom', ...getMonthRange(getEffectiveMonthKey()) };
+        if (historyPeriod === 'year') return { period: 'custom', ...getYearRange(getEffectiveYearKey()) };
+        return { period: historyPeriod, start: null, end: null };
+    };
+
+    const shiftHistoryPeriod = (direction) => {
+        if (historyPeriod === 'day') {
+            const d = parseDateKey(getEffectiveDayKey());
+            d.setDate(d.getDate() + direction);
+            const k = toDateKey(d);
+            if (direction > 0 && k > getTodayKey()) return;
+            selectedDayKey = (direction > 0 && k === getTodayKey()) ? null : k;
+        } else if (historyPeriod === 'week') {
+            const d = parseDateKey(getEffectiveWeekKey());
+            d.setDate(d.getDate() + 7 * direction);
+            const k = toDateKey(d);
+            const cur = getCurrentWeekKey();
+            if (direction > 0 && k > cur) return;
+            selectedWeekKey = (direction > 0 && k === cur) ? null : k;
+        } else if (historyPeriod === 'month') {
+            const d = parseMonthKey(getEffectiveMonthKey());
+            d.setMonth(d.getMonth() + direction);
+            const k = toMonthKey(d);
+            const cur = getCurrentMonthKey();
+            if (direction > 0 && k > cur) return;
+            selectedMonthKey = (direction > 0 && k === cur) ? null : k;
+        } else if (historyPeriod === 'year') {
+            const y = Number(getEffectiveYearKey()) + direction;
+            const k = String(y);
+            const cur = getCurrentYearKey();
+            if (direction > 0 && k > cur) return;
+            selectedYearKey = (direction > 0 && k === cur) ? null : k;
+        }
+        updateHistoryNav();
+        loadHistory();
+    };
 
     // Distinct palette for up to ~8 simultaneous series
     const HISTORY_PALETTE = [
@@ -173,7 +304,11 @@ if (sensorPage) {
         const controller = new AbortController();
         historyAbortController = controller;
         try {
-            const url = `/api/devices/${encodeURIComponent(deviceId)}/sensor-history?period=${encodeURIComponent(historyPeriod)}`;
+            const query = buildHistoryQuery();
+            const params = new URLSearchParams({ period: query.period });
+            if (query.start) params.set('start', query.start);
+            if (query.end) params.set('end', query.end);
+            const url = `/api/devices/${encodeURIComponent(deviceId)}/sensor-history?${params.toString()}`;
             const r = await fetch(url, { cache: 'no-store', signal: controller.signal });
             if (!r.ok) return;
             const payload = await r.json();
@@ -186,9 +321,19 @@ if (sensorPage) {
         input.addEventListener('change', () => {
             if (!input.checked) return;
             historyPeriod = input.value;
+            // Reset selected keys so we land on the current bucket of the new period
+            selectedDayKey = null;
+            selectedWeekKey = null;
+            selectedMonthKey = null;
+            selectedYearKey = null;
+            updateHistoryNav();
             loadHistory();
         });
     });
+
+    historyNavPrev?.addEventListener('click', () => shiftHistoryPeriod(-1));
+    historyNavNext?.addEventListener('click', () => shiftHistoryPeriod(1));
+    updateHistoryNav();
     // ---- end history chart ----
 
     const escapeHtml = (value) => String(value ?? '')
