@@ -211,6 +211,49 @@ if (sensorPage) {
         return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
 
+    const SHORT_WEEKDAY_FMT = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
+    const SHORT_MONTH_FMT = new Intl.DateTimeFormat('ru-RU', { month: 'short' });
+
+    const buildAxisLabelFormatter = (period) => {
+        return (value) => {
+            const d = new Date(value);
+            if (period === 'week') {
+                // Only label at midnight; sub-day ticks render unlabeled
+                if (d.getHours() === 0 && d.getMinutes() === 0) {
+                    return SHORT_WEEKDAY_FMT.format(d);
+                }
+                return '';
+            }
+            if (period === 'month') {
+                if (d.getHours() === 0 && d.getMinutes() === 0) {
+                    return String(d.getDate());
+                }
+                return '';
+            }
+            if (period === 'year') {
+                if (d.getDate() === 1 && d.getHours() === 0 && d.getMinutes() === 0) {
+                    return SHORT_MONTH_FMT.format(d);
+                }
+                return '';
+            }
+            // day
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        };
+    };
+
+    const majorSplitFor = (period) => {
+        if (period === 'week') return 7;
+        if (period === 'month') return 10;
+        if (period === 'year') return 12;
+        return 6; // day
+    };
+    const minorTicksFor = (period) => {
+        if (period === 'week') return 24;  // hours within a day
+        if (period === 'month') return 4;  // quarter-day ticks
+        if (period === 'year') return 4;   // quarter-month
+        return 0;
+    };
+
     const renderHistory = (payload) => {
         const chart = ensureHistoryChart();
         if (!chart) return;
@@ -290,8 +333,15 @@ if (sensorPage) {
             xAxis: {
                 type: 'time',
                 axisLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.4)' } },
-                axisLabel: { color: 'rgba(217, 226, 238, 0.78)' },
+                axisLabel: {
+                    color: 'rgba(217, 226, 238, 0.78)',
+                    hideOverlap: true,
+                    formatter: buildAxisLabelFormatter(historyPeriod),
+                },
+                minorTick: { show: historyPeriod !== 'day', splitNumber: minorTicksFor(historyPeriod) },
+                minorSplitLine: { show: false },
                 splitLine: { show: false },
+                splitNumber: majorSplitFor(historyPeriod),
             },
             yAxis: yAxes,
             series: echartsSeries,

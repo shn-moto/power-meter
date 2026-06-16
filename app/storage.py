@@ -1338,18 +1338,15 @@ def get_sensor_history(
     end: datetime,
     max_points: int = 720,
 ) -> dict[str, Any]:
-    """Per-DP time series for the sensor page. Each requested code becomes
-    one series; values are averaged into time buckets sized so the result
-    fits inside max_points. Booleans get coerced to 0/1 so the lamp's
-    switch state plots as a step line."""
-    # Map code -> (dp_id, label, unit, scale, value_type)
+    """Per-DP time series for the sensor page. Bucketing is done in SQL via
+    TimescaleDB's time_bucket() so we don't pull millions of raw rows for a
+    one-year view. Each visualized DP becomes one series; booleans are
+    coerced to 0/1 inside the SQL CASE."""
     cap_by_code: dict[str, dict[str, Any]] = {}
     for cap in capabilities:
         code = str(cap.get("capability_code") or "")
         dp_id = cap.get("dp_id")
-        if not code or dp_id is None:
-            continue
-        if code in cap_by_code:
+        if not code or dp_id is None or code in cap_by_code:
             continue
         cap_by_code[code] = {
             "dp_id": str(dp_id),
@@ -1364,66 +1361,51 @@ def get_sensor_history(
         if s in cap_by_code and s not in ordered_codes:
             ordered_codes.append(s)
     if not ordered_codes:
-        # Fallback — show every status-side capability.
         ordered_codes = list(cap_by_code.keys())
     if not ordered_codes:
         return {"bucket_seconds": 0, "series": []}
 
     span_seconds = max(int((end - start).total_seconds()), 1)
+    # Round bucket to a sensible interval. <5s gives 0 in older Timescale,
+    # and very small buckets blow up the result set.
     bucket_seconds = max(span_seconds // max_points, 5)
+
+    # dp_id is sourced from the device profile / DB, not user input — safe
+    # to interpolate. Boolean / numeric / string mix gets coerced inside the
+    # CASE: 'true'/'false' → 1/0, anything that matches a number → float,
+    # everything else → NULL (so AVG ignores it).
+    select_cols = []
+    dp_ids = [cap_by_code[c]["dp_id"] for c in ordered_codes]
+    for idx, dp_id in enumerate(dp_ids):
+        # JSON escape: dp ids are simple numerics, but %% protects from
+        # the cursor's parameter substitution
+        select_cols.append(
+            f"AVG("
+            f"  CASE "
+            f"    WHEN raw_dps->>'{dp_id}' = 'true' THEN 1.0 "
+            f"    WHEN raw_dps->>'{dp_id}' = 'false' THEN 0.0 "
+            f"    WHEN raw_dps->>'{dp_id}' ~ '^-?[0-9]+(\\.[0-9]+)?$' "
+            f"      THEN (raw_dps->>'{dp_id}')::numeric "
+            f"    ELSE NULL "
+            f"  END"
+            f") AS dp_{idx}"
+        )
+    sql = (
+        "SELECT time_bucket(INTERVAL '%s seconds', captured_at) AS bucket, "
+        + ", ".join(select_cols)
+        + " FROM samples WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s "
+        "GROUP BY bucket ORDER BY bucket"
+    )
 
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT captured_at, raw_dps
-                FROM samples
-                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
-                ORDER BY captured_at ASC
-                """,
-                (device_id, start, end),
-            )
+            cursor.execute(sql, (bucket_seconds, device_id, start, end))
             rows = cursor.fetchall()
 
-    buckets: dict[str, dict[int, tuple[float, int]]] = {code: {} for code in ordered_codes}
-    for row in rows:
-        ts = row.get("captured_at")
-        if not isinstance(ts, datetime):
-            ts = _parse_dt(ts)
-        raw = row.get("raw_dps")
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                continue
-        if not isinstance(raw, dict):
-            continue
-        epoch_bucket = (int(ts.timestamp()) // bucket_seconds) * bucket_seconds
-        for code in ordered_codes:
-            dp_id = cap_by_code[code]["dp_id"]
-            value = raw.get(dp_id)
-            if value is None:
-                continue
-            if isinstance(value, bool):
-                num = 1.0 if value else 0.0
-            elif isinstance(value, (int, float)):
-                num = float(value)
-            else:
-                try:
-                    num = float(value)
-                except (TypeError, ValueError):
-                    continue
-            agg = buckets[code].get(epoch_bucket)
-            if agg is None:
-                buckets[code][epoch_bucket] = (num, 1)
-            else:
-                buckets[code][epoch_bucket] = (agg[0] + num, agg[1] + 1)
-
     series: list[dict[str, Any]] = []
-    for code in ordered_codes:
+    for idx, code in enumerate(ordered_codes):
         meta = cap_by_code[code]
         values_json = meta["values_json"]
-        scale_digits = 0
         try:
             scale_digits = int(values_json.get("scale", 0) or 0)
         except (TypeError, ValueError):
@@ -1431,13 +1413,17 @@ def get_sensor_history(
         divisor = 10 ** scale_digits if scale_digits > 0 else 1
         unit = str(values_json.get("unit") or "").strip()
         is_boolean = meta["value_type"] == "boolean"
+        col_name = f"dp_{idx}"
         points: list[list[float]] = []
-        for epoch in sorted(buckets[code].keys()):
-            total, count = buckets[code][epoch]
-            if count == 0:
+        for row in rows:
+            value = row.get(col_name)
+            if value is None:
                 continue
-            avg = (total / count) / divisor
-            points.append([epoch * 1000, round(avg, 4)])
+            ts = row.get("bucket")
+            if not isinstance(ts, datetime):
+                ts = _parse_dt(ts)
+            avg = float(value) / divisor
+            points.append([int(ts.timestamp() * 1000), round(avg, 4)])
         series.append(
             {
                 "code": code,
