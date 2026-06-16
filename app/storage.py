@@ -1391,7 +1391,7 @@ def get_sensor_history(
             f") AS dp_{idx}"
         )
     sql = (
-        "SELECT time_bucket(INTERVAL '%s seconds', captured_at) AS bucket, "
+        f"SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket, "
         + ", ".join(select_cols)
         + " FROM samples WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s "
         "GROUP BY bucket ORDER BY bucket"
@@ -1399,7 +1399,7 @@ def get_sensor_history(
 
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(sql, (bucket_seconds, device_id, start, end))
+            cursor.execute(sql, (device_id, start, end))
             rows = cursor.fetchall()
 
     series: list[dict[str, Any]] = []
