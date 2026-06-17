@@ -2,11 +2,13 @@
   "profile_version": 1,
   "device": {
     "device_id": "bf1bd578076c64ff7cjl6p",
-    "name": "Linux Server",
+    "name": "72V Charger",
     "room": "Детская",
     "device_kind": "socket",
     "is_energy_meter": true,
-    "is_solar_consumer": true,
+    "is_charger": true,
+    "is_solar_consumer": false,
+    "allow_custom_automation": true,
     "category_code": "cz",
     "product_id": "wv7sdupzj13kxc6b",
     "product_name": "Smart Plug"
