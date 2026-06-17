@@ -163,6 +163,11 @@ if (dashboardPage) {
                     <dt>${escapeHtml(device.secondary_metric?.label || 'Источник')}</dt>
                     <dd data-sensor-secondary>${escapeHtml(device.secondary_metric?.value || device.connection_label || 'Нет данных')}</dd>
                 </div>
+                ${device.tertiary_metric ? `
+                <div>
+                    <dt>${escapeHtml(device.tertiary_metric.label)}</dt>
+                    <dd data-sensor-tertiary>${escapeHtml(device.tertiary_metric.value)}</dd>
+                </div>` : ''}
             </dl>
         </div>
         <div class="registry-meta sensor-summary-meta">

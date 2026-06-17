@@ -1387,7 +1387,7 @@ def _build_sensor_dashboard_entry(
     cloud_status_items, cloud_fetched_at, cloud_source = _fetch_sensor_cloud_status(config, device_id)
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, cloud_status_items)
 
-    preview_priority = ("state_of_charge", "va_temperature", "temp_current", "va_humidity", "humidity_value", "cur_voltage", "cur_power", "va_battery")
+    preview_priority = ("state_of_charge", "va_temperature", "temp_current", "va_humidity", "humidity_value", "cur_power", "cur_voltage", "va_battery")
     preview_metrics = sorted(
         (metric for metric in metrics if metric.get("code") in preview_priority),
         key=lambda metric: preview_priority.index(str(metric.get("code"))),
@@ -1397,6 +1397,7 @@ def _build_sensor_dashboard_entry(
 
     primary_metric = preview_metrics[0] if preview_metrics else _toggle_preview_metric(capabilities, local_raw_dps)
     secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
+    tertiary_metric = preview_metrics[2] if len(preview_metrics) > 2 else None
 
     if device.get("connection_ready") and device.get("last_seen"):
         last_update = device.get("last_seen")
@@ -1416,6 +1417,7 @@ def _build_sensor_dashboard_entry(
         **device,
         "primary_metric": primary_metric,
         "secondary_metric": secondary_metric,
+        "tertiary_metric": tertiary_metric,
         "connection_label": connection_label,
         "last_seen": last_update,
         "last_seen_status": last_update_status,
@@ -1434,7 +1436,7 @@ def _build_sensor_dashboard_entry_from_cache(
     local_raw_dps = raw_dps if isinstance(raw_dps, dict) else {}
     metrics = _build_sensor_metrics(capabilities, local_raw_dps, [])
 
-    preview_priority = ("state_of_charge", "va_temperature", "temp_current", "va_humidity", "humidity_value", "cur_voltage", "cur_power", "va_battery")
+    preview_priority = ("state_of_charge", "va_temperature", "temp_current", "va_humidity", "humidity_value", "cur_power", "cur_voltage", "va_battery")
     preview_metrics = sorted(
         (metric for metric in metrics if metric.get("code") in preview_priority),
         key=lambda metric: preview_priority.index(str(metric.get("code"))),
@@ -1444,6 +1446,7 @@ def _build_sensor_dashboard_entry_from_cache(
 
     primary_metric = preview_metrics[0] if preview_metrics else _toggle_preview_metric(capabilities, local_raw_dps)
     secondary_metric = preview_metrics[1] if len(preview_metrics) > 1 else None
+    tertiary_metric = preview_metrics[2] if len(preview_metrics) > 2 else None
 
     if device.get("connection_ready") and device.get("ip_address"):
         connection_label = f"LAN: {device['ip_address']}"
@@ -1454,6 +1457,7 @@ def _build_sensor_dashboard_entry_from_cache(
         **device,
         "primary_metric": primary_metric,
         "secondary_metric": secondary_metric,
+        "tertiary_metric": tertiary_metric,
         "connection_label": connection_label,
         "last_seen": device.get("last_seen"),
         "last_seen_status": device.get("last_seen_status") or "error",

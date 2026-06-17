@@ -32,6 +32,12 @@
                         <dt>{{ device.secondary_metric.label if device.secondary_metric else 'Источник' }}</dt>
                         <dd data-sensor-secondary>{{ device.secondary_metric.value if device.secondary_metric else device.connection_label }}</dd>
                     </div>
+                    {% if device.tertiary_metric %}
+                    <div>
+                        <dt>{{ device.tertiary_metric.label }}</dt>
+                        <dd data-sensor-tertiary>{{ device.tertiary_metric.value }}</dd>
+                    </div>
+                    {% endif %}
                 </dl>
             </div>
             <div class="registry-meta sensor-summary-meta">
