@@ -25,16 +25,18 @@ class BatteryEmergencyCharge(BaseAutomation):
     name = "Аварийная зарядка батареи"
     description = (
         "Каждые 15 минут читает SoC батареи. Если уровень упал ниже "
-        "emergency_threshold_soc (по умолчанию 20%), включает зарядку и "
-        "держит её до target_soc_after_emergency (по умолчанию 30%) — "
-        "гистерезис не даёт реле щёлкать на границе порога."
+        "emergency_threshold_soc (по умолчанию 25%), включает зарядку и "
+        "держит её до target_soc_after_emergency (по умолчанию 35%) — "
+        "гистерезис не даёт реле щёлкать на границе порога. 25% выбран "
+        "потому что при ~10 А·ч (примерно SoC ~25% на 40 А·ч банке) "
+        "сам Atorch начинает пищать low-battery alarm."
     )
     device_type = "charger"
     default_cron = "*/15 * * * *"
     default_config = {
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
-        "emergency_threshold_soc": 20,
-        "target_soc_after_emergency": 30,
+        "emergency_threshold_soc": 25,
+        "target_soc_after_emergency": 35,
         "charger_function_code": "switch_1",
         "poll_interval_seconds": 30,
         "max_charge_duration_seconds": 3 * 3600,
