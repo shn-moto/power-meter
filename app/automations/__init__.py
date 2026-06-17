@@ -13,6 +13,7 @@ from app.automations.base import (
     REGISTRY,
 )
 from app.automations import charger_sunrise  # noqa: F401 — register on import
+from app.automations import battery_emergency_charge  # noqa: F401
 
 __all__ = [
     "AutomationContext",
