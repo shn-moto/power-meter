@@ -27,12 +27,12 @@
         <tbody>
             {% for a in automations %}
             <tr data-automation-row data-slug="{{ a.slug }}">
-                <td>
+                <td data-label="Скрипт">
                     <strong>{{ a.name }}</strong>
                     <p class="hero-copy">{{ a.description }}</p>
                 </td>
-                <td>{{ a.device_type }}</td>
-                <td>
+                <td data-label="Тип">{{ a.device_type }}</td>
+                <td data-label="Привязка">
                     <select data-automation-bind>
                         <option value="">— не выбрано —</option>
                         {% for c in candidates_by_type[a.device_type] %}
@@ -42,17 +42,17 @@
                         {% endfor %}
                     </select>
                 </td>
-                <td>
+                <td data-label="Cron">
                     <input type="text" data-automation-cron value="{{ a.cron_schedule }}" size="14">
                 </td>
-                <td>
+                <td data-label="Last run">
                     {% if a.last_run_at %}{{ a.last_run_at.strftime('%d.%m %H:%M') }}{% else %}—{% endif %}
                     {% if a.last_run_log %}<pre class="automations-log">{{ a.last_run_log }}</pre>{% endif %}
                 </td>
-                <td>
+                <td data-label="Status">
                     {% if a.last_run_status %}<span class="reading-status is-{{ 'ok' if a.last_run_status == 'ok' else 'error' }}">{{ a.last_run_status }}</span>{% else %}—{% endif %}
                 </td>
-                <td class="automations-actions">
+                <td class="automations-actions" data-label="Управление">
                     <label class="switch-control">
                         <input type="checkbox" data-automation-enabled {% if a.enabled %}checked{% endif %}>
                         <span class="switch-slider"></span>

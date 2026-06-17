@@ -167,9 +167,23 @@ async def invoke_device_function_via_app(app: FastAPI, device_id: str, function_
         coerced = str(value)
     else:
         coerced = value
-    try:
-        await asyncio.to_thread(_apply_device_command, tt, function_code, function["dp_id"], coerced)
-        return True
-    except Exception:
-        logger.exception("Automation dispatch failed for %s/%s", device_id, function_code)
-        return False
+    # Sub-devices behind the Zigbee gateway, and ordinary Wi-Fi plugs after a
+    # router restart, occasionally drop a single packet. Three attempts with
+    # exponential-ish back-off turns a transient blip into a no-op instead of
+    # a failed automation.
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            await asyncio.to_thread(_apply_device_command, tt, function_code, function["dp_id"], coerced)
+            if attempt:
+                logger.info("Automation dispatch for %s/%s succeeded on retry %d", device_id, function_code, attempt)
+            return True
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Automation dispatch attempt %d/3 failed for %s/%s: %s",
+                attempt + 1, device_id, function_code, exc,
+            )
+            await asyncio.sleep(1.5 * (attempt + 1))
+    logger.error("Automation dispatch giving up on %s/%s after 3 attempts: %s", device_id, function_code, last_error)
+    return False

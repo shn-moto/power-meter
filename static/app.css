@@ -523,6 +523,54 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     color: var(--accent);
 }
 
+/* On narrow screens, switch the table to stacked cards — table cells
+   become full-width rows with their column header repeated inline. */
+@media (max-width: 720px) {
+    .automations-page {
+        padding: 14px 12px;
+    }
+    .automations-table {
+        display: block;
+    }
+    .automations-table thead { display: none; }
+    .automations-table tbody { display: block; }
+    .automations-table tr {
+        display: block;
+        margin-bottom: 16px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+    }
+    .automations-table td {
+        display: block;
+        border-bottom: none;
+        padding: 6px 0;
+    }
+    .automations-table td::before {
+        content: attr(data-label);
+        display: block;
+        color: var(--muted);
+        font-size: 0.72rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
+    .automations-table input[type="text"],
+    .automations-table select {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    .automations-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .automations-log {
+        max-width: 100%;
+    }
+}
+
 .sensor-history-card {
     padding: 18px 20px;
 }
