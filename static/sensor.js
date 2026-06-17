@@ -205,6 +205,87 @@ if (sensorPage) {
         return historyChart;
     };
 
+    // Snapshot the user's current dataZoom so the periodic refresh doesn't
+    // throw their selection away every 15 seconds. Same pattern as the
+    // energy device chart.
+    const captureHistoryZoom = () => {
+        if (!historyChart) return null;
+        try {
+            const opt = historyChart.getOption();
+            const zooms = Array.isArray(opt?.dataZoom) ? opt.dataZoom : [];
+            const captured = zooms.map((dz) => ({
+                start: typeof dz.start === 'number' ? dz.start : null,
+                end: typeof dz.end === 'number' ? dz.end : null,
+                startValue: dz.startValue ?? null,
+                endValue: dz.endValue ?? null,
+            }));
+            const userTouched = captured.some((c) => (
+                (c.start !== null && c.start > 0)
+                || (c.end !== null && c.end < 100)
+                || c.startValue !== null
+                || c.endValue !== null
+            ));
+            return userTouched ? captured : null;
+        } catch (_) {
+            return null;
+        }
+    };
+
+    const restoreHistoryZoom = (captured) => {
+        if (!historyChart || !captured || !captured.length) return;
+        captured.forEach((dz, idx) => {
+            const action = { type: 'dataZoom', dataZoomIndex: idx };
+            if (dz.startValue !== null && dz.endValue !== null) {
+                action.startValue = dz.startValue;
+                action.endValue = dz.endValue;
+            } else if (dz.start !== null && dz.end !== null) {
+                action.start = dz.start;
+                action.end = dz.end;
+            } else {
+                return;
+            }
+            try { historyChart.dispatchAction(action); } catch (_) {}
+        });
+    };
+
+    // How often to fetch fresh data per period. Day → tight; longer periods
+    // change slowly so we don't need to hammer the server.
+    const HISTORY_REFRESH_MS = {
+        day: 15000,
+        week: 60000,
+        month: 300000,
+        year: 1800000,
+    };
+    let historyRefreshTimerId = null;
+
+    const clearHistoryRefreshTimer = () => {
+        if (historyRefreshTimerId) {
+            clearInterval(historyRefreshTimerId);
+            historyRefreshTimerId = null;
+        }
+    };
+
+    const viewingCurrentBucket = () => {
+        if (historyPeriod === 'day') return !selectedDayKey;
+        if (historyPeriod === 'week') return !selectedWeekKey;
+        if (historyPeriod === 'month') return !selectedMonthKey;
+        if (historyPeriod === 'year') return !selectedYearKey;
+        return false;
+    };
+
+    const ensureHistoryRefreshTimer = () => {
+        clearHistoryRefreshTimer();
+        if (pollingStopped || !historyChartEl) return;
+        // Auto-refresh only when looking at the current period bucket — when
+        // the user pages back to an older day/week/month/year there's
+        // nothing changing in that window.
+        if (!viewingCurrentBucket()) return;
+        const interval = HISTORY_REFRESH_MS[historyPeriod] || 60000;
+        historyRefreshTimerId = setInterval(() => {
+            if (!document.hidden) loadHistory();
+        }, interval);
+    };
+
     const formatTooltipTime = (ts) => {
         const d = new Date(ts);
         const pad = (n) => String(n).padStart(2, '0');
@@ -257,6 +338,7 @@ if (sensorPage) {
     const renderHistory = (payload) => {
         const chart = ensureHistoryChart();
         if (!chart) return;
+        const savedZoom = captureHistoryZoom();
         const series = payload?.series || [];
         const hasAnyPoints = series.some((s) => Array.isArray(s.data) && s.data.length);
         if (historyEmptyEl) historyEmptyEl.hidden = hasAnyPoints;
@@ -346,6 +428,7 @@ if (sensorPage) {
             yAxis: yAxes,
             series: echartsSeries,
         }, true);
+        restoreHistoryZoom(savedZoom);
     };
 
     const loadHistory = async () => {
@@ -378,11 +461,18 @@ if (sensorPage) {
             selectedYearKey = null;
             updateHistoryNav();
             loadHistory();
+            ensureHistoryRefreshTimer();
         });
     });
 
-    historyNavPrev?.addEventListener('click', () => shiftHistoryPeriod(-1));
-    historyNavNext?.addEventListener('click', () => shiftHistoryPeriod(1));
+    historyNavPrev?.addEventListener('click', () => {
+        shiftHistoryPeriod(-1);
+        ensureHistoryRefreshTimer();
+    });
+    historyNavNext?.addEventListener('click', () => {
+        shiftHistoryPeriod(1);
+        ensureHistoryRefreshTimer();
+    });
     updateHistoryNav();
     // ---- end history chart ----
 
@@ -513,6 +603,8 @@ if (sensorPage) {
     const stopPolling = () => {
         pollingStopped = true;
         clearRefreshTimer();
+        clearHistoryRefreshTimer();
+        historyAbortController?.abort();
         requestAbortController?.abort();
     };
 
@@ -526,11 +618,16 @@ if (sensorPage) {
         }
         if (document.hidden) {
             clearRefreshTimer();
+            clearHistoryRefreshTimer();
             requestAbortController?.abort();
             return;
         }
         loadSensor();
         ensurePollingTimers();
+        // Refresh history once we come back so the user sees the latest
+        // points immediately, then resume the timer.
+        loadHistory();
+        ensureHistoryRefreshTimer();
     });
 
     window.addEventListener('pagehide', stopPolling);
@@ -545,6 +642,7 @@ if (sensorPage) {
         if (!historyChartEl) return;
         if (window.echarts) {
             loadHistory();
+            ensureHistoryRefreshTimer();
         } else {
             setTimeout(startHistory, 100);
         }
