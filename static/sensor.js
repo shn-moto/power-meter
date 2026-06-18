@@ -198,10 +198,20 @@ if (sensorPage) {
         work_mode: 'Режим',
     };
 
+    let lastHistoryPayload = null;
+    const isNarrowViewport = () => window.matchMedia('(max-width: 720px)').matches;
+
     const ensureHistoryChart = () => {
         if (historyChart || !historyChartEl || !window.echarts) return historyChart;
         historyChart = window.echarts.init(historyChartEl);
-        window.addEventListener('resize', () => historyChart && historyChart.resize());
+        // On viewport changes the mobile flag flips, which means the axis
+        // visibility + grid margins need to be recomputed. Cheaper than
+        // re-fetching: re-render the cached payload.
+        window.addEventListener('resize', () => {
+            if (!historyChart) return;
+            historyChart.resize();
+            if (lastHistoryPayload) renderHistory(lastHistoryPayload);
+        });
         return historyChart;
     };
 
@@ -338,6 +348,7 @@ if (sensorPage) {
     const renderHistory = (payload) => {
         const chart = ensureHistoryChart();
         if (!chart) return;
+        lastHistoryPayload = payload;
         const savedZoom = captureHistoryZoom();
         const series = payload?.series || [];
         const hasAnyPoints = series.some((s) => Array.isArray(s.data) && s.data.length);
@@ -346,6 +357,7 @@ if (sensorPage) {
             chart.clear();
             return;
         }
+        const narrow = isNarrowViewport();
         // Group series by unit so each unit family gets its own yAxis.
         const unitOrder = [];
         const unitMap = new Map();
@@ -357,11 +369,17 @@ if (sensorPage) {
             }
             unitMap.get(unit).push(s);
         });
+        // On a narrow viewport we collapse all non-primary axes (Voltage,
+        // Current, SoC etc) — they eat more horizontal space than the chart
+        // itself otherwise. Precise values stay accessible via the tooltip
+        // on tap. The yAxis entries still have to exist so series can map
+        // to them via yAxisIndex; we just hide their visuals.
         const yAxes = unitOrder.map((unit, idx) => ({
             type: 'value',
             name: unit || '',
             position: idx === 0 ? 'left' : 'right',
             offset: Math.max(0, idx - 1) * 50,
+            show: !narrow || idx === 0,
             nameTextStyle: { color: 'rgba(217, 226, 238, 0.78)' },
             axisLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.22)' } },
             axisLabel: { color: 'rgba(217, 226, 238, 0.78)' },
@@ -407,7 +425,12 @@ if (sensorPage) {
                 textStyle: { color: 'rgba(217, 226, 238, 0.85)' },
                 inactiveColor: 'rgba(127, 208, 255, 0.28)',
             },
-            grid: { top: 36, left: 50, right: unitOrder.length > 1 ? 50 + (unitOrder.length - 1) * 50 : 16, bottom: 50 },
+            grid: {
+                top: 36,
+                left: 50,
+                right: narrow ? 16 : (unitOrder.length > 1 ? 50 + (unitOrder.length - 1) * 50 : 16),
+                bottom: 50,
+            },
             dataZoom: [
                 { type: 'inside', xAxisIndex: 0 },
                 { type: 'slider', xAxisIndex: 0, height: 18, bottom: 6, borderColor: 'rgba(127, 208, 255, 0.2)' },
