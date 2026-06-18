@@ -36,6 +36,12 @@
         </article>
 
         <article class="stat-card lcd-panel">
+            <span class="stat-label">Солнце за месяц</span>
+            <strong class="stat-value">{{ '%.1f'|format(report.current.solar_kwh) }} кВт·ч</strong>
+            <span class="stat-sub">по разрядке Atorch − потребление 72V Charger</span>
+        </article>
+
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Прошлый месяц ({{ report.previous_label }})</span>
             <strong class="stat-value">{{ '%.1f'|format(report.previous.net_kwh) }} кВт·ч</strong>
             <span class="stat-sub {% if report.delta_prev.kwh > 0 %}is-negative{% elif report.delta_prev.kwh < 0 %}is-positive{% endif %}">

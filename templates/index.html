@@ -71,6 +71,10 @@
             <strong class="stat-value" data-summary-estimated-cost>{{ summary.estimated_cost }}</strong>
         </article>
         <article class="stat-card lcd-panel">
+            <span class="stat-label">Солнце за месяц</span>
+            <strong class="stat-value" data-summary-solar-energy>{{ '%.1f'|format(summary.solar_energy_kwh or 0) }} кВт·ч</strong>
+        </article>
+        <article class="stat-card lcd-panel">
             <span class="stat-label">Устройств онлайн</span>
             <strong class="stat-value" data-summary-device-count>{{ summary.device_count }}</strong>
         </article>

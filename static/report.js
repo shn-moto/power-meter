@@ -31,6 +31,7 @@ if (reportPage) {
         const palette = {
             consumed: '#e8a838',
             generated: '#67b86b',
+            solar: '#f5c542',
             net: '#7fd0ff',
             grid: 'rgba(127, 208, 255, 0.12)',
             text: 'rgba(232, 240, 250, 0.78)',
@@ -73,7 +74,7 @@ if (reportPage) {
                     textStyle: { color: '#e8f0fa' },
                 },
                 legend: {
-                    data: ['Потребление', 'Генерация', 'Нетто'],
+                    data: ['Потребление', 'Генерация', 'Солнце', 'Нетто'],
                     textStyle: { color: palette.text },
                     top: 4,
                 },
@@ -106,6 +107,18 @@ if (reportPage) {
                         stack: 'energy',
                         data: series.map((p) => -Number(p.generated_kwh || 0).toFixed(2)),
                         itemStyle: { color: palette.generated },
+                    },
+                    {
+                        // Implicit solar: computed from Atorch discharge minus
+                        // wall-charger consumption. Stacked under "generation"
+                        // (negative) so it visually adds to what came from
+                        // outside the grid — even though we don't meter the
+                        // panels directly.
+                        name: 'Солнце',
+                        type: 'bar',
+                        stack: 'energy',
+                        data: series.map((p) => -Number(p.solar_kwh || 0).toFixed(2)),
+                        itemStyle: { color: palette.solar },
                     },
                     {
                         name: 'Нетто',

@@ -2146,6 +2146,150 @@ def get_period_breakdown(
     return breakdown
 
 
+def get_implicit_solar_by_bucket(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket: str,
+) -> dict[datetime, dict[str, float]]:
+    """For each bucket, compute the implicit solar generation as
+       solar_kwh = max(0, atorch_discharged_kwh - charger_consumed_kwh).
+
+    Reasoning: nothing in the project meters the solar feed directly, but the
+    Atorch on the battery integrates *all* current flowing into and out of
+    the pack. Over a day where SoC roughly returns to its starting point,
+    everything that left the battery (discharge) had to come from somewhere
+    — either the wall charger or the solar panels. Anything the load consumed
+    above what the charger pulled from the wall must therefore be solar.
+
+    This is a *lower bound* because charger has its own losses (the wall socket
+    sees more kWh than what makes it into the battery) and inverter losses on
+    the discharge side are not yet accounted for. The user is aware and is fine
+    with the conservative number for v1.
+
+    Returns mapping bucket_dt (TZ-aware, UTC-aligned like samples_daily) →
+    {"discharged_kwh", "charged_kwh", "charger_kwh", "solar_kwh"}."""
+    if bucket not in ("day", "month"):
+        return {}
+    interval = "1 day" if bucket == "day" else "1 month"
+
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id FROM device_capabilities
+                WHERE capability_code = 'state_of_charge'
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            monitor_id = str(row.get("device_id")) if row else None
+
+            cursor.execute(
+                """
+                SELECT device_id FROM devices
+                WHERE is_charger = TRUE AND is_energy_meter = TRUE
+                """
+            )
+            charger_ids = [str(r.get("device_id")) for r in cursor.fetchall() if r.get("device_id")]
+
+            if not monitor_id:
+                return {}
+
+            # Atorch keeps two undocumented absolute counters: dp 126 = total
+            # mAh ever pumped INTO the battery, dp 127 = total mAh ever pulled
+            # OUT. They're tracked on the device's internal high-rate ADC so
+            # simultaneous charge+discharge does not net-cancel like dp 19
+            # (signed cur_power) does. Convert to Wh per interval via the
+            # *measured* dp 20 voltage on each pair (trapezoidal), not a
+            # constant nominal voltage — gives accurate Wh at both low and
+            # high SoC. Gaps > 60 s are dropped (Wi-Fi blip safety).
+            cursor.execute(
+                f"""
+                WITH atorch AS (
+                  SELECT captured_at,
+                         (raw_dps->>'126')::numeric AS charge_mah,
+                         (raw_dps->>'127')::numeric AS discharge_mah,
+                         (raw_dps->>'20')::numeric / 100.0 AS voltage_v
+                  FROM samples
+                  WHERE device_id = %s
+                    AND captured_at >= %s
+                    AND captured_at <  %s
+                    AND raw_dps ? '126' AND raw_dps ? '127' AND raw_dps ? '20'
+                ),
+                pairs AS (
+                  SELECT captured_at, charge_mah, discharge_mah, voltage_v,
+                         lag(captured_at)   OVER (ORDER BY captured_at) AS prev_ts,
+                         lag(charge_mah)    OVER (ORDER BY captured_at) AS prev_charge,
+                         lag(discharge_mah) OVER (ORDER BY captured_at) AS prev_discharge,
+                         lag(voltage_v)     OVER (ORDER BY captured_at) AS prev_voltage
+                  FROM atorch
+                )
+                SELECT time_bucket(INTERVAL '{interval}', captured_at) AS bucket,
+                       SUM(CASE
+                         WHEN EXTRACT(epoch FROM captured_at - prev_ts) BETWEEN 0.1 AND 60
+                          AND discharge_mah >= prev_discharge
+                         THEN (discharge_mah - prev_discharge) / 1000.0
+                              * (voltage_v + prev_voltage) / 2.0
+                         ELSE 0
+                       END) AS discharged_wh,
+                       SUM(CASE
+                         WHEN EXTRACT(epoch FROM captured_at - prev_ts) BETWEEN 0.1 AND 60
+                          AND charge_mah >= prev_charge
+                         THEN (charge_mah - prev_charge) / 1000.0
+                              * (voltage_v + prev_voltage) / 2.0
+                         ELSE 0
+                       END) AS charged_wh
+                FROM pairs
+                GROUP BY 1
+                ORDER BY 1
+                """,
+                (monitor_id, start, end),
+            )
+            discharge_by_bucket: dict[datetime, tuple[float, float]] = {}
+            for row in cursor.fetchall():
+                bucket_dt = row.get("bucket")
+                if bucket_dt is None:
+                    continue
+                discharge_by_bucket[bucket_dt] = (
+                    float(row.get("discharged_wh") or 0.0) / 1000.0,
+                    float(row.get("charged_wh") or 0.0) / 1000.0,
+                )
+
+            charger_by_bucket: dict[datetime, float] = {}
+            if charger_ids:
+                cagg_view = "samples_daily" if bucket == "day" else "samples_monthly"
+                cursor.execute(
+                    f"""
+                    SELECT bucket, SUM(energy_wh) AS wh
+                    FROM {cagg_view}
+                    WHERE device_id = ANY(%s)
+                      AND bucket >= %s AND bucket < %s
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    (charger_ids, start, end),
+                )
+                for row in cursor.fetchall():
+                    b = row.get("bucket")
+                    if b is None:
+                        continue
+                    charger_by_bucket[b] = float(row.get("wh") or 0.0) / 1000.0
+
+    result: dict[datetime, dict[str, float]] = {}
+    for b in set(discharge_by_bucket) | set(charger_by_bucket):
+        discharged, charged = discharge_by_bucket.get(b, (0.0, 0.0))
+        charger = charger_by_bucket.get(b, 0.0)
+        solar = max(0.0, discharged - charger)
+        result[b] = {
+            "discharged_kwh": round(discharged, 3),
+            "charged_kwh": round(charged, 3),
+            "charger_kwh": round(charger, 3),
+            "solar_kwh": round(solar, 3),
+        }
+    return result
+
+
 def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, float]]:
     metadata: dict[str, tuple[str, float]] = {}
     for row in rows:
@@ -2349,11 +2493,19 @@ def get_dashboard_summary(
         sensor_devices.append(base_entry)
 
     net_energy_wh = consumed_energy_wh - generated_energy_wh
+
+    # Implicit solar this month (Atorch discharge - wall-charger consumption).
+    # Sum across day buckets. Returns 0 if there's no battery monitor or no
+    # chargers — never raises.
+    solar_breakdown = get_implicit_solar_by_bucket(config, month_start, now, "day")
+    solar_energy_kwh = round(sum(v.get("solar_kwh", 0.0) for v in solar_breakdown.values()), 3)
+
     return {
         "home_name": config.home_name,
         "month_energy_kwh": round(net_energy_wh / 1000.0, 3),
         "consumed_energy_kwh": round(consumed_energy_wh / 1000.0, 3),
         "generated_energy_kwh": round(generated_energy_wh / 1000.0, 3),
+        "solar_energy_kwh": solar_energy_kwh,
         "estimated_cost": round((net_energy_wh / 1000.0) * config.tariff_per_kwh, 2),
         "device_count": online_device_count,
         "devices": devices,

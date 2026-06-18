@@ -39,6 +39,7 @@ from app.storage import (
     get_meter_status,
     get_meter_discrepancy_periods,
     get_period_breakdown,
+    get_implicit_solar_by_bucket,
     list_meter_readings,
     save_meter_reading,
     delete_meter_reading,
@@ -2049,6 +2050,22 @@ def monthly_report(
     daily = get_period_breakdown(config, month_start, window_end, "day")
     monthly_year_series = get_period_breakdown(config, year_start, year_end_for_chart, "month")
 
+    # Implicit solar generation: discharge - charger consumption per bucket.
+    # No direct meter on the panels — derived from the Atorch's absolute
+    # discharge counter (dp 127) minus what the wall charger drew. See
+    # storage.get_implicit_solar_by_bucket for the rationale.
+    solar_daily = get_implicit_solar_by_bucket(config, month_start, window_end, "day")
+    solar_monthly = get_implicit_solar_by_bucket(config, year_start, year_end_for_chart, "month")
+
+    def _merge_solar(series: list[dict[str, Any]], solar_by_bucket: dict[datetime, dict[str, float]]) -> None:
+        for item in series:
+            bucket_dt = _parse_dt(item["bucket"])
+            v = solar_by_bucket.get(bucket_dt) or {}
+            item["solar_kwh"] = float(v.get("solar_kwh") or 0.0)
+
+    _merge_solar(daily, solar_daily)
+    _merge_solar(monthly_year_series, solar_monthly)
+
     # Past 12 full months (before the selected month) for the average baseline.
     avg_window_start = (month_start - timedelta(days=365)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     avg_window = get_period_breakdown(config, avg_window_start, month_start, "month")
@@ -2063,11 +2080,15 @@ def monthly_report(
 
     current_consumed = _sum(daily, "consumed_kwh")
     current_generated = _sum(daily, "generated_kwh")
+    current_solar = _sum(daily, "solar_kwh")
     current_net = round(current_consumed - current_generated, 3)
 
     prev_daily = get_period_breakdown(config, prev_month_start, prev_month_end, "day")
+    prev_solar_by_bucket = get_implicit_solar_by_bucket(config, prev_month_start, prev_month_end, "day")
+    _merge_solar(prev_daily, prev_solar_by_bucket)
     prev_consumed = _sum(prev_daily, "consumed_kwh")
     prev_generated = _sum(prev_daily, "generated_kwh")
+    prev_solar = _sum(prev_daily, "solar_kwh")
     prev_net = round(prev_consumed - prev_generated, 3)
 
     delta_vs_prev = round(current_net - prev_net, 3)
@@ -2095,12 +2116,14 @@ def monthly_report(
         "current": {
             "consumed_kwh": current_consumed,
             "generated_kwh": current_generated,
+            "solar_kwh": current_solar,
             "net_kwh": current_net,
             "cost": round(current_net * tariff, 2),
         },
         "previous": {
             "consumed_kwh": prev_consumed,
             "generated_kwh": prev_generated,
+            "solar_kwh": prev_solar,
             "net_kwh": prev_net,
             "cost": round(prev_net * tariff, 2),
         },
