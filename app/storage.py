@@ -1815,6 +1815,42 @@ def _get_energy_counter_meta_from_capabilities(capabilities: list[dict[str, Any]
     return None
 
 
+def _counter_value_at_or_before(
+    counter_points: list[tuple[datetime, float]],
+    target: datetime,
+) -> float | None:
+    """Return the last counter reading whose timestamp is <= target. Assumes
+    counter_points is sorted ascending by timestamp. Used to anchor session
+    energy at the device-counter value as it was at session start/end."""
+    if not counter_points:
+        return None
+    chosen: float | None = None
+    for ts, kwh in counter_points:
+        if ts > target:
+            break
+        chosen = kwh
+    return chosen
+
+
+def _get_add_ele_meta_from_capabilities(capabilities: list[dict[str, Any]]) -> tuple[str, float] | None:
+    """Like _get_energy_counter_meta_from_capabilities but only for `add_ele`,
+    regardless of power_type. Used by current-type chargers that also expose
+    a Tuya energy counter — lets us report exact session energy from the
+    device's own counter (telescoping delta) instead of trapezoidal integration
+    of cur_power, so the totals agree with the meter on the device itself."""
+    for capability in capabilities:
+        code = str(capability.get("capability_code") or "")
+        if code != "add_ele":
+            continue
+        dp_id = capability.get("dp_id")
+        if dp_id is None:
+            continue
+        values_json = capability.get("values_json") or {}
+        scale_digits = int(values_json.get("scale", 0) or 0)
+        return str(dp_id), float(10 ** scale_digits) if scale_digits > 0 else 1.0
+    return None
+
+
 def _get_energy_counter_meta(
     config: AppConfig,
     device_id: str,
@@ -2564,11 +2600,14 @@ def get_charger_day_stats(
     over the period plus a per-session breakdown."""
     capabilities = get_device_capabilities(config, device_id)
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+    add_ele_meta = _get_add_ele_meta_from_capabilities(capabilities)
+    # We always pull raw_dps now so current-type chargers with add_ele can
+    # report exact session energy from the device's own counter.
+    needs_raw_dps = energy_counter_meta is not None or add_ele_meta is not None
 
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
-            if energy_counter_meta is not None:
-                # Need raw_dps to read counter for delta computation
+            if needs_raw_dps:
                 cursor.execute(
                     """
                     SELECT captured_at, power_w, raw_dps
@@ -2592,6 +2631,30 @@ def get_charger_day_stats(
 
     power_series = _charger_power_series_from_samples(sample_rows, energy_counter_meta)
     sessions = _detect_charger_sessions(power_series)
+
+    # If we have an add_ele counter, replace each session's trapezoidal energy
+    # with the telescoping counter delta — that matches the device's internal
+    # meter exactly (same physical quantity Atorch shows).
+    if add_ele_meta is not None and sessions and sample_rows:
+        dp_key, scale_divisor = add_ele_meta
+        counter_points: list[tuple[datetime, float]] = []
+        for row in sample_rows:
+            kwh = _read_energy_counter_kwh(
+                _normalize_json_field(row.get("raw_dps")), dp_key, scale_divisor
+            )
+            if kwh is not None:
+                counter_points.append((row["captured_at"], kwh))
+        if counter_points:
+            for session in sessions:
+                anchor_kwh = _counter_value_at_or_before(counter_points, session["start"])
+                end_kwh = _counter_value_at_or_before(counter_points, session["end"])
+                if anchor_kwh is None or end_kwh is None or end_kwh <= anchor_kwh:
+                    continue
+                delta_kwh = end_kwh - anchor_kwh
+                session["energy_kwh"] = round(delta_kwh, 3)
+                duration_h = session["duration_seconds"] / 3600.0
+                if duration_h > 0:
+                    session["avg_power_kw"] = round(delta_kwh / duration_h, 3)
 
     series_points = [
         {
