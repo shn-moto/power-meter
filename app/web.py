@@ -2058,10 +2058,19 @@ def monthly_report(
     solar_monthly = get_implicit_solar_by_bucket(config, year_start, year_end_for_chart, "month")
 
     def _merge_solar(series: list[dict[str, Any]], solar_by_bucket: dict[datetime, dict[str, float]]) -> None:
+        # solar_by_bucket keys are tz-aware datetimes whose date in the project
+        # timezone uniquely identifies the day/month bucket. Reduce both sides
+        # to that date string so we side-step any tz/normalisation drift
+        # between the cagg-driven breakdown and our raw-sample integration.
+        tz = ZoneInfo(config.timezone)
+        solar_by_key: dict[str, float] = {}
+        for bucket_dt, v in solar_by_bucket.items():
+            local_dt = bucket_dt.astimezone(tz) if bucket_dt.tzinfo else bucket_dt.replace(tzinfo=tz)
+            solar_by_key[local_dt.date().isoformat()] = float(v.get("solar_kwh") or 0.0)
         for item in series:
-            bucket_dt = _parse_dt(item["bucket"])
-            v = solar_by_bucket.get(bucket_dt) or {}
-            item["solar_kwh"] = float(v.get("solar_kwh") or 0.0)
+            bucket_iso = str(item.get("bucket") or "")
+            bucket_date = bucket_iso[:10]  # YYYY-MM-DD prefix is enough for both day & month buckets
+            item["solar_kwh"] = solar_by_key.get(bucket_date, 0.0)
 
     _merge_solar(daily, solar_daily)
     _merge_solar(monthly_year_series, solar_monthly)
