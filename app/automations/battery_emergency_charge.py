@@ -13,6 +13,7 @@ from app.automations.base import (
     AutomationResult,
     BaseAutomation,
     register,
+    resolve_switch_function_code,
 )
 from app.automations.charger_sunrise import _read_latest_soc
 
@@ -37,7 +38,9 @@ class BatteryEmergencyCharge(BaseAutomation):
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
         "emergency_threshold_soc": 30,
         "target_soc_after_emergency": 40,
-        "charger_function_code": "switch_1",
+        # Leave as null → auto-resolved per device from capabilities
+        # (single-channel plug = `switch`, Zigbee sub-device = `switch_1`).
+        "charger_function_code": None,
         "poll_interval_seconds": 30,
         "max_charge_duration_seconds": 3 * 3600,
     }
@@ -65,7 +68,7 @@ class BatteryEmergencyCharge(BaseAutomation):
             log.append("SoC выше порога — действий не требуется.")
             return AutomationResult(status="ok", log="\n".join(log), details={"soc": soc})
 
-        function_code = str(cfg.get("charger_function_code") or "switch_1")
+        function_code = str(cfg.get("charger_function_code") or "").strip() or resolve_switch_function_code(ctx.config, ctx.bound_device_id)
         log.append(f"АВАРИЙНАЯ зарядка: включаю {function_code}…")
         ok = await ctx.invoke_device_function(ctx.bound_device_id, function_code, True)
         if not ok:

@@ -50,6 +50,26 @@ class BaseAutomation:
 REGISTRY: dict[str, type[BaseAutomation]] = {}
 
 
+def resolve_switch_function_code(config: AppConfig, device_id: str) -> str:
+    """Pick the right switch function code for the bound device by looking at
+    its capabilities. Single-channel Wi-Fi plugs expose `switch`; Zigbee
+    sub-devices (one channel of a multi-channel breaker) expose `switch_1`.
+    Falls back to `switch` if nothing matches — that's the most common case."""
+    from app.storage import get_device_capabilities  # local import: storage imports config which is fine
+
+    capabilities = get_device_capabilities(config, device_id) or []
+    switch_codes: list[str] = []
+    for cap in capabilities:
+        code = str(cap.get("capability_code") or "").strip()
+        if code.startswith("switch"):
+            switch_codes.append(code)
+    if "switch_1" in switch_codes:
+        return "switch_1"
+    if "switch" in switch_codes:
+        return "switch"
+    return switch_codes[0] if switch_codes else "switch"
+
+
 def register(cls: type[BaseAutomation]) -> type[BaseAutomation]:
     if not cls.slug:
         raise ValueError(f"{cls.__name__} is missing a slug")

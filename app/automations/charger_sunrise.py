@@ -22,6 +22,7 @@ from app.automations.base import (
     AutomationResult,
     BaseAutomation,
     register,
+    resolve_switch_function_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,10 @@ class ChargerSunrise(BaseAutomation):
         "safety_floor_soc": 30,
         "min_target_soc": 30,
         "max_target_soc": 95,
-        "charger_function_code": "switch_1",
+        # Leave as null → auto-resolved per device (single-channel plug uses
+        # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
+        # force a specific code.
+        "charger_function_code": None,
         "poll_interval_seconds": 30,
         "max_charge_duration_seconds": 6 * 3600,
     }
@@ -168,7 +172,7 @@ class ChargerSunrise(BaseAutomation):
             log.append(f"SoC {soc:.0f}% уже ≥ target {target:.0f}%. Зарядка не нужна.")
             return AutomationResult(status="ok", log="\n".join(log), details={"target_soc": target, "soc": soc})
 
-        function_code = str(cfg.get("charger_function_code") or "switch_1")
+        function_code = str(cfg.get("charger_function_code") or "").strip() or resolve_switch_function_code(ctx.config, ctx.bound_device_id)
         log.append(f"Включаю зарядку ({function_code})…")
         ok = await ctx.invoke_device_function(ctx.bound_device_id, function_code, True)
         if not ok:
