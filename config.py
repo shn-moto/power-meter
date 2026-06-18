@@ -19,6 +19,11 @@ class TuyaDeviceConfig:
     total_power_scale: float
     visualized_codes: tuple[str, ...]
     power_type: str = "total"
+    # Multiplier applied to the device's reported instantaneous power before
+    # we write samples.power_w. Default 1.0; set higher in the profile JSON
+    # `connection.power_correction_factor` for sockets that systematically
+    # under-read switch-mode loads.
+    power_correction_factor: float = 1.0
     dps_request_modes: dict[str, str] = field(default_factory=dict)
     is_gateway: bool = False
     gateway_device_id: str | None = None

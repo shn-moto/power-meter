@@ -286,6 +286,7 @@ def upsert_managed_device(
     is_gateway: bool = False,
     gateway_device_id: str | None = None,
     cid: str | None = None,
+    power_correction_factor: float = 1.0,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -349,8 +350,8 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, cid, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, cid, power_correction_factor, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -365,6 +366,7 @@ def upsert_managed_device(
                     total_power_scale = EXCLUDED.total_power_scale,
                     gateway_device_id = EXCLUDED.gateway_device_id,
                     cid = EXCLUDED.cid,
+                    power_correction_factor = EXCLUDED.power_correction_factor,
                     updated_at = NOW()
                 """,
                 (
@@ -376,6 +378,7 @@ def upsert_managed_device(
                     total_power_scale,
                     gateway_device_id,
                     cid,
+                    power_correction_factor,
                 ),
             )
             cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
@@ -820,6 +823,7 @@ def materialize_device_profile(
         capabilities=_profile_capabilities(payload),
         gateway_device_id=(str(connection.get("gateway_device_id") or "").strip() or None),
         cid=(str(connection.get("cid") or "").strip() or None),
+        power_correction_factor=float(connection.get("power_correction_factor") or 1.0),
     )
 
 def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None = None) -> list[str]:
@@ -1158,6 +1162,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
                        COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
                        c.total_power_dps_key, c.total_power_scale,
                        c.gateway_device_id, c.cid,
+                       COALESCE(c.power_correction_factor, 1.0) AS power_correction_factor,
                        d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
@@ -1187,6 +1192,7 @@ def get_control_device(config: AppConfig, device_id: str) -> TuyaDeviceConfig | 
         is_gateway=bool(row.get("is_gateway")),
         gateway_device_id=row.get("gateway_device_id"),
         cid=row.get("cid"),
+        power_correction_factor=float(row.get("power_correction_factor") or 1.0),
     )
 
 
@@ -1211,6 +1217,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                        COALESCE(NULLIF(c.version, 0), gc.version, 3.3) AS version,
                        c.total_power_dps_key, c.total_power_scale,
                        c.gateway_device_id, c.cid,
+                       COALESCE(c.power_correction_factor, 1.0) AS power_correction_factor,
                        d.visualized_codes, d.power_type
                 FROM devices d
                 JOIN device_connections c ON c.device_id = d.device_id
@@ -1243,6 +1250,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 is_gateway=bool(row.get("is_gateway")),
                 gateway_device_id=row.get("gateway_device_id"),
                 cid=row.get("cid"),
+                power_correction_factor=float(row.get("power_correction_factor") or 1.0),
             )
         )
     return devices

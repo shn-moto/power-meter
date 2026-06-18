@@ -19,7 +19,8 @@
     "protocol_version": 3.5,
     "ip_source": "manual-seed",
     "last_verified_at": null,
-    "discovery_required": false
+    "discovery_required": false,
+    "power_correction_factor": 1.9
   },
   "summary": {
     "default_power_mode": "current",

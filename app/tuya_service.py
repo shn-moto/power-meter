@@ -404,14 +404,16 @@ def extract_metrics(device_config: TuyaDeviceConfig, payload: dict[str, Any]) ->
     if _uses_current_power(device_config):
         phase_packet_power_w = _extract_phase_packet_power_w(power_raw)
         if phase_packet_power_w is not None:
-            return phase_packet_power_w, dps
+            return phase_packet_power_w * device_config.power_correction_factor, dps
 
         current_power_w = float(power_raw) / power_scale if power_raw is not None else 0.0
         current_power_w = _normalize_power(current_power_w, dps)
         current_power_w = _normalize_power_by_measurements(dps, current_power_w)
+        current_power_w *= device_config.power_correction_factor
         return current_power_w, dps
 
     power_w = float(power_raw) / power_scale if power_raw is not None else 0.0
+    power_w *= device_config.power_correction_factor
     return power_w, dps
 
 
