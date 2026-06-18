@@ -20,7 +20,7 @@
     "ip_source": "manual-seed",
     "last_verified_at": null,
     "discovery_required": false,
-    "power_correction_factor": 1.9
+    "power_correction_factor": 1.0
   },
   "summary": {
     "default_power_mode": "current",
