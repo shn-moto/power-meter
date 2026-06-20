@@ -321,7 +321,7 @@ if (dashboardPage) {
                         `<strong>${hh}:${mm}</strong>`,
                         `<span style="color:#f5c542">●</span> Генерация: ${gen.toFixed(3)} кВт`,
                         `<span style="color:#e8a838">●</span> Потребление: ${cons.toFixed(3)} кВт`,
-                        `<span style="color:#f04848">●</span> Профицит: ${surplus.toFixed(3)} кВт`,
+                        `<span style="color:rgba(245,197,66,0.7)">●</span> Профицит: ${surplus.toFixed(3)} кВт`,
                     ].join('<br/>');
                 },
             },
@@ -331,10 +331,10 @@ if (dashboardPage) {
                 {
                     name: 'Генерация',
                     type: 'line', smooth: true, symbol: 'none',
-                    // Sunny yellow — matches the implicit-solar bar colour on the
-                    // monthly report so all "solar" cues across the app agree.
+                    // Sunny yellow — matches the LCD stat-card hue used across
+                    // the dashboard (yellow panels for cost / month energy).
                     lineStyle: { color: '#f5c542', width: 2 },
-                    areaStyle: { color: 'rgba(245, 197, 66, 0.22)' },
+                    areaStyle: { color: 'rgba(245, 197, 66, 0.45)' },
                     data: [],
                 },
                 {
@@ -345,10 +345,14 @@ if (dashboardPage) {
                     data: [],
                 },
                 {
+                    // Profit is the bookkeeping line "generation minus
+                    // consumption". The card is visually about generation —
+                    // the yellow area underneath — so we keep profit as a
+                    // hairline overlay (still visible on hover via tooltip)
+                    // without its own area fill that would muddle the colour.
                     name: 'Профицит',
                     type: 'line', smooth: true, symbol: 'none',
-                    lineStyle: { color: '#f04848', width: 1.6 },
-                    areaStyle: { color: 'rgba(240, 72, 72, 0.22)', origin: 0 },
+                    lineStyle: { color: 'rgba(245, 197, 66, 0.55)', width: 1 },
                     data: [],
                 },
             ],
