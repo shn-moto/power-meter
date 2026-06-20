@@ -70,6 +70,7 @@ from app.storage import (
     pick_bucket,
     save_sample,
     lookup_device_by_ingest_token,
+    find_battery_monitor_device_id,
     sync_device_profiles_from_disk,
     update_device_summary_config,
 )
@@ -222,9 +223,14 @@ class SolarConsumerTogglePayload(BaseModel):
 
 
 class IngestSamplePayload(BaseModel):
-    """A reading from an active-pusher device. captured_at is optional —
-    server time is used if omitted. power_w is the only required field."""
-    power_w: float
+    """A reading from an active-pusher device. captured_at is optional.
+
+    Provide either current_a (preferred — voltage gets looked up from the
+    battery monitor's most recent sample) or power_w directly. At least one
+    must be present.
+    """
+    current_a: float | None = None
+    power_w: float | None = None
     captured_at: str | None = None
     raw_dps: dict[str, Any] | None = None
 
@@ -2740,6 +2746,35 @@ def device_stats_api(
     return JSONResponse(jsonable_encoder(payload))
 
 
+def _resolve_battery_voltage(app: FastAPI, config: AppConfig) -> float | None:
+    """Latest battery voltage as seen by the monitor's last sample (in-memory).
+
+    Used by /api/ingest to convert a current-only push (current_a) into a
+    power reading (power_w = current_a * voltage_v). Looks up the monitor's
+    device_id once and caches it on app.state, so subsequent ingests skip
+    the DB hit. Returns None if no monitor exists or its last sample lacks
+    the voltage DP.
+    """
+    monitor_id = getattr(app.state, "battery_monitor_device_id", None)
+    if monitor_id is None:
+        monitor_id = find_battery_monitor_device_id(config)
+        app.state.battery_monitor_device_id = monitor_id or ""
+    if not monitor_id:
+        return None
+
+    live = app.state.live_samples.get(monitor_id)
+    if not live or not isinstance(live.raw_dps, dict):
+        return None
+    raw_v = live.raw_dps.get("20")
+    if raw_v is None:
+        return None
+    try:
+        # dp 20 on the Atorch is V × 100 (profile scale_digits=2).
+        return float(raw_v) / 100.0
+    except (TypeError, ValueError):
+        return None
+
+
 @app.post("/api/ingest/{device_id}")
 async def device_ingest_api(
     request: Request, device_id: str, payload: IngestSamplePayload
@@ -2774,10 +2809,27 @@ async def device_ingest_api(
         captured_at = datetime.now(timezone.utc)
 
     raw_dps: dict[str, Any] = dict(payload.raw_dps or {})
+
+    if payload.current_a is not None:
+        current_a = float(payload.current_a)
+        voltage_v = _resolve_battery_voltage(request.app, config)
+        if voltage_v is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Battery monitor voltage unavailable — try again or send power_w explicitly",
+            )
+        power_w = current_a * voltage_v
+        raw_dps.setdefault("current_a", current_a)
+        raw_dps.setdefault("voltage_v", round(voltage_v, 2))
+    elif payload.power_w is not None:
+        power_w = float(payload.power_w)
+    else:
+        raise HTTPException(status_code=422, detail="Provide current_a or power_w")
+
     sample = DeviceSample(
         device_id=device_id,
         captured_at=captured_at,
-        power_w=float(payload.power_w),
+        power_w=power_w,
         raw_dps=raw_dps,
         source="pushed",
     )

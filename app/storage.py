@@ -505,6 +505,23 @@ def refresh_managed_device_cloud_data(
         connection.commit()
 
 
+def find_battery_monitor_device_id(config: AppConfig) -> str | None:
+    """Return the device_id of the battery monitor (the device exposing a
+    `state_of_charge` capability). Used to source a fresh pack voltage when an
+    active-pusher device reports only current."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id FROM device_capabilities
+                WHERE capability_code = 'state_of_charge'
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+    return str(row.get("device_id")) if row else None
+
+
 def lookup_device_by_ingest_token(config: AppConfig, token: str) -> dict[str, Any] | None:
     """Return the device row matching this push-ingest token. Used by the
     /api/ingest endpoint to authenticate active-pusher devices (gear that

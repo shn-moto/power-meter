@@ -43,14 +43,13 @@ def fake_voltage_v() -> float:
 
 def push_one(base: str, token: str, power_w: float, voltage_v: float) -> tuple[int, str]:
     url = f"{base.rstrip('/')}/api/ingest/mppt-solar"
+    # Real hardware will only know the current — voltage is resolved server-side
+    # from the battery monitor at the moment of ingest. Mirror that here so the
+    # fake exercises the same code path.
     current_a = round(power_w / voltage_v, 3) if voltage_v else 0.0
     body = json.dumps({
-        "power_w": round(power_w, 1),
-        "raw_dps": {
-            "voltage_v": voltage_v,
-            "current_a": current_a,
-            "source": "tools_push_fake_solar",
-        },
+        "current_a": current_a,
+        "raw_dps": {"source": "tools_push_fake_solar"},
     }).encode("utf-8")
     req = urllib.request.Request(
         url,
