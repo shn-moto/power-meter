@@ -1,0 +1,33 @@
+{
+  "profile_version": 1,
+  "device": {
+    "device_id": "mppt-solar",
+    "name": "Солнце MPPT",
+    "room": "Зал",
+    "device_kind": "meter",
+    "is_energy_meter": true,
+    "is_charger": false,
+    "is_generator": true,
+    "is_solar_consumer": false,
+    "allow_custom_automation": false,
+    "category_code": "active_sensor",
+    "product_id": null,
+    "product_name": "MPPT push sensor"
+  },
+  "connection": {
+    "local_key": "",
+    "local_ip": "",
+    "protocol_version": 0,
+    "ip_source": "active-pusher",
+    "last_verified_at": null,
+    "discovery_required": false,
+    "ingest_token": "WC2O3LIrOC_-vKVHuA2SLMGUwMCpZp1w"
+  },
+  "summary": {
+    "default_power_mode": "current",
+    "default_power_dps_key": null,
+    "default_visualized_codes": []
+  },
+  "dps": [],
+  "controls": []
+}

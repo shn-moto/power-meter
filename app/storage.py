@@ -287,6 +287,7 @@ def upsert_managed_device(
     gateway_device_id: str | None = None,
     cid: str | None = None,
     power_correction_factor: float = 1.0,
+    ingest_token: str | None = None,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -350,8 +351,8 @@ def upsert_managed_device(
             cursor.execute(
                 """
                 INSERT INTO device_connections (
-                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, cid, power_correction_factor, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    device_id, local_key, ip_address, version, total_power_dps_key, total_power_scale, gateway_device_id, cid, power_correction_factor, ingest_token, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT(device_id) DO UPDATE SET
                     local_key = EXCLUDED.local_key,
                     ip_address = CASE
@@ -367,6 +368,7 @@ def upsert_managed_device(
                     gateway_device_id = EXCLUDED.gateway_device_id,
                     cid = EXCLUDED.cid,
                     power_correction_factor = EXCLUDED.power_correction_factor,
+                    ingest_token = EXCLUDED.ingest_token,
                     updated_at = NOW()
                 """,
                 (
@@ -379,6 +381,7 @@ def upsert_managed_device(
                     gateway_device_id,
                     cid,
                     power_correction_factor,
+                    ingest_token,
                 ),
             )
             cursor.execute("DELETE FROM device_capabilities WHERE device_id = %s", (device_id,))
@@ -500,6 +503,28 @@ def refresh_managed_device_cloud_data(
                     ],
                 )
         connection.commit()
+
+
+def lookup_device_by_ingest_token(config: AppConfig, token: str) -> dict[str, Any] | None:
+    """Return the device row matching this push-ingest token. Used by the
+    /api/ingest endpoint to authenticate active-pusher devices (gear that
+    POSTs its readings to us instead of being LAN-polled)."""
+    if not token:
+        return None
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.device_id, d.name, d.is_energy_meter, d.is_generator
+                FROM device_connections c
+                JOIN devices d ON d.device_id = c.device_id
+                WHERE c.ingest_token = %s
+                LIMIT 1
+                """,
+                (token,),
+            )
+            row = cursor.fetchone()
+    return row
 
 
 def save_sample(config: AppConfig, sample: DeviceSample) -> None:
@@ -758,7 +783,10 @@ def _validate_profile_document(path: Path, payload: dict[str, Any]) -> tuple[str
         raise ValueError(f"{path.name}: summary.default_power_mode must be 'total' or 'current'")
 
     is_energy_meter = bool(device.get("is_energy_meter", True))
-    if is_energy_meter and summary.get("default_power_dps_key") in (None, ""):
+    is_active_pusher = bool(str(connection.get("ingest_token") or "").strip())
+    if is_energy_meter and not is_active_pusher and summary.get("default_power_dps_key") in (None, ""):
+        # Active pushers (POST /api/ingest/...) deliver power_w directly, so
+        # they don't need a DPS key to extract power from raw_dps.
         raise ValueError(f"{path.name}: summary.default_power_dps_key is required for energy meter devices")
 
     visualized_codes = summary.get("default_visualized_codes")
@@ -824,6 +852,7 @@ def materialize_device_profile(
         gateway_device_id=(str(connection.get("gateway_device_id") or "").strip() or None),
         cid=(str(connection.get("cid") or "").strip() or None),
         power_correction_factor=float(connection.get("power_correction_factor") or 1.0),
+        ingest_token=(str(connection.get("ingest_token") or "").strip() or None),
     )
 
 def sync_device_profiles_from_disk(config: AppConfig, profiles_dir: Path | None = None) -> list[str]:

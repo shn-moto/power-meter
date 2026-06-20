@@ -69,6 +69,7 @@ from app.storage import (
     init_connection_pool,
     pick_bucket,
     save_sample,
+    lookup_device_by_ingest_token,
     sync_device_profiles_from_disk,
     update_device_summary_config,
 )
@@ -87,7 +88,10 @@ SENSOR_CLOUD_OK_SECONDS = 90.0
 SENSOR_CLOUD_WARNING_SECONDS = 300.0
 SENSOR_CLOUD_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 PUBLIC_PATHS = {"/health", "/login", "/logout"}
-PUBLIC_PATH_PREFIXES = ("/static",)
+# `/api/ingest/` is open so non-LAN active-pusher devices (ESP32, RPi, etc.)
+# can reach it without a session cookie. The endpoint itself authenticates
+# each request via the per-device `X-Ingest-Token` header.
+PUBLIC_PATH_PREFIXES = ("/static", "/api/ingest/")
 LOGGER = logging.getLogger(__name__)
 
 TUYA_CATEGORY_LABELS = {
@@ -215,6 +219,14 @@ class DeviceFunctionPayload(BaseModel):
 
 class SolarConsumerTogglePayload(BaseModel):
     enabled: bool
+
+
+class IngestSamplePayload(BaseModel):
+    """A reading from an active-pusher device. captured_at is optional —
+    server time is used if omitted. power_w is the only required field."""
+    power_w: float
+    captured_at: str | None = None
+    raw_dps: dict[str, Any] | None = None
 
 
 def _hash_password(password: str) -> str:
@@ -2726,6 +2738,52 @@ def device_stats_api(
     if not payload:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
     return JSONResponse(jsonable_encoder(payload))
+
+
+@app.post("/api/ingest/{device_id}")
+async def device_ingest_api(
+    request: Request, device_id: str, payload: IngestSamplePayload
+) -> JSONResponse:
+    """Receive a sample from an active-pusher device (no LAN polling).
+
+    Authenticated via the per-device `X-Ingest-Token` header. The token is
+    stored in `device_connections.ingest_token` and seeded from the
+    profile JSON's `connection.ingest_token` field. Writes a row to
+    `samples` with source='pushed' and updates the in-memory live_samples
+    snapshot so dashboard reflects the reading immediately.
+    """
+    token = str(request.headers.get("x-ingest-token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing X-Ingest-Token")
+
+    config: AppConfig = request.app.state.app_config
+    device_row = lookup_device_by_ingest_token(config, token)
+    if not device_row or str(device_row.get("device_id")) != device_id:
+        # Same error for unknown token and token/device-id mismatch — no
+        # need to leak which one is wrong.
+        raise HTTPException(status_code=403, detail="Invalid token for this device")
+
+    if payload.captured_at:
+        try:
+            captured_at = datetime.fromisoformat(payload.captured_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=f"Bad captured_at: {exc}") from exc
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=timezone.utc)
+    else:
+        captured_at = datetime.now(timezone.utc)
+
+    raw_dps: dict[str, Any] = dict(payload.raw_dps or {})
+    sample = DeviceSample(
+        device_id=device_id,
+        captured_at=captured_at,
+        power_w=float(payload.power_w),
+        raw_dps=raw_dps,
+        source="pushed",
+    )
+    await asyncio.to_thread(save_sample, config, sample)
+    request.app.state.live_samples[device_id] = sample
+    return JSONResponse({"status": "ok", "captured_at": captured_at.isoformat()})
 
 
 @app.get("/api/devices/{device_id}/live")
