@@ -319,7 +319,7 @@ if (dashboardPage) {
                     const surplus = Math.max(gen - cons, 0);
                     return [
                         `<strong>${hh}:${mm}</strong>`,
-                        `<span style="color:#67b86b">●</span> Генерация: ${gen.toFixed(3)} кВт`,
+                        `<span style="color:#f5c542">●</span> Генерация: ${gen.toFixed(3)} кВт`,
                         `<span style="color:#e8a838">●</span> Потребление: ${cons.toFixed(3)} кВт`,
                         `<span style="color:#f04848">●</span> Профицит: ${surplus.toFixed(3)} кВт`,
                     ].join('<br/>');
@@ -331,8 +331,10 @@ if (dashboardPage) {
                 {
                     name: 'Генерация',
                     type: 'line', smooth: true, symbol: 'none',
-                    lineStyle: { color: '#67b86b', width: 2 },
-                    areaStyle: { color: 'rgba(103, 184, 107, 0.22)' },
+                    // Sunny yellow — matches the implicit-solar bar colour on the
+                    // monthly report so all "solar" cues across the app agree.
+                    lineStyle: { color: '#f5c542', width: 2 },
+                    areaStyle: { color: 'rgba(245, 197, 66, 0.22)' },
                     data: [],
                 },
                 {
