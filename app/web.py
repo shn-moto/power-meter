@@ -69,6 +69,7 @@ from app.storage import (
     init_connection_pool,
     pick_bucket,
     save_sample,
+    save_samples_batch,
     lookup_device_by_ingest_token,
     find_battery_monitor_device_id,
     sync_device_profiles_from_disk,
@@ -223,15 +224,13 @@ class SolarConsumerTogglePayload(BaseModel):
 
 
 class IngestSamplePayload(BaseModel):
-    """A reading from an active-pusher device. captured_at is optional.
+    """A single reading from an active-pusher device.
 
-    Provide either current_a (preferred — voltage gets looked up from the
-    battery monitor's most recent sample) or power_w directly. At least one
-    must be present.
+    Both fields are required. Voltage is resolved server-side from the
+    battery monitor's latest sample, so the sensor only sends current.
     """
-    current_a: float | None = None
-    power_w: float | None = None
-    captured_at: str | None = None
+    current_a: float
+    captured_at: str
     raw_dps: dict[str, Any] | None = None
 
 
@@ -2777,15 +2776,20 @@ def _resolve_battery_voltage(app: FastAPI, config: AppConfig) -> float | None:
 
 @app.post("/api/ingest/{device_id}")
 async def device_ingest_api(
-    request: Request, device_id: str, payload: IngestSamplePayload
+    request: Request, device_id: str, payloads: list[IngestSamplePayload]
 ) -> JSONResponse:
-    """Receive a sample from an active-pusher device (no LAN polling).
+    """Receive a batch of readings from an active-pusher device.
 
-    Authenticated via the per-device `X-Ingest-Token` header. The token is
-    stored in `device_connections.ingest_token` and seeded from the
-    profile JSON's `connection.ingest_token` field. Writes a row to
-    `samples` with source='pushed' and updates the in-memory live_samples
-    snapshot so dashboard reflects the reading immediately.
+    Body is a JSON array of `{current_a, captured_at, raw_dps?}` items.
+    Voltage is resolved once from the battery monitor's most recent live
+    sample and reused across the batch — over a typical push window
+    (seconds to minutes) the pack voltage barely moves and one DB round-trip
+    is enough.
+
+    Authenticated via the per-device `X-Ingest-Token` header. Samples land
+    in the `samples` table with source='pushed'; the in-memory live_samples
+    snapshot is updated with the *latest* timestamp in the batch so the
+    dashboard reflects current state.
     """
     token = str(request.headers.get("x-ingest-token") or "").strip()
     if not token:
@@ -2794,48 +2798,52 @@ async def device_ingest_api(
     config: AppConfig = request.app.state.app_config
     device_row = lookup_device_by_ingest_token(config, token)
     if not device_row or str(device_row.get("device_id")) != device_id:
-        # Same error for unknown token and token/device-id mismatch — no
-        # need to leak which one is wrong.
         raise HTTPException(status_code=403, detail="Invalid token for this device")
 
-    if payload.captured_at:
+    if not payloads:
+        raise HTTPException(status_code=422, detail="Empty batch")
+
+    voltage_v = _resolve_battery_voltage(request.app, config)
+    if voltage_v is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Battery monitor voltage unavailable — try again once it's streaming",
+        )
+    voltage_v_rounded = round(voltage_v, 2)
+
+    samples: list[DeviceSample] = []
+    for idx, item in enumerate(payloads):
         try:
-            captured_at = datetime.fromisoformat(payload.captured_at.replace("Z", "+00:00"))
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(status_code=422, detail=f"Bad captured_at: {exc}") from exc
+            captured_at = datetime.fromisoformat(item.captured_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Bad captured_at at index {idx}: {exc}",
+            ) from exc
         if captured_at.tzinfo is None:
             captured_at = captured_at.replace(tzinfo=timezone.utc)
-    else:
-        captured_at = datetime.now(timezone.utc)
 
-    raw_dps: dict[str, Any] = dict(payload.raw_dps or {})
-
-    if payload.current_a is not None:
-        current_a = float(payload.current_a)
-        voltage_v = _resolve_battery_voltage(request.app, config)
-        if voltage_v is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Battery monitor voltage unavailable — try again or send power_w explicitly",
-            )
-        power_w = current_a * voltage_v
+        raw_dps: dict[str, Any] = dict(item.raw_dps or {})
+        current_a = float(item.current_a)
         raw_dps.setdefault("current_a", current_a)
-        raw_dps.setdefault("voltage_v", round(voltage_v, 2))
-    elif payload.power_w is not None:
-        power_w = float(payload.power_w)
-    else:
-        raise HTTPException(status_code=422, detail="Provide current_a or power_w")
+        raw_dps.setdefault("voltage_v", voltage_v_rounded)
+        samples.append(
+            DeviceSample(
+                device_id=device_id,
+                captured_at=captured_at,
+                power_w=current_a * voltage_v,
+                raw_dps=raw_dps,
+                source="pushed",
+            )
+        )
 
-    sample = DeviceSample(
-        device_id=device_id,
-        captured_at=captured_at,
-        power_w=power_w,
-        raw_dps=raw_dps,
-        source="pushed",
-    )
-    await asyncio.to_thread(save_sample, config, sample)
-    request.app.state.live_samples[device_id] = sample
-    return JSONResponse({"status": "ok", "captured_at": captured_at.isoformat()})
+    await asyncio.to_thread(save_samples_batch, config, samples)
+    latest = max(samples, key=lambda s: s.captured_at)
+    request.app.state.live_samples[device_id] = latest
+    return JSONResponse({
+        "status": "ok",
+        "accepted": len(samples),
+        "latest_captured_at": latest.captured_at.isoformat(),
+    })
 
 
 @app.get("/api/devices/{device_id}/live")
