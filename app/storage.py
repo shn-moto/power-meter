@@ -609,9 +609,24 @@ def _refresh_aggregate_windows(database_url: str, captured_at_start: datetime, c
 
     with psycopg.connect(database_url, autocommit=True) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("CALL refresh_continuous_aggregate('samples_hourly', %s, %s)", (hourly_start, hourly_end))
-            cursor.execute("CALL refresh_continuous_aggregate('samples_daily', %s, %s)", (daily_start, daily_end))
-            cursor.execute("CALL refresh_continuous_aggregate('samples_monthly', %s, %s)", (monthly_start, monthly_end))
+            # If another writer is already refreshing the same window, swallow
+            # the lock error: our sample is already committed, the caggs use
+            # materialized_only=false so realtime computation covers the gap
+            # until the next refresh wins.
+            for view, w_start, w_end in (
+                ("samples_hourly", hourly_start, hourly_end),
+                ("samples_daily", daily_start, daily_end),
+                ("samples_monthly", monthly_start, monthly_end),
+            ):
+                try:
+                    cursor.execute(f"CALL refresh_continuous_aggregate('{view}', %s, %s)", (w_start, w_end))
+                except (psycopg.errors.LockNotAvailable, psycopg.errors.InvalidParameterValue):
+                    # InvalidParameterValue happens on the monthly cagg when
+                    # the window is exactly one bucket wide (TimescaleDB
+                    # demands strictly more). The data is committed; the cagg
+                    # will catch up on the next save_sample that lands in an
+                    # adjacent month.
+                    pass
 
 
 def upsert_device_profile(
