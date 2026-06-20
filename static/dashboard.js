@@ -179,6 +179,14 @@ if (dashboardPage) {
 
     const applyCardStatus = (card, device) => {
         card.dataset.lastSeenStatus = device.last_seen_status || 'error';
+        // Active-pusher devices (no LAN polling) — keep the card visible
+        // even when hide-offline is on and the device is quiet. Silence
+        // is normal for them; absence is only meaningful long-term.
+        if (device.is_pushed) {
+            card.dataset.devicePushed = '';
+        } else {
+            delete card.dataset.devicePushed;
+        }
     };
 
     const updateCard = (card, device) => {

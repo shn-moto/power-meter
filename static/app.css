@@ -378,9 +378,9 @@ p {
     cursor: pointer;
 }
 
-body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
-body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
-body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]) {
+body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]),
+body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]),
+body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]) {
     display: none !important;
 }
 
@@ -603,9 +603,9 @@ body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-
     font-family: inherit;
 }
 
-body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
-body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]),
-body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]) {
+body.hide-offline [data-device-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]),
+body.hide-offline [data-generator-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]),
+body.hide-offline [data-sensor-card][data-last-seen-status]:not([data-last-seen-status="ok"]):not([data-device-pushed]) {
     display: none;
 }
 

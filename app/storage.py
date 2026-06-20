@@ -2385,6 +2385,7 @@ def _get_dashboard_summary_context(
                       d.power_type,
                        COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') AS ip_address,
                       (COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') <> '') AS connection_ready,
+                      (c.ingest_token IS NOT NULL) AS is_pushed,
                       c.total_power_dps_key,
                       c.total_power_scale
                 FROM devices d
@@ -2489,6 +2490,11 @@ def get_dashboard_summary(
             "device_kind": device.get("device_kind"),
             "connection_ready": bool(device.get("connection_ready")),
             "ip_address": str(device.get("ip_address") or "").strip() or None,
+            # Pushed devices (active sensors that POST their readings) are
+            # treated as "always present" by the dashboard — going quiet for
+            # hours is meaningful for them (no sun → no solar to report) and
+            # shouldn't get them hidden under the hide-offline toggle.
+            "is_pushed": bool(device.get("is_pushed")),
             "last_seen": last_seen,
             "last_seen_age_seconds": last_seen_age_seconds,
             "last_seen_status": last_seen_status,
