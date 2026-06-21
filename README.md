@@ -28,8 +28,9 @@ Tuya LAN devices  ───► poll loop (asyncio task)  ──► samples table
 - **Container layout** (`docker-compose.yml`): `db` (TimescaleDB pg16) +
   `power-meter` (FastAPI + uvicorn). Port 8484 exposed on LAN; Cloudflare
   Tunnel handles WAN. `./deploy/server-update.sh` does `git pull` + rebuild.
-- **Linux host**: `192.168.1.107` (user "powermeter"). All deploys go there
-  via `ssh powermeter@192.168.1.107`.
+- **Linux host**: `ssh powermeter@shn-linux` — hostname is stable, the
+  LAN IP rotates so don't hardcode it. The deploy script lives at
+  `~/power-meter/deploy/server-update.sh`.
 - **Migrations** under `app/migrations/*.sql` run at startup, tracked in
   `schema_migrations`. Don't rename old ones; append new ones.
 
@@ -37,10 +38,11 @@ Tuya LAN devices  ───► poll loop (asyncio task)  ──► samples table
 
 | Source            | DB table            | Purpose                                            |
 |-------------------|---------------------|----------------------------------------------------|
-| Tuya LAN status() | `samples`           | One row per device per `SAMPLE_WRITE_INTERVAL_SECONDS` (default 5s). Columns: `device_id, captured_at, power_w, raw_dps (JSONB), source`. Hypertable, 1-year retention, 14-day compression. |
-| poll loop         | `live_samples` dict | Newest sample per device, in-memory only, refreshed every poll iteration. |
+| Tuya LAN status() | `samples`           | One row per device per `SAMPLE_WRITE_INTERVAL_SECONDS` (default 5s). Columns: `device_id, captured_at, power_w, raw_dps (JSONB), source`. Hypertable, 1-year retention, 14-day compression. `source` is `'live'` (poller), `'pushed'` (active-pusher devices — §7), or `'cloud-restore'` (back-fill from Tuya cloud logs, see `tools_restore_samples_from_cloud.py`). |
+| poll loop         | `live_samples` dict | Newest sample per device, in-memory only, refreshed every poll iteration. Active-pusher endpoint writes here too so the dashboard sees pushed devices in real time. |
 | trick678 probes   | `raw_dps_latest` dict | Newest phase-packet bytes per device (DPS 6/7/8 for breakers), in-memory only. |
 | Meter readings    | `meter_readings`    | Manual electric-meter reading entries from the main page. |
+| Automations       | `automations`       | One row per registered automation class (slug, bound device, cron, last_run_status/log). See §8. |
 
 For energy aggregation we have **two paths**, picked per device:
 - `power_type='current'` (sockets with `cur_power` DPS): `samples_hourly.energy_wh = avg(power_w) * (max-min)*n/(n-1)/3600`, clamped to 1h per bucket. Daily/monthly sum the hourly.
@@ -55,10 +57,14 @@ are wiped and re-inserted on every sync).
 
 Fields the rest of the code reads:
 - `device.is_energy_meter` — sockets/breakers vs sensors.
-- `device.is_charger` — breakers that get the charger UI (line chart + sessions list on day view) instead of hourly bars.
+- `device.is_charger` — devices that get the charger UI (line chart + sessions list on day view) instead of hourly bars. Session energy uses `add_ele` telescoping when the device exposes it (the Tuya counter is the device's own integral, matches the Atorch number), see `_get_add_ele_meta_from_capabilities` + the override loop in `get_charger_day_stats`.
+- `device.is_generator` — feeds into the dashboard's "Генерация" section and the monthly report's "генерация" leg. Both polled solar sockets and active-pusher current sensors set this.
+- `device.is_solar_consumer` — user-toggleable from the dashboard checkbox (not synced from the profile after first seed). Surfaced as a power trace under the generator chart.
 - `device.is_gateway` — Zigbee hub. Has its own `local_key` and `local_ip`; sub-devices live behind it.
 - `connection.gateway_device_id` — set on sub-devices (Zigbee child) instead of `local_key`/`local_ip`. At runtime the SQL JOIN in `get_polling_devices`/`get_control_device` inherits the gateway's endpoint and `tuya_service.fetch_status` opens an `OutletDevice` with `cid=device_id` so the gateway routes the query.
-- `summary.default_power_mode` → `power_type` (`current` | `total`).
+- `connection.power_correction_factor` — per-device multiplier applied to power in `extract_metrics` (LAN poll) and in `/api/ingest/...` (pusher). Default `1.0`. Used to compensate for cheap Tuya plugs that mis-meter switch-mode loads. Migration `012`.
+- `connection.ingest_token` — non-NULL marks the device as an **active pusher** (§7). The LAN poll loop skips it (`local_key`/`ip_address` stay empty); samples arrive via HTTP POST. Migration `013`.
+- `summary.default_power_mode` → `power_type` (`current` | `total`). For active-pusher devices the DPS-key validation is relaxed since they ship `power_w` (or `current_a`) directly.
 - `summary.default_power_dps_key` → which DPS to read for the device's power value (current power for `current`, energy counter for `total`).
 - `summary.default_visualized_codes` → DPS shown on the device detail page.
 - For each entry in `dps[]`: `lan.request_mode` may be `"trick678_1P"` (Tesla wallbox, 1 phase) or `"trick678_3P"` (3-phase stove). This flags the device for the persistent-socket piggyback (see §5).
@@ -111,10 +117,42 @@ This is what `static/device.js` polls every 5s on the device page.
   `_decode_phase_packet_parts` in `app/web.py` (server-side, then sent as
   pre-decoded I/U/P parts in `live_metrics`) — JS just renders them.
 
+## 5a. Active-pusher devices and `/api/ingest/{device_id}`
+
+Some gear can't be LAN-polled — the user's DC-current sensor on the MPPT
+output, ESP32 home-rolled meters, things on the wrong subnet. Those POST
+their readings to us instead.
+
+- Profile JSON sets `connection.ingest_token` (any string, unique across
+  the project — there's a unique partial index). `local_key`/`local_ip`
+  stay empty so `get_polling_devices` filters the device out and the LAN
+  loop never touches it.
+- The endpoint expects a **JSON array** of `{current_a, captured_at, raw_dps?}`
+  items. `current_a` only — voltage is resolved server-side once per
+  request from the battery monitor's latest in-memory live sample
+  (`_resolve_battery_voltage`, dp 20 / 100 of the device that has a
+  `state_of_charge` capability). Power saved as
+  `current_a * voltage_v * power_correction_factor`.
+- Auth: `X-Ingest-Token` header. The path `/api/ingest/` is in
+  `PUBLIC_PATH_PREFIXES` so the cookie middleware lets it through; the
+  endpoint then enforces the token. Wrong token → 403. Missing battery
+  monitor reading → 503 (don't silently substitute a nominal voltage).
+- `save_samples_batch` swallows `LockNotAvailable` and
+  `InvalidParameterValue` on the cagg refresh so a concurrent poll-loop
+  refresh or a one-bucket-wide monthly window never poisons the
+  endpoint's response. The sample is already committed by then; the cagg
+  catches up on the next write.
+- Pushed devices ride past the `hide-offline` dashboard toggle: the
+  payload carries `is_pushed=true`, the JS adds `data-device-pushed` on
+  the card, and the CSS rule excludes them via `:not([data-device-pushed])`.
+  Solar that quiets out for the night should still leave its card
+  visible.
+
 ## 6. Frontend
 
-- `templates/index.html` (main page): 4-card hero row (month energy,
-  estimated cost, devices online, **undercharge**), device grid (for
+- `templates/index.html` (main page): 5-card hero row (month energy,
+  estimated cost, **monthly solar (implicit)**, devices online,
+  **undercharge**), device grid (for
   `is_energy_meter`), sensor grid. Bottom of the page there's a
   collapsible `<details>` "Учёт показаний счётчиков" — that's the manual
   meter reading form + status table + history table. `static/dashboard.js`
@@ -136,6 +174,14 @@ This is what `static/device.js` polls every 5s on the device page.
   `LIVE_REFRESH_INTERVAL_MS` in `static/device.js`). The poll loop's
   `status() + piggyback probes` cycle for trick678 devices is the
   slowest path; matching the UI to that cadence keeps things honest.
+- **Unit display convention** (the user is on a sub-kW two-panel setup):
+  every place that shows **instantaneous power** renders in **Вт**.
+  **Accumulated energy** stays in **кВт·ч** (day_energy, session
+  energy, month totals). `static/device.js::renderLineChart` rewrites
+  `chartConfig.unit === 'кВт'` → `'Вт'` and × 1000 the series at the
+  display boundary; the dashboard's generator card and the report bars
+  do the same. Don't ship raw `power_kw` to a chart without that
+  scaling.
 
 ## 7. Charger view specifics
 
@@ -145,15 +191,70 @@ This is what `static/device.js` polls every 5s on the device page.
   - `CHARGER_IDLE_THRESHOLD_W = 50.0` (anything below this counts as idle)
   - `CHARGER_SESSION_GAP_SECONDS = 300.0` (idle gap > 5 min = new session)
   - `CHARGER_SAMPLE_GAP_SECONDS = 60.0` (trapezoid skips intervals wider than this so a Wi-Fi dropout doesn't inflate energy)
+- **Session energy** comes from `add_ele` telescoping (Tuya's own internal counter) when the device exposes it, **not** the trapezoidal integral of `cur_power`. Atorch on the battery side reads the same physical quantity so the two numbers agree to within rounding. See the override loop in `get_charger_day_stats` and `_counter_value_at_or_before`.
 - Total-type chargers (Tesla) fall back to bars — the counter doesn't give enough resolution for a smooth line.
 
-## 8. Meter readings ledger
+## 7a. Monthly report (`/report`)
+
+`monthly_report` view (`app/web.py`) renders `templates/report.html`.
+Shows a stacked daily breakdown for the selected month, a per-month chart
+for the year, prev-month delta, 12-month average, prepaid undercharge,
+and an "implicit solar" estimate.
+
+Implicit solar = `max(0, Atorch dp 127 discharged_kWh - sum(wall charger energy))`
+per UTC-aligned bucket, computed in `storage.get_implicit_solar_by_bucket`.
+Battery monitor (the device with a `state_of_charge` capability) provides
+the discharge integral via Δdp127 × measured dp 20 voltage on each
+interval; chargers are summed from `samples_daily/_monthly`. Conservative
+(ignores charger and inverter efficiencies) — the number is **a lower
+bound** until a direct meter sits on the MPPT line.
+
+## 8. Automations (`app/automations/`)
+
+Cron-driven automation framework. Subclasses of `BaseAutomation` declare
+`slug`, `name`, `device_type`, `default_cron`, `default_config`, and a
+single async `run(ctx)`. They're registered into a module-level `REGISTRY`
+via the `@register` decorator at import time; `__init__.py` imports each
+file so registration happens at app start. Rows in the `automations`
+table store the user-tunable parts: `bound_device_id`, `cron_schedule`,
+`enabled`, `config_json`, plus `last_run_at`/`last_run_status`/`last_run_log`.
+
+Scheduler (`app/scheduler.py`):
+- 30s tick loop started in `lifespan`.
+- For each row: croniter computes `next_run_at`, when fired the runner
+  builds an `AutomationContext` (config, bound_device_id, config_json,
+  `invoke_device_function` callback) and awaits `run(ctx)`.
+- `invoke_device_function` retries the LAN dispatch up to 3 times with
+  1.5s/3.0s back-off — devices occasionally drop the first packet right
+  after waking up the relay.
+- In-memory `app.state.automation_running_slugs` set prevents a slow
+  cron-fire from doubling up if it spans the next tick.
+
+Registered automations as of June 2026:
+- `charger-sunrise` (default `0 2 * * *`): pulls weather forecast from
+  open-meteo, computes expected solar Wh vs expected daily load Wh,
+  sets a target SoC accordingly and runs the charger until reached or
+  timeout.
+- `battery-emergency-charge` (default `*/10 * * * *`): polls battery SoC;
+  if below `emergency_threshold_soc` (default 30 %), turns the charger
+  on and holds until SoC ≥ `target_soc_after_emergency` (default 40 %)
+  or duration cap (default 3 h). Hysteresis prevents relay chatter.
+
+The function code (`switch` vs `switch_1`) used by both is auto-resolved
+from the bound device's capabilities — `resolve_switch_function_code`
+in `app/automations/base.py`. Don't hardcode the legacy `switch_1` again.
+
+UI: `templates/automations.html` lists them with run-now / bind-device /
+toggle-enabled / cron-edit controls. Endpoints under
+`/api/automations/...`.
+
+## 9. Meter readings ledger
 
 - Independent of Tuya. Two physical meters, apartments "2" and "3", combined billing with 250 kWh prepaid quota per settlement period (`METER_PREPAID_KWH` in `app/storage.py`).
 - One row per (apartment, reading_date) in `meter_readings`. The "settlement" flag marks a reading as the new baseline. The combined undercharge is `(sum of (latest − settlement) across apartments) − 250` clamped to ≥0, converted to currency by `config.tariff_per_kwh`.
 - Surfaced as a stat card in the hero row (currency, same format as estimated cost) and a collapsible status table + form below the device grid. JS lives at the bottom of `static/dashboard.js`.
 
-## 9. Auth
+## 10. Auth
 
 Cookie-based session via `starlette.middleware.sessions`. The
 `AuthGateMiddleware` (`app/web.py`) lets LAN traffic through unauthenticated
@@ -162,7 +263,7 @@ Cloudflare tunnel) and requires login for anyone coming from the public
 hostname. Registration is permitted only from the LAN. Passwords are
 bcrypt-hashed via `app_users` table (migration 002).
 
-## 10. Operational notes you'll hit
+## 11. Operational notes you'll hit
 
 - The poll loop logs noisy `RuntimeError: Device X is offline` for every
   off-LAN device, every second. That's expected — the user knows.
@@ -185,7 +286,7 @@ bcrypt-hashed via `app_users` table (migration 002).
   divided by `total_power_scale` (so units = kWh, not watts). Be careful
   not to mix them when computing instantaneous power.
 
-## 11. Tools that exist but are off in prod
+## 12. Tools that exist but are off in prod
 
 - `app/raw_listeners.py` — see §4.2. Imports kept so flipping the
   feature back on is one line.
@@ -195,7 +296,7 @@ bcrypt-hashed via `app_users` table (migration 002).
 - `app/tuya_model.py` — diagnostic-only schema for cloud artifacts.
   Doesn't drive runtime semantics.
 
-## 12. Deploy cheat sheet
+## 13. Deploy cheat sheet
 
 ```bash
 # from your workstation, in repo root
