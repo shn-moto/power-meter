@@ -108,7 +108,12 @@ class ChargerSunrise(BaseAutomation):
         "longitude": 19.06,
         "battery_capacity_wh": 2880,
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
-        "solar_peak_w": 600,
+        # Two-panel sub-kW setup. Calibrated 2026-06-21 against the MPPT
+        # current sensor (power_correction_factor 0.84): stable solar-noon
+        # plateau at ~300 W DC into battery on a clear summer day. The old
+        # 600 W came from un-calibrated Atorch readings that over-stated DC
+        # output by ~2× — see Atorch shunt-wiring saga in commit history.
+        "solar_peak_w": 300,
         # Derate panels because "sunshine_duration" counts marginal-sun minutes
         # at full weight, while real production at those moments is partial.
         "solar_derating_factor": 0.7,
