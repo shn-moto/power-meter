@@ -319,9 +319,9 @@ if (dashboardPage) {
                     const surplus = Math.max(gen - cons, 0);
                     return [
                         `<strong>${hh}:${mm}</strong>`,
-                        `<span style="color:#f5c542">●</span> Генерация: ${gen.toFixed(3)} кВт`,
-                        `<span style="color:#e8a838">●</span> Потребление: ${cons.toFixed(3)} кВт`,
-                        `<span style="color:rgba(245,197,66,0.7)">●</span> Профицит: ${surplus.toFixed(3)} кВт`,
+                        `<span style="color:#f5c542">●</span> Генерация: ${Math.round(gen)} Вт`,
+                        `<span style="color:#e8a838">●</span> Потребление: ${Math.round(cons)} Вт`,
+                        `<span style="color:rgba(245,197,66,0.7)">●</span> Профицит: ${Math.round(surplus)} Вт`,
                     ].join('<br/>');
                 },
             },
@@ -373,11 +373,15 @@ if (dashboardPage) {
             const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/power-trace?minutes=60`, { cache: 'no-store' });
             if (!r.ok) return;
             const data = await r.json();
-            const genPoints = (data.series || []).map((p) => [Date.parse(p.timestamp), Number(p.power_kw || 0)]);
+            // Instantaneous power is rendered in watts (the user wants kW only
+            // for accumulated values like day_energy / month_energy). Convert
+            // here once so every downstream point — chart series, tooltip
+            // lookups, surplus calc — is in W consistently.
+            const genPoints = (data.series || []).map((p) => [Date.parse(p.timestamp), Number(p.power_kw || 0) * 1000]);
             const consMap = new Map();
-            (data.consumers_series || []).forEach((p) => consMap.set(Date.parse(p.timestamp), Number(p.power_kw || 0)));
+            (data.consumers_series || []).forEach((p) => consMap.set(Date.parse(p.timestamp), Number(p.power_kw || 0) * 1000));
             // For consumption, plot as NEGATIVE so it goes below zero on the same axis.
-            const consPoints = (data.consumers_series || []).map((p) => [Date.parse(p.timestamp), -Number(p.power_kw || 0)]);
+            const consPoints = (data.consumers_series || []).map((p) => [Date.parse(p.timestamp), -Number(p.power_kw || 0) * 1000]);
             // Surplus: where generation exceeds consumption at that bucket.
             // Use nearest consumer point (within 60s) for each generator point.
             const consSorted = Array.from(consMap.entries()).sort((a, b) => a[0] - b[0]);
