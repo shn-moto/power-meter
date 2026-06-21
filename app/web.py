@@ -2810,6 +2810,10 @@ async def device_ingest_api(
             detail="Battery monitor voltage unavailable — try again once it's streaming",
         )
     voltage_v_rounded = round(voltage_v, 2)
+    # Per-device calibration multiplier — same field as the LAN poller uses
+    # for sockets that mis-meter their load. Applied on the resulting power
+    # value; raw_dps keeps the un-corrected current as the device reported it.
+    correction = float(device_row.get("power_correction_factor") or 1.0)
 
     samples: list[DeviceSample] = []
     for idx, item in enumerate(payloads):
@@ -2830,7 +2834,7 @@ async def device_ingest_api(
             DeviceSample(
                 device_id=device_id,
                 captured_at=captured_at,
-                power_w=current_a * voltage_v,
+                power_w=current_a * voltage_v * correction,
                 raw_dps=raw_dps,
                 source="pushed",
             )

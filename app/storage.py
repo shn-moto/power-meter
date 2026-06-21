@@ -525,14 +525,17 @@ def find_battery_monitor_device_id(config: AppConfig) -> str | None:
 def lookup_device_by_ingest_token(config: AppConfig, token: str) -> dict[str, Any] | None:
     """Return the device row matching this push-ingest token. Used by the
     /api/ingest endpoint to authenticate active-pusher devices (gear that
-    POSTs its readings to us instead of being LAN-polled)."""
+    POSTs its readings to us instead of being LAN-polled). Also returns
+    the device's power_correction_factor so the endpoint can scale power
+    on the way in, the same way the LAN poller does in extract_metrics."""
     if not token:
         return None
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT d.device_id, d.name, d.is_energy_meter, d.is_generator
+                SELECT d.device_id, d.name, d.is_energy_meter, d.is_generator,
+                       COALESCE(c.power_correction_factor, 1.0) AS power_correction_factor
                 FROM device_connections c
                 JOIN devices d ON d.device_id = c.device_id
                 WHERE c.ingest_token = %s
