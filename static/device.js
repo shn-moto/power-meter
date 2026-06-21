@@ -554,7 +554,8 @@ if (page) {
             const range = `${formatClock(start)} – ${formatClock(end)}`;
             const duration = formatDuration(s.duration_seconds);
             const energy = `${formatNumber(s.energy_kwh)} кВт·ч`;
-            const avg = s.avg_power_kw ? `avg ${formatNumber(s.avg_power_kw)} кВт` : '';
+            // Avg instantaneous → Вт; total session energy stays кВт·ч.
+            const avg = s.avg_power_kw ? `avg ${Math.round(Number(s.avg_power_kw) * 1000)} Вт` : '';
             return `<li class="charger-session-row">
                 <span class="charger-session-index">${i + 1}</span>
                 <span class="charger-session-time">${range}</span>
@@ -568,14 +569,23 @@ if (page) {
     };
 
     const renderLineChart = (series, chartConfig, sessions, consumersSeries) => {
+        // Standing rule: instantaneous power on charts shows in Вт, only
+        // accumulated energy stays in кВт·ч. Backend still ships values as
+        // power_kw for consistency with the aggregate APIs — we convert at
+        // the display boundary so chart axis, tooltip and series numbers all
+        // agree without forcing a backend rename across every device kind.
+        if ((chartConfig.unit || '') === 'кВт') {
+            chartConfig.unit = 'Вт';
+        }
+        const valueScale = chartConfig.unit === 'Вт' ? 1000 : 1;
         const points = series
-            .map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0)])
+            .map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0) * valueScale])
             .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
         const consPoints = (consumersSeries || [])
-            .map((item) => [Date.parse(item.timestamp), -Number(item.power_kw ?? 0)])
+            .map((item) => [Date.parse(item.timestamp), -Number(item.power_kw ?? 0) * valueScale])
             .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
         const consMap = new Map(
-            (consumersSeries || []).map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0)])
+            (consumersSeries || []).map((item) => [Date.parse(item.timestamp), Number(item.power_kw ?? 0) * valueScale])
         );
         const consSorted = Array.from(consMap.entries()).sort((a, b) => a[0] - b[0]);
         const findNearestCons = (ts) => {
