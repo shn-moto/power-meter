@@ -289,6 +289,14 @@ _ATORCH_DEVICE_ID = "bff9e5598e9abd78268oze"
 _ATORCH_REALTIME_DPS = [18, 19, 20, 103]
 _ATORCH_REALTIME_KEEPALIVE_DPS = 101
 _ATORCH_KEEPALIVE_INTERVAL_S = 30.0
+# Microburst: take N updatedps shots spaced this much apart and average
+# their numeric DPS values. Real Atorch readings jitter ±10-30 % second-
+# to-second even with DPS 101=true (it's a real ADC, not smoothed), so
+# averaging within a single poll-cycle gives a much more useful sample.
+# Fits in ~1.2-1.5 s total — comfortably inside the 5 s write interval
+# and doesn't extend Atorch's serial slot in its LAN group meaningfully.
+_ATORCH_BURST_SAMPLES = 4
+_ATORCH_BURST_INTERVAL_S = 0.3
 _realtime_keepalive_last: dict[str, float] = {}
 
 
@@ -316,26 +324,48 @@ def _assert_realtime_keepalive(device: tinytuya.Device, device_id: str) -> None:
 
 
 def _refresh_realtime_dps(device: tinytuya.Device, dps: dict[str, Any]) -> dict[str, Any]:
-    """Issue an explicit updatedps() for the Atorch's real-time DPS and
-    overlay the fresh values onto the cached `status()` output. status()
-    is kept as the source for the rest of the device's DPS (counters,
-    config) — we only refresh the volatile current/power/voltage/SoC."""
+    """Microburst average: take N updatedps shots spaced
+    _ATORCH_BURST_INTERVAL_S apart over the persistent socket and overlay
+    the *average* of the numeric DPS values onto `status()`. Atorch's ADC
+    is noisy — a single instantaneous read can be ±10-30 % off the true
+    value, but averaging 4 reads over ~1 second damps that out without
+    extending the poll cycle past our 5 s write interval.
+
+    Falls back gracefully: if no burst sample succeeds, the original
+    (possibly cached) status() dps stays as-is."""
     import logging
+    import time
     logger = logging.getLogger(__name__)
     device.set_socketTimeout(1.5)
     device.set_socketRetryLimit(0)
-    try:
-        response = device.updatedps(index=_ATORCH_REALTIME_DPS, nowait=False)
-    except Exception as exc:
-        logger.warning("Atorch realtime updatedps exception: %s", exc)
+
+    collected: list[dict[str, Any]] = []
+    for i in range(_ATORCH_BURST_SAMPLES):
+        try:
+            response = device.updatedps(index=_ATORCH_REALTIME_DPS, nowait=False)
+        except Exception as exc:
+            logger.warning("Atorch burst shot %d exception: %s", i, exc)
+            response = None
+        if isinstance(response, dict) and isinstance(response.get("dps"), dict):
+            collected.append(response["dps"])
+        if i < _ATORCH_BURST_SAMPLES - 1:
+            time.sleep(_ATORCH_BURST_INTERVAL_S)
+
+    if not collected:
         return dps
-    if not isinstance(response, dict) or not isinstance(response.get("dps"), dict):
-        return dps
+
     merged = dict(dps)
     for idx in _ATORCH_REALTIME_DPS:
-        value = response["dps"].get(str(idx))
-        if value is not None:
-            merged[str(idx)] = value
+        key = str(idx)
+        values = [c.get(key) for c in collected if c.get(key) is not None]
+        # Average numeric values, ignore strings/booleans (DPS 18/19/20/103
+        # are all numeric on Atorch but be defensive).
+        numerics = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if numerics:
+            avg = sum(numerics) / len(numerics)
+            merged[key] = round(avg) if all(isinstance(v, int) for v in numerics) else avg
+        elif values:
+            merged[key] = values[-1]
     return merged
 
 
