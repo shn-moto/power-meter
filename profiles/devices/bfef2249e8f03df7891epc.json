@@ -23,9 +23,9 @@
     "default_power_mode": "current",
     "default_power_dps_key": "19",
     "default_visualized_codes": [
-      "18",
-      "19",
-      "20"
+      "cur_current",
+      "cur_power",
+      "cur_voltage"
     ]
   },
   "dps": [

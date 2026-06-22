@@ -1507,12 +1507,88 @@ def get_sensor_history(
             }
         )
 
+    # Inverter device gets an extra derived series — the implicit solar
+    # estimate computed from the energy balance at the battery shunt:
+    #   solar_W ≈ atorch_net_W + inverter_AC_W / KPD_inverter
+    # KPD measured 2026-06-22 at ~93.4 % against this exact rig. Yellow
+    # series on the chart matches the LCD-card solar accent across the app.
+    if device_id == _INVERTER_DEVICE_ID:
+        solar_points = _inverter_solar_series(
+            config, start, end, bucket_seconds, divisor=100.0,
+        )
+        if solar_points:
+            series.append({
+                "code": "solar_estimate",
+                "label": "Солнце",
+                "dp_id": None,
+                "unit": "W",
+                "is_boolean": False,
+                "data": solar_points,
+            })
+
     return {
         "bucket_seconds": bucket_seconds,
         "start": start.isoformat(),
         "end": end.isoformat(),
         "series": series,
     }
+
+
+_INVERTER_DEVICE_ID = "bfef2249e8f03df7891epc"
+_BATTERY_MONITOR_DEVICE_ID = "bff9e5598e9abd78268oze"
+_INVERTER_KPD = 0.934
+
+
+def _inverter_solar_series(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_seconds: int,
+    divisor: float = 100.0,
+) -> list[list[float]]:
+    """Bucketed implicit-solar series for the inverter device page.
+
+    LEFT JOIN inverter and Atorch on the same time_bucket so a moment of
+    inverter draw without a fresh Atorch sample (or vice versa) doesn't
+    drop the bucket — fills with 0 for the missing leg, which makes the
+    line continuous through DPS event gaps."""
+    sql = f"""
+    WITH inv AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
+    ),
+    atorch AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG((raw_dps->>'19')::numeric / {divisor}) AS net_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+        AND raw_dps ? '19'
+      GROUP BY bucket
+    )
+    SELECT COALESCE(i.bucket, a.bucket) AS bucket,
+           COALESCE(a.net_w, 0) + COALESCE(i.power_w, 0) / {_INVERTER_KPD} AS solar_w
+    FROM inv i FULL OUTER JOIN atorch a USING (bucket)
+    ORDER BY 1
+    """
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (_INVERTER_DEVICE_ID, start, end,
+                 _BATTERY_MONITOR_DEVICE_ID, start, end),
+            )
+            rows = cursor.fetchall()
+    points: list[list[float]] = []
+    for row in rows:
+        ts = row.get("bucket")
+        if not isinstance(ts, datetime):
+            ts = _parse_dt(ts)
+        value = float(row.get("solar_w") or 0.0)
+        points.append([int(ts.timestamp() * 1000), round(value, 2)])
+    return points
 
 
 def get_battery_load_power_trace(
