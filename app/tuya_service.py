@@ -279,6 +279,66 @@ def _merge_missing_visualized_codes_once(
     return merged
 
 
+# Atorch CW24/CW20 stays in 60-second reporting mode until its DPS 101
+# (`real_time_switch_1s_60s`) is asserted true — and even then it
+# auto-falls back to slow mode after a while. To keep 1-second fresh
+# values flowing over LAN we (a) periodically set DPS 101 = true as a
+# keepalive, and (b) overlay updatedps() onto status() on every poll.
+# Per-device throttled keepalive avoids hammering the device's flash.
+_ATORCH_DEVICE_ID = "bff9e5598e9abd78268oze"
+_ATORCH_REALTIME_DPS = [18, 19, 20, 103]
+_ATORCH_REALTIME_KEEPALIVE_DPS = 101
+_ATORCH_KEEPALIVE_INTERVAL_S = 30.0
+_realtime_keepalive_last: dict[str, float] = {}
+
+
+def _needs_realtime_refresh(device_config: TuyaDeviceConfig) -> bool:
+    return device_config.device_id == _ATORCH_DEVICE_ID
+
+
+def _assert_realtime_keepalive(device: tinytuya.Device, device_id: str) -> None:
+    """Write DPS 101 = true if we haven't done so in the last 30s. The
+    Atorch silently flips this back to false after some idle period; one
+    write keeps fast reporting alive for the next minute or so."""
+    import logging
+    from time import monotonic
+    logger = logging.getLogger(__name__)
+    now = monotonic()
+    last = _realtime_keepalive_last.get(device_id, 0.0)
+    if now - last < _ATORCH_KEEPALIVE_INTERVAL_S:
+        return
+    try:
+        device.set_value(_ATORCH_REALTIME_KEEPALIVE_DPS, True)
+        _realtime_keepalive_last[device_id] = now
+        logger.info("Atorch realtime keepalive sent (DPS 101=true)")
+    except Exception as exc:
+        logger.warning("Atorch keepalive failed: %s", exc)
+
+
+def _refresh_realtime_dps(device: tinytuya.Device, dps: dict[str, Any]) -> dict[str, Any]:
+    """Issue an explicit updatedps() for the Atorch's real-time DPS and
+    overlay the fresh values onto the cached `status()` output. status()
+    is kept as the source for the rest of the device's DPS (counters,
+    config) — we only refresh the volatile current/power/voltage/SoC."""
+    import logging
+    logger = logging.getLogger(__name__)
+    device.set_socketTimeout(1.5)
+    device.set_socketRetryLimit(0)
+    try:
+        response = device.updatedps(index=_ATORCH_REALTIME_DPS, nowait=False)
+    except Exception as exc:
+        logger.warning("Atorch realtime updatedps exception: %s", exc)
+        return dps
+    if not isinstance(response, dict) or not isinstance(response.get("dps"), dict):
+        return dps
+    merged = dict(dps)
+    for idx in _ATORCH_REALTIME_DPS:
+        value = response["dps"].get(str(idx))
+        if value is not None:
+            merged[str(idx)] = value
+    return merged
+
+
 def _has_trick678_modes(device_config: TuyaDeviceConfig) -> bool:
     for mode in (device_config.dps_request_modes or {}).values():
         if isinstance(mode, str) and mode.startswith("trick678_"):
@@ -356,18 +416,26 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     device.set_version(device_config.version)
     device.set_socketTimeout(5.0)
     device.set_socketRetryLimit(2)
-    if needs_piggyback:
+    needs_realtime = _needs_realtime_refresh(device_config)
+    if needs_piggyback or needs_realtime:
         # Keep the TCP socket alive so the follow-up updatedps probes can
-        # reuse the same Tuya session — without persistence the breaker
+        # reuse the same Tuya session — without persistence the device
         # rejects each fresh connect with Err 905.
         device.set_socketPersistent(True)
     try:
+        if needs_realtime:
+            _assert_realtime_keepalive(device, device_config.device_id)
         payload = device.status()
         if isinstance(payload, dict) and isinstance(payload.get("dps"), dict):
             if needs_piggyback:
                 payload = {
                     **payload,
                     "dps": _piggyback_phase_probes(device, payload.get("dps") or {}),
+                }
+            if needs_realtime:
+                payload = {
+                    **payload,
+                    "dps": _refresh_realtime_dps(device, payload.get("dps") or {}),
                 }
             if include_visualized_codes:
                 payload = {
@@ -376,7 +444,7 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
                 }
             return payload
     finally:
-        if needs_piggyback:
+        if needs_piggyback or needs_realtime:
             try:
                 device.close()
             except Exception:
