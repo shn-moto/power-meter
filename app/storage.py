@@ -2540,6 +2540,54 @@ def get_implicit_solar_by_bucket(
 _COMPUTED_SOLAR_DEVICE_ID = "computed-solar"
 
 
+def get_inverter_solar_kwh_period(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+) -> float:
+    """Total kWh of computed solar over the [start, end] window using the
+    inverter-based formula (atorch_net_W + load_AC_W / KPD), 5-minute
+    integration grid. Returns 0 for windows with no overlap between the
+    two sensors — including the entire pre-inverter era, which is the
+    point: BDM-era solar is *already* counted via the bdm-invertor
+    device's real samples in generated_energy_kwh; this number adds the
+    rest *without* double-counting."""
+    sql = """
+    WITH inv AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
+    ),
+    atorch AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket,
+             AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+        AND raw_dps ? '19'
+      GROUP BY bucket
+    )
+    SELECT COALESCE(
+        SUM(GREATEST(0, a.net_w + i.power_w / %s)) * (5.0 / 60.0) / 1000.0,
+        0
+    ) AS solar_kwh
+    FROM inv i INNER JOIN atorch a USING (bucket)
+    """
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    _INVERTER_DEVICE_ID, start, end,
+                    _BATTERY_MONITOR_DEVICE_ID, start, end,
+                    _INVERTER_KPD,
+                ),
+            )
+            row = cursor.fetchone()
+    return round(float(row.get("solar_kwh") or 0.0), 3) if row else 0.0
+
+
 def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> float:
     """Instantaneous computed solar wattage: atorch_net_W + load_AC_W / KPD,
     clamped to ≥ 0. Pulls from the in-memory live_samples snapshot so we
@@ -2845,11 +2893,13 @@ def get_dashboard_summary(
 
     net_energy_wh = consumed_energy_wh - generated_energy_wh
 
-    # Implicit solar this month (Atorch discharge - wall-charger consumption).
-    # Sum across day buckets. Returns 0 if there's no battery monitor or no
-    # chargers — never raises.
-    solar_breakdown = get_implicit_solar_by_bucket(config, month_start, now, "day")
-    solar_energy_kwh = round(sum(v.get("solar_kwh", 0.0) for v in solar_breakdown.values()), 3)
+    # Solar energy for the month = BDM-era metered solar (already in
+    # generated_energy_wh via bdm-invertor's real samples) PLUS new computed
+    # solar from inverter+atorch since the rewiring. No overlap: the inner
+    # join in get_inverter_solar_kwh_period yields 0 for any day without
+    # inverter samples, and BDM was off-line by then.
+    computed_solar_kwh = get_inverter_solar_kwh_period(config, month_start, now)
+    solar_energy_kwh = round(generated_energy_wh / 1000.0 + computed_solar_kwh, 3)
 
     # Synthetic 'Солнце' generator card derived from atorch + inverter
     # measurements — replaces the role that the mppt-solar device used to
@@ -2874,15 +2924,15 @@ def get_dashboard_summary(
             "raw_dps": {},
             "is_generator": True,
             "is_solar_consumer": False,
-            "month_energy_kwh": solar_energy_kwh,
-            "day_energy_kwh": round(
-                sum(
-                    v.get("solar_kwh", 0.0)
-                    for k, v in solar_breakdown.items()
-                    if k.astimezone(_get_timezone(config)).date()
-                    == now.astimezone(_get_timezone(config)).date()
+            # Synthetic 'Солнце' card shows the *new computed* solar only —
+            # BDM history is the bdm-invertor card's job.
+            "month_energy_kwh": computed_solar_kwh,
+            "day_energy_kwh": get_inverter_solar_kwh_period(
+                config,
+                now.astimezone(_get_timezone(config)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
                 ),
-                3,
+                now,
             ),
             "current_power_kw": round(live_solar_w / 1000.0, 3),
         })
