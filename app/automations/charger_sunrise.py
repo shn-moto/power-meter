@@ -106,7 +106,12 @@ class ChargerSunrise(BaseAutomation):
     default_config = {
         "latitude": 49.82,
         "longitude": 19.06,
-        "battery_capacity_wh": 2880,
+        # Huawei powerbank nameplate "working zone" rating — already accounts
+        # for the safe-discharge / safe-charge margin baked into the BMS
+        # cutoffs. Less than the raw V_nom × Ah = 72 × 40 = 2880 Wh figure
+        # on purpose; using 2880 in the math makes the night top-up think
+        # there's headroom that doesn't exist.
+        "battery_capacity_wh": 2530,
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
         # Two-panel sub-kW setup. Calibrated 2026-06-21 against the MPPT
         # current sensor (power_correction_factor 0.84): true solar-noon peak
