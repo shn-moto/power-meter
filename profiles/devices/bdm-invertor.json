@@ -1,9 +1,9 @@
 {
   "profile_version": 1,
   "device": {
-    "device_id": "bfef2249e8f03df7891epc",
-    "name": "Солнце",
-    "room": "Балкон",
+    "device_id": "bdm-invertor",
+    "name": "Солнечный Инвертор",
+    "room": "Зал",
     "device_kind": "socket",
     "is_energy_meter": true,
     "is_generator": true,
@@ -12,10 +12,10 @@
     "product_name": "Smart Plug"
   },
   "connection": {
-    "local_key": "<+NZu|1UI'N.JF]k",
-    "local_ip": "192.168.1.143",
+    "local_key": "",
+    "local_ip": "",
     "protocol_version": 3.5,
-    "ip_source": "manual-seed",
+    "ip_source": "placeholder",
     "last_verified_at": null,
     "discovery_required": false
   },
