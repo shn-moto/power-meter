@@ -22,7 +22,7 @@
     "last_verified_at": null,
     "discovery_required": false,
     "ingest_token": "WC2O3LIrOC_-vKVHuA2SLMGUwMCpZp1w",
-    "power_correction_factor": 0.84
+    "power_correction_factor": 1.35
   },
   "summary": {
     "default_power_mode": "current",
