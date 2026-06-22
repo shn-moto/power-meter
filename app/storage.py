@@ -1515,6 +1515,89 @@ def get_sensor_history(
     }
 
 
+def get_battery_load_power_trace(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_seconds: int = 30,
+    max_points: int = 720,
+) -> list[dict[str, Any]]:
+    """Instantaneous AC-side load on the inverter, derived from the energy
+    balance at the battery shunt:
+
+        load_W = sum(solar_generators_W) − Atorch_net_W
+
+    Atorch's dp 19 is signed (positive when current flows INTO the battery,
+    negative when out to the inverter), so this gives the true power leaving
+    the system via the load path at each moment. Clamped to ≥ 0 — if the
+    formula goes negative it usually means the wall charger is also charging
+    (extra source we don't subtract), or just sampling jitter at low loads.
+
+    Returns the same `{timestamp, power_kw}` shape as
+    `get_solar_consumers_power_trace` so the existing device.js can render
+    it as the "consumption" overlay on a generator's chart with no JS
+    changes."""
+    bucket_seconds = max(5, int(bucket_seconds or 30))
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT device_id FROM devices
+                WHERE is_generator = TRUE AND is_energy_meter = TRUE
+                """
+            )
+            gen_ids = [str(r.get("device_id")) for r in cursor.fetchall() if r.get("device_id")]
+            cursor.execute(
+                """
+                SELECT device_id FROM device_capabilities
+                WHERE capability_code = 'state_of_charge' LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            monitor_id = str(row.get("device_id")) if row else None
+            if not gen_ids or not monitor_id:
+                return []
+
+            cursor.execute(
+                f"""
+                WITH solar AS (
+                  SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+                         AVG(power_w) AS solar_w
+                  FROM samples
+                  WHERE device_id = ANY(%s)
+                    AND captured_at >= %s AND captured_at <= %s
+                  GROUP BY bucket
+                ),
+                atorch AS (
+                  SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+                         AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
+                  FROM samples
+                  WHERE device_id = %s
+                    AND captured_at >= %s AND captured_at <= %s
+                    AND raw_dps ? '19'
+                  GROUP BY bucket
+                )
+                SELECT s.bucket, GREATEST(0, s.solar_w - COALESCE(a.net_w, 0)) AS load_w
+                FROM solar s
+                LEFT JOIN atorch a USING (bucket)
+                ORDER BY s.bucket
+                """,
+                (gen_ids, start, end, monitor_id, start, end),
+            )
+            rows = cursor.fetchall()
+
+    if not rows:
+        return []
+    timeline = [(r["bucket"], float(r["load_w"] or 0.0)) for r in rows]
+    if max_points > 0 and len(timeline) > max_points:
+        stride = max(1, len(timeline) // max_points)
+        timeline = [pt for i, pt in enumerate(timeline) if i % stride == 0 or i == len(timeline) - 1]
+    return [
+        {"timestamp": ts.isoformat(), "power_kw": round(w / 1000.0, 3)}
+        for ts, w in timeline
+    ]
+
+
 def get_solar_consumers_power_trace(
     config: AppConfig,
     start: datetime,

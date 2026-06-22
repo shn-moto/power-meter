@@ -115,9 +115,14 @@ class ChargerSunrise(BaseAutomation):
         # representative peak for "clear summer day". The old 600 W came from
         # un-calibrated Atorch readings that over-stated DC output by ~2×.
         "solar_peak_w": 350,
-        # Derate panels because "sunshine_duration" counts marginal-sun minutes
-        # at full weight, while real production at those moments is partial.
-        "solar_derating_factor": 0.7,
+        # Empirical derating: open-meteo's sunshine_duration counts every
+        # hour the sun is "unobscured" at full weight including dawn/dusk
+        # angles, but panels at 49.8°N produce maybe 20-30 % of peak during
+        # those low-angle hours. Observed daily totals after MPPT calibration:
+        # ~1.0-1.5 kWh against forecast 8-9 sunshine_hours → effective
+        # derating ≈ 0.45 (kWh / (peak × hours)). Previous 0.7 was tuned on
+        # pre-calibration Atorch data and predicted ~2× the real generation.
+        "solar_derating_factor": 0.45,
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
         "safety_floor_soc": 30,

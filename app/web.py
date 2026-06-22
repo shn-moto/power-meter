@@ -52,6 +52,7 @@ from app.storage import (
     get_recent_power_trace,
     get_sensor_history,
     get_solar_consumers_power_trace,
+    get_battery_load_power_trace,
     set_device_solar_consumer,
     list_automations,
     get_automation,
@@ -1779,7 +1780,16 @@ def _build_device_stats_payload(
             "chart": charger_stats["chart"],
         }
         if bool(device.get("is_generator")):
-            stats["solar_consumers_series"] = get_solar_consumers_power_trace(
+            # Energy-balance load (`solar - atorch_net`) is more useful than
+            # the sum of is_solar_consumer power on a generator's chart —
+            # it shows the actual draw on the inverter at each moment,
+            # whether or not the consumer devices are individually metered.
+            # Falls back to the consumer-summed trace when there's no
+            # battery monitor (no Atorch in the project).
+            load_trace = get_battery_load_power_trace(
+                config, range_start, range_end, bucket_seconds=30, max_points=720,
+            )
+            stats["solar_consumers_series"] = load_trace or get_solar_consumers_power_trace(
                 config, range_start, range_end, bucket_seconds=30, max_points=720,
             )
 

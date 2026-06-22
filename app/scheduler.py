@@ -23,7 +23,17 @@ from config import AppConfig
 logger = logging.getLogger(__name__)
 
 
+def _project_tz(config: AppConfig) -> zoneinfo.ZoneInfo:
+    try:
+        return zoneinfo.ZoneInfo(config.timezone)
+    except zoneinfo.ZoneInfoNotFoundError:
+        return zoneinfo.ZoneInfo("UTC")
+
+
 def _next_fire_time(cron_schedule: str, now: datetime) -> datetime | None:
+    """Cron expressions are interpreted in the tz of the `now` you pass —
+    `0 2 * * *` against a Warsaw-aware datetime fires at 02:00 Warsaw, not
+    02:00 UTC. Callers MUST pass a tz-aware now in the project timezone."""
     try:
         itr = croniter(cron_schedule, now)
         return itr.get_next(datetime)
@@ -46,7 +56,7 @@ def seed_automations(config: AppConfig) -> None:
             default_config=cls.default_config,
         )
     # Prime next_run_at for any row missing it so the scheduler has a target.
-    now = datetime.now(zoneinfo.ZoneInfo("UTC"))
+    now = datetime.now(_project_tz(config))
     for row in list_automations(config):
         if row.get("next_run_at") is None and row.get("cron_schedule"):
             update_automation_next_run(
@@ -80,7 +90,7 @@ async def _run_one(app: FastAPI, slug: str) -> None:
         result = AutomationResult(status="error", log=f"Crash: {exc}")
 
     next_at = _next_fire_time(row.get("cron_schedule") or cls.default_cron,
-                              datetime.now(zoneinfo.ZoneInfo("UTC")))
+                              datetime.now(_project_tz(config)))
     record_automation_run(
         config, slug, status=result.status, log=result.log, next_run_at=next_at
     )
@@ -93,7 +103,7 @@ async def scheduler_loop(app: FastAPI) -> None:
 
     while True:
         try:
-            tz = zoneinfo.ZoneInfo("UTC")
+            tz = _project_tz(config)
             now = datetime.now(tz)
             running: set[str] = app.state.automation_running_slugs
             for row in list_automations(config):
