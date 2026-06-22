@@ -289,6 +289,15 @@ _ATORCH_DEVICE_ID = "bff9e5598e9abd78268oze"
 _ATORCH_REALTIME_DPS = [18, 19, 20, 103]
 _ATORCH_REALTIME_KEEPALIVE_DPS = 101
 _ATORCH_KEEPALIVE_INTERVAL_S = 30.0
+
+# Plain Tuya Wi-Fi plugs (the bfef2249 inverter meter, etc.) also emit
+# DPS events only on hysteresis — when the load is a stable PC/server
+# their cur_power/cur_current freeze on LAN even though the chip's
+# internal ADC sees the steady-state value just fine. A single
+# updatedps() on each poll cycle forces a fresh report. Simpler than
+# Atorch: no keepalive write, no microburst averaging — just one shot.
+_FORCE_REFRESH_DEVICE_IDS = {"bfef2249e8f03df7891epc"}
+_FORCE_REFRESH_DPS = [17, 18, 19, 20]
 # Microburst: take N updatedps shots spaced this much apart and average
 # their numeric DPS values. Real Atorch readings jitter ±10-30 % second-
 # to-second even with DPS 101=true (it's a real ADC, not smoothed), so
@@ -302,6 +311,34 @@ _realtime_keepalive_last: dict[str, float] = {}
 
 def _needs_realtime_refresh(device_config: TuyaDeviceConfig) -> bool:
     return device_config.device_id == _ATORCH_DEVICE_ID
+
+
+def _needs_force_refresh(device_config: TuyaDeviceConfig) -> bool:
+    return device_config.device_id in _FORCE_REFRESH_DEVICE_IDS
+
+
+def _force_refresh_dps(device: tinytuya.Device, dps: dict[str, Any]) -> dict[str, Any]:
+    """One updatedps() shot for plain plugs whose chip emits DPS only on
+    threshold change — overlays fresh values onto status() for the
+    canonical visualization DPS. No averaging, no keepalive, just a
+    forced report."""
+    import logging
+    logger = logging.getLogger(__name__)
+    device.set_socketTimeout(1.5)
+    device.set_socketRetryLimit(0)
+    try:
+        response = device.updatedps(index=_FORCE_REFRESH_DPS, nowait=False)
+    except Exception as exc:
+        logger.warning("Force-refresh updatedps exception: %s", exc)
+        return dps
+    if not isinstance(response, dict) or not isinstance(response.get("dps"), dict):
+        return dps
+    merged = dict(dps)
+    for idx in _FORCE_REFRESH_DPS:
+        value = response["dps"].get(str(idx))
+        if value is not None:
+            merged[str(idx)] = value
+    return merged
 
 
 def _assert_realtime_keepalive(device: tinytuya.Device, device_id: str) -> None:
@@ -447,7 +484,8 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
     device.set_socketTimeout(5.0)
     device.set_socketRetryLimit(2)
     needs_realtime = _needs_realtime_refresh(device_config)
-    if needs_piggyback or needs_realtime:
+    needs_force = _needs_force_refresh(device_config)
+    if needs_piggyback or needs_realtime or needs_force:
         # Keep the TCP socket alive so the follow-up updatedps probes can
         # reuse the same Tuya session — without persistence the device
         # rejects each fresh connect with Err 905.
@@ -467,6 +505,11 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
                     **payload,
                     "dps": _refresh_realtime_dps(device, payload.get("dps") or {}),
                 }
+            if needs_force:
+                payload = {
+                    **payload,
+                    "dps": _force_refresh_dps(device, payload.get("dps") or {}),
+                }
             if include_visualized_codes:
                 payload = {
                     **payload,
@@ -474,7 +517,7 @@ def fetch_status(device_config: TuyaDeviceConfig, *, include_visualized_codes: b
                 }
             return payload
     finally:
-        if needs_piggyback or needs_realtime:
+        if needs_piggyback or needs_realtime or needs_force:
             try:
                 device.close()
             except Exception:
