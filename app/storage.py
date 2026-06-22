@@ -1568,8 +1568,14 @@ def _inverter_solar_series(
         AND raw_dps ? '19'
       GROUP BY bucket
     )
+    -- Solar is physically non-negative. Small negative values that fall
+    -- out of the formula at moments without sun are measurement noise:
+    -- Atorch slightly overstates the discharge, or KPD at this load is
+    -- a touch below the calibration point — neither is real "negative
+    -- solar". GREATEST(0, …) clamps to physical reality so the chart
+    -- doesn't show nonsense at night.
     SELECT COALESCE(i.bucket, a.bucket) AS bucket,
-           COALESCE(a.net_w, 0) + COALESCE(i.power_w, 0) / {_INVERTER_KPD} AS solar_w
+           GREATEST(0, COALESCE(a.net_w, 0) + COALESCE(i.power_w, 0) / {_INVERTER_KPD}) AS solar_w
     FROM inv i FULL OUTER JOIN atorch a USING (bucket)
     ORDER BY 1
     """
