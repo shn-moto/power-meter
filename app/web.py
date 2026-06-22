@@ -2559,7 +2559,11 @@ def device_power_trace_api(request: Request, device_id: str, minutes: int = 60) 
 
     device_row = get_device_row(config, device_id)
     if device_row and device_row.get("is_generator"):
-        payload["consumers_series"] = get_solar_consumers_power_trace(config, start, now)
+        # Match the device-page logic: prefer the energy-balance load curve
+        # (solar - atorch_net) over a sum of is_solar_consumer power so the
+        # dashboard generator card and the device page show the same line.
+        load_trace = get_battery_load_power_trace(config, start, now)
+        payload["consumers_series"] = load_trace or get_solar_consumers_power_trace(config, start, now)
     return JSONResponse(payload)
 
 

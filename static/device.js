@@ -603,8 +603,13 @@ if (page) {
         };
         const surplusPoints = consSorted.length
             ? points.map(([ts, gen]) => {
+                // Floor at 0 (not null) so the surplus line stays connected
+                // when generation < load — the value IS zero in those
+                // moments (everything goes to the load, nothing left to
+                // charge the battery), and a continuous line reads cleaner
+                // than visual gaps that suggest missing data.
                 const diff = gen - findNearestCons(ts);
-                return [ts, diff > 0 ? diff : null];
+                return [ts, Math.max(0, diff)];
             })
             : [];
         if (!points.length && !consPoints.length) {
