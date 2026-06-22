@@ -249,10 +249,17 @@ if (dashboardPage) {
         devices.forEach((device) => updateCard(existingCards.get(device.device_id), device));
     };
 
-    const renderGeneratorMarkup = (device) => `
-        <a class="device-image generator-card-media" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">
-            ${renderDeviceMedia(device)}
-        </a>
+    const renderGeneratorMarkup = (device) => {
+        // Virtual generator cards (e.g. "computed-solar") don't have a
+        // dedicated device page yet — render the image as a plain div
+        // instead of a link to /devices/{id} so the user doesn't get a
+        // 404 from clicking.
+        const isVirtual = device.device_kind === 'virtual';
+        const media = isVirtual
+            ? `<div class="device-image generator-card-media">${renderDeviceMedia(device)}</div>`
+            : `<a class="device-image generator-card-media" href="/devices/${encodeURIComponent(device.device_id)}" aria-label="Открыть детали устройства ${escapeHtml(device.name)}">${renderDeviceMedia(device)}</a>`;
+        return `
+        ${media}
         <div class="device-card-body generator-card-body">
             <div class="generator-card-head">
                 <div>
@@ -266,8 +273,8 @@ if (dashboardPage) {
                 </div>
             </div>
             <div class="generator-chart" data-generator-chart></div>
-        </div>
-    `;
+        </div>`;
+    };
 
     const generatorChartInstances = new Map();
     const generatorChartFetchedAt = new Map();

@@ -2531,6 +2531,103 @@ def get_implicit_solar_by_bucket(
     return result
 
 
+_COMPUTED_SOLAR_DEVICE_ID = "computed-solar"
+
+
+def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> float:
+    """Instantaneous computed solar wattage: atorch_net_W + load_AC_W / KPD,
+    clamped to ≥ 0. Pulls from the in-memory live_samples snapshot so we
+    don't hit the DB on every dashboard refresh tick.
+
+    Returns 0.0 when either reading is unavailable (poll loop hasn't seeded
+    them yet, network outage, etc.) — no point displaying a stale or
+    half-computed value."""
+    if not live_samples:
+        return 0.0
+    atorch = live_samples.get(_BATTERY_MONITOR_DEVICE_ID)
+    inv = live_samples.get(_INVERTER_DEVICE_ID)
+    if atorch is None or inv is None:
+        return 0.0
+    raw = atorch.raw_dps or {}
+    raw_v = raw.get("19")
+    if raw_v is None:
+        return 0.0
+    try:
+        atorch_net_w = float(raw_v) / 100.0
+    except (TypeError, ValueError):
+        return 0.0
+    load_ac_w = float(inv.power_w or 0.0)
+    return max(0.0, atorch_net_w + load_ac_w / _INVERTER_KPD)
+
+
+def get_inverter_solar_trace(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_seconds: int = 30,
+    max_points: int = 720,
+) -> dict[str, list[dict[str, Any]]]:
+    """Time-bucketed series for the computed solar dashboard card:
+       solar = atorch_net + load_AC / KPD  (clamped ≥ 0)
+       load  = load_AC
+
+    Returns {'series': [...], 'consumers_series': [...]} in the same shape
+    the dashboard generator card expects, so existing JS rendering picks
+    it up without changes. INNER JOIN both legs so we don't fabricate
+    solar when one sensor is missing."""
+    bucket_seconds = max(5, int(bucket_seconds or 30))
+    sql = f"""
+    WITH inv AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
+    ),
+    atorch AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+        AND raw_dps ? '19'
+      GROUP BY bucket
+    )
+    SELECT i.bucket,
+           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}) AS solar_w,
+           i.power_w AS load_w
+    FROM inv i INNER JOIN atorch a USING (bucket)
+    ORDER BY 1
+    """
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (_INVERTER_DEVICE_ID, start, end,
+                 _BATTERY_MONITOR_DEVICE_ID, start, end),
+            )
+            rows = cursor.fetchall()
+    series: list[dict[str, Any]] = []
+    consumers_series: list[dict[str, Any]] = []
+    for row in rows:
+        ts = row.get("bucket")
+        if not isinstance(ts, datetime):
+            ts = _parse_dt(ts)
+        ts_iso = ts.isoformat()
+        series.append({
+            "timestamp": ts_iso,
+            "power_kw": round(float(row.get("solar_w") or 0.0) / 1000.0, 4),
+        })
+        consumers_series.append({
+            "timestamp": ts_iso,
+            "power_kw": round(float(row.get("load_w") or 0.0) / 1000.0, 4),
+        })
+    if max_points > 0 and len(series) > max_points:
+        stride = max(1, len(series) // max_points)
+        series = [p for i, p in enumerate(series) if i % stride == 0 or i == len(series) - 1]
+        consumers_series = [p for i, p in enumerate(consumers_series) if i % stride == 0 or i == len(consumers_series) - 1]
+    return {"series": series, "consumers_series": consumers_series}
+
+
 def _build_energy_counter_meta_by_device(rows: list[dict[str, Any]]) -> dict[str, tuple[str, float]]:
     metadata: dict[str, tuple[str, float]] = {}
     for row in rows:
@@ -2746,6 +2843,42 @@ def get_dashboard_summary(
     # chargers — never raises.
     solar_breakdown = get_implicit_solar_by_bucket(config, month_start, now, "day")
     solar_energy_kwh = round(sum(v.get("solar_kwh", 0.0) for v in solar_breakdown.values()), 3)
+
+    # Synthetic 'Солнце' generator card derived from atorch + inverter
+    # measurements — replaces the role that the mppt-solar device used to
+    # play on the dashboard. Not a real DB device; the power-trace endpoint
+    # has a matching special case to compute its series on the fly.
+    live_solar_w = get_inverter_solar_now_w(live_samples)
+    has_inverter = any(
+        str(d.get("device_id") or "") == _INVERTER_DEVICE_ID for d in device_rows
+    )
+    if has_inverter:
+        generator_devices.append({
+            "name": "Солнце",
+            "room": "Зал",
+            "device_id": _COMPUTED_SOLAR_DEVICE_ID,
+            "device_kind": "virtual",
+            "connection_ready": True,
+            "ip_address": None,
+            "is_pushed": True,        # treat as always-visible (hide-offline exempt)
+            "last_seen": _format_display_datetime(config, now),
+            "last_seen_age_seconds": 0,
+            "last_seen_status": "ok",
+            "raw_dps": {},
+            "is_generator": True,
+            "is_solar_consumer": False,
+            "month_energy_kwh": solar_energy_kwh,
+            "day_energy_kwh": round(
+                sum(
+                    v.get("solar_kwh", 0.0)
+                    for k, v in solar_breakdown.items()
+                    if k.astimezone(_get_timezone(config)).date()
+                    == now.astimezone(_get_timezone(config)).date()
+                ),
+                3,
+            ),
+            "current_power_kw": round(live_solar_w / 1000.0, 3),
+        })
 
     return {
         "home_name": config.home_name,

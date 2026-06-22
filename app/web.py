@@ -53,6 +53,7 @@ from app.storage import (
     get_sensor_history,
     get_solar_consumers_power_trace,
     get_battery_load_power_trace,
+    get_inverter_solar_trace,
     set_device_solar_consumer,
     list_automations,
     get_automation,
@@ -2554,6 +2555,20 @@ def device_power_trace_api(request: Request, device_id: str, minutes: int = 60) 
     minutes = max(1, min(int(minutes or 60), 1440))
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=minutes)
+
+    # Synthetic 'computed-solar' card on the dashboard: not a real DB
+    # device, its series come from atorch + inverter measurements via
+    # the storage helper. Bucket cadence matches what get_solar_consumers
+    # used to use so the chart shape feels familiar.
+    if device_id == "computed-solar":
+        bucket_seconds = max(30, int((minutes * 60) // 120))  # ~120 points
+        trace = get_inverter_solar_trace(config, start, now, bucket_seconds=bucket_seconds)
+        return JSONResponse({
+            "minutes": minutes,
+            "series": trace.get("series") or [],
+            "consumers_series": trace.get("consumers_series") or [],
+        })
+
     series = get_recent_power_trace(config, device_id, start, now)
     payload: dict[str, Any] = {"minutes": minutes, "series": series}
 
