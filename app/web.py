@@ -430,8 +430,13 @@ def _apply_state_aware_image(
 
 def _decorate_device_media(device: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(device)
-    device_id = str(enriched.get("device_id") or "").strip() or None
-    enriched["image_url"] = _resolve_device_image_url_by_key(device_id, "images")
+    # `image_device_id` lets virtual / synthetic devices reuse a real
+    # device's image file (e.g. the computed-solar dashboard card uses
+    # the mppt-solar picture). Falls back to the device's own id.
+    image_key = str(
+        enriched.get("image_device_id") or enriched.get("device_id") or ""
+    ).strip() or None
+    enriched["image_url"] = _resolve_device_image_url_by_key(image_key, "images")
     return enriched
 
 

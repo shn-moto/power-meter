@@ -288,6 +288,7 @@ def upsert_managed_device(
     cid: str | None = None,
     power_correction_factor: float = 1.0,
     ingest_token: str | None = None,
+    disabled: bool = False,
 ) -> None:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -297,8 +298,8 @@ def upsert_managed_device(
                     name, room, device_id, category_code, device_kind,
                     is_energy_meter, is_charger, is_gateway, is_generator, is_solar_consumer, allow_custom_automation,
                     product_id, product_name, icon, onboarding_source, updated_at,
-                    total_power_dps_key, total_power_scale, power_type, visualized_codes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                    total_power_dps_key, total_power_scale, power_type, visualized_codes, disabled
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     room = CASE
@@ -324,7 +325,8 @@ def upsert_managed_device(
                     total_power_dps_key = EXCLUDED.total_power_dps_key,
                     total_power_scale = EXCLUDED.total_power_scale,
                     power_type = EXCLUDED.power_type,
-                    visualized_codes = EXCLUDED.visualized_codes
+                    visualized_codes = EXCLUDED.visualized_codes,
+                    disabled = EXCLUDED.disabled
                 """,
                 (
                     name,
@@ -346,6 +348,7 @@ def upsert_managed_device(
                     total_power_scale,
                     power_type,
                     Jsonb(list(visualized_codes)),
+                    disabled,
                 ),
             )
             cursor.execute(
@@ -871,6 +874,7 @@ def materialize_device_profile(
         is_generator=bool(device.get("is_generator", False)),
         is_solar_consumer=bool(device.get("is_solar_consumer", False)),
         allow_custom_automation=bool(device.get("allow_custom_automation", False)),
+        disabled=bool(device.get("disabled", False)),
         is_gateway=bool(device.get("is_gateway", False)),
         product_id=str(device.get("product_id") or "").strip() or None,
         product_name=str(device.get("product_name") or "").strip() or None,
@@ -1288,6 +1292,7 @@ def get_polling_devices(config: AppConfig) -> list[TuyaDeviceConfig]:
                 LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
                 WHERE COALESCE(NULLIF(c.local_key, ''), gc.local_key, '') <> ''
                   AND COALESCE(NULLIF(c.ip_address, ''), gc.ip_address, '') <> ''
+                  AND NOT d.disabled
                 ORDER BY d.name
                 """
             )
@@ -2345,6 +2350,7 @@ def get_period_breakdown(
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
                 WHERE d.is_energy_meter = TRUE
+                  AND NOT d.disabled
                 """
             )
             device_rows = cursor.fetchall()
@@ -2677,6 +2683,7 @@ def _get_dashboard_summary_context(
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
                 LEFT JOIN device_connections gc ON gc.device_id = c.gateway_device_id
+                WHERE NOT d.disabled
                 ORDER BY name
                 """
             )

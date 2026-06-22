@@ -10,6 +10,7 @@
     "is_generator": false,
     "is_solar_consumer": false,
     "allow_custom_automation": false,
+    "disabled": true,
     "category_code": "active_sensor",
     "product_id": null,
     "product_name": "MPPT push sensor"
