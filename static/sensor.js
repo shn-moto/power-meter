@@ -184,13 +184,13 @@ if (sensorPage) {
     // Solar always yellow (matches the dashboard generator-card chart),
     // power orange, voltage green, current blue.
     const HISTORY_COLOR_BY_CODE = {
-        solar_estimate: '#f5c542',
-        cur_power: '#e8a838',
-        cur_voltage: '#67b86b',
-        cur_current: '#7fd0ff',
-        state_of_charge: '#c178e0',
-        va_temperature: '#f04848',
-        temp_current: '#f04848',
+        solar_estimate: '#f5c542',  // yellow — sun
+        cur_power: '#ff3838',       // bright red — load/draw, distinct from solar yellow
+        cur_voltage: '#67b86b',     // green
+        cur_current: '#7fd0ff',     // cyan
+        state_of_charge: '#c178e0', // purple
+        va_temperature: '#e87b4b',  // amber-red (temperature) — distinct from power red
+        temp_current: '#e87b4b',
         va_humidity: '#3ec5c5',
         humidity_value: '#3ec5c5',
     };
