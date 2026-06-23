@@ -5,6 +5,7 @@ if (dashboardPage) {
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
     const estimatedCost = dashboardPage.querySelector('[data-summary-estimated-cost]');
     const solarEnergy = dashboardPage.querySelector('[data-summary-solar-energy]');
+    const solarEnergySection = dashboardPage.querySelector('[data-summary-solar-energy-section]');
     const deviceCount = dashboardPage.querySelector('[data-summary-device-count]');
     const deviceGrid = document.querySelector('[data-device-grid]');
     const generatorGrid = document.querySelector('[data-generator-grid]');
@@ -524,6 +525,10 @@ if (dashboardPage) {
         if (solarEnergy) {
             const kwh = Number(payload.solar_energy_kwh || 0);
             solarEnergy.textContent = `${kwh.toFixed(1)} кВт·ч`;
+        }
+        if (solarEnergySection) {
+            const kwh = Number(payload.solar_energy_kwh || 0);
+            solarEnergySection.textContent = `−${kwh.toFixed(3)} кВт·ч за месяц`;
         }
         deviceCount.textContent = `${payload.device_count}`;
         if (meterUnderpayment) {

@@ -217,7 +217,7 @@
     <div class="section-heading">
         <p class="eyebrow">Генерация</p>
         <h2>Солнечная энергия</h2>
-        <span class="section-heading-meta">−{{ summary.generated_energy_kwh }} кВт·ч за месяц</span>
+        <span class="section-heading-meta" data-summary-solar-energy-section>−{{ '%.3f'|format(summary.solar_energy_kwh or 0) }} кВт·ч за месяц</span>
     </div>
     <div class="device-grid" data-generator-grid>
         {% for device in summary.generator_devices %}

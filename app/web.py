@@ -1513,7 +1513,7 @@ def _get_dashboard_sensor_payload(request: Request, config: AppConfig) -> dict[s
     summary = _get_cached_aggregate_payload(request, summary_cache_key)
     if summary is None:
         month_start, now = _month_window(config)
-        summary = get_dashboard_summary(config, month_start, now)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
 
     sensor_devices = _decorate_sensor_dashboard_entries_from_cache(
@@ -1577,10 +1577,20 @@ def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[s
     summary = _get_cached_aggregate_payload(request, summary_cache_key)
     if summary is None:
         month_start, now = _month_window(config)
-        summary = get_dashboard_summary(config, month_start, now)
+        summary = get_dashboard_summary(config, month_start, now, dict(request.app.state.live_samples))
         summary = _set_cached_aggregate_payload(request, summary_cache_key, summary)
 
     payload = _copy_dashboard_summary_payload(summary)
+    # The cached summary lives ~15 s but the computed-solar card's
+    # current_power_kw needs to feel live — recompute it on every call
+    # straight from the in-memory snapshot so the dashboard's 1 Hz
+    # refresh shows the up-to-second wattage instead of a stale cached 0.
+    from app.storage import get_inverter_solar_now_w as _inv_solar_now
+    live_w = _inv_solar_now(dict(request.app.state.live_samples))
+    for g in payload.get("generator_devices") or []:
+        if g.get("device_id") == "computed-solar":
+            g["current_power_kw"] = round(live_w / 1000.0, 3)
+            break
     payload["devices"] = _decorate_devices_media(payload.get("devices", []))
     payload["generator_devices"] = _decorate_devices_media(payload.get("generator_devices", []))
     payload["sensor_devices"] = _decorate_sensor_dashboard_entries_from_cache(
@@ -2205,8 +2215,13 @@ def monthly_report(
 
 
 @app.get("/devices/{device_id}", response_class=HTMLResponse)
-def device_details(request: Request, device_id: str) -> HTMLResponse:
+def device_details(request: Request, device_id: str) -> Response:
     config: AppConfig = request.app.state.app_config
+    # Synthetic dashboard cards (no real DB row) — redirect to the most
+    # informative real device page that backs that card.
+    if device_id == "computed-solar":
+        # Inverter sensor page has the same solar/load/voltage/current series
+        return RedirectResponse(url="/devices/bfef2249e8f03df7891epc", status_code=307)
     device = get_device_row(config, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Устройство не найдено")
