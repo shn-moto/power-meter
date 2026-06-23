@@ -172,11 +172,28 @@ if (sensorPage) {
         loadHistory();
     };
 
-    // Distinct palette for up to ~8 simultaneous series
+    // Distinct palette for up to ~8 simultaneous series (fallback when a
+    // specific quantity doesn't have a fixed colour mapped below).
     const HISTORY_PALETTE = [
         '#7fd0ff', '#e8a838', '#67b86b', '#f04848',
         '#c178e0', '#3ec5c5', '#d76d6d', '#8edb95',
     ];
+
+    // Fixed colour per physical quantity so the same metric reads the same
+    // wherever it shows up — Atorch page, inverter page, dashboard cards.
+    // Solar always yellow (matches the dashboard generator-card chart),
+    // power orange, voltage green, current blue.
+    const HISTORY_COLOR_BY_CODE = {
+        solar_estimate: '#f5c542',
+        cur_power: '#e8a838',
+        cur_voltage: '#67b86b',
+        cur_current: '#7fd0ff',
+        state_of_charge: '#c178e0',
+        va_temperature: '#f04848',
+        temp_current: '#f04848',
+        va_humidity: '#3ec5c5',
+        humidity_value: '#3ec5c5',
+    };
 
     const HISTORY_LABEL_BY_CODE = {
         switch: 'Питание',
@@ -387,7 +404,7 @@ if (sensorPage) {
         }));
         const echartsSeries = series.map((s, i) => {
             const unitIdx = unitOrder.indexOf(s.unit || '');
-            const color = HISTORY_PALETTE[i % HISTORY_PALETTE.length];
+            const color = HISTORY_COLOR_BY_CODE[s.code] || HISTORY_PALETTE[i % HISTORY_PALETTE.length];
             const label = HISTORY_LABEL_BY_CODE[s.code] || s.label || s.code;
             return {
                 name: s.unit ? `${label} (${s.unit})` : label,

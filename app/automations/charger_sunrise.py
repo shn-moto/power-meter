@@ -125,14 +125,25 @@ class ChargerSunrise(BaseAutomation):
         # angles, but panels at 49.8°N produce maybe 20-30 % of peak during
         # those low-angle hours. Observed daily totals after MPPT calibration:
         # ~1.0-1.5 kWh against forecast 8-9 sunshine_hours → effective
-        # derating ≈ 0.45 (kWh / (peak × hours)). Previous 0.7 was tuned on
-        # pre-calibration Atorch data and predicted ~2× the real generation.
+        # derating ≈ 0.45 (kWh / (peak × hours)).
         "solar_derating_factor": 0.45,
+        # Balcony only gets direct sun roughly 11:00-15:00; everything else
+        # is shade/reflections that the forecast still counts as full sun.
+        # Cap the forecast at 4 effective hours.
+        "max_sunshine_hours": 4,
+        # Even with peak ×  4 h × 0.45 derate = 630 Wh, the real best-case
+        # ceiling on this two-panel rig is around 1.5 kWh per day. Use that
+        # as an absolute upper bound so a freak high forecast can't push
+        # the target SoC down too low.
+        "max_expected_solar_wh": 1500,
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
         "safety_floor_soc": 30,
-        "min_target_soc": 30,
-        "max_target_soc": 95,
+        # Floor target high enough that even an "ideal weather" day starts
+        # near-full and lets the panels top up the last 10-15 %. Ceiling at
+        # 97 % so a no-sun forecast pulls the battery up to almost full.
+        "min_target_soc": 85,
+        "max_target_soc": 97,
         # Leave as null → auto-resolved per device (single-channel plug uses
         # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
         # force a specific code.
@@ -169,8 +180,21 @@ class ChargerSunrise(BaseAutomation):
 
         peak_w = float(cfg["solar_peak_w"])
         derating = float(cfg["solar_derating_factor"])
-        expected_solar_wh = sunshine_hours * peak_w * derating
-        log.append(f"Ожид. генерация: ~{expected_solar_wh:.0f} Вт·ч (peak {peak_w:.0f} Вт × {derating:.2f}).")
+        max_sun_hours = float(cfg.get("max_sunshine_hours") or sunshine_hours or 0)
+        capped_sun_hours = min(sunshine_hours, max_sun_hours) if max_sun_hours > 0 else sunshine_hours
+        raw_expected = capped_sun_hours * peak_w * derating
+        max_expected = float(cfg.get("max_expected_solar_wh") or 0)
+        expected_solar_wh = min(raw_expected, max_expected) if max_expected > 0 else raw_expected
+        cap_notes = []
+        if capped_sun_hours < sunshine_hours:
+            cap_notes.append(f"часы {sunshine_hours:.1f}→{capped_sun_hours:.1f}")
+        if max_expected > 0 and raw_expected > max_expected:
+            cap_notes.append(f"Вт·ч {raw_expected:.0f}→{max_expected:.0f}")
+        suffix = f" [cap: {', '.join(cap_notes)}]" if cap_notes else ""
+        log.append(
+            f"Ожид. генерация: ~{expected_solar_wh:.0f} Вт·ч "
+            f"(peak {peak_w:.0f} Вт × {capped_sun_hours:.1f} ч × {derating:.2f}){suffix}."
+        )
 
         expected_consumption_wh = float(cfg["expected_daily_load_w"]) * float(cfg["load_window_hours"])
         log.append(f"Ожид. потребление: {expected_consumption_wh:.0f} Вт·ч.")

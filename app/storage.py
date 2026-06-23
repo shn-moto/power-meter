@@ -1542,6 +1542,12 @@ def get_sensor_history(
 _INVERTER_DEVICE_ID = "bfef2249e8f03df7891epc"
 _BATTERY_MONITOR_DEVICE_ID = "bff9e5598e9abd78268oze"
 _INVERTER_KPD = 0.934
+# 72 V wall charger (bf1bd578…). When it's running it pumps current into
+# the battery that Atorch sees as a positive net — without subtracting
+# it the computed-solar formula would credit charger output as solar.
+# Charger efficiency measured against the previous Zigbee era ≈ 87.6 %.
+_CHARGER_DEVICE_ID = "bf1bd578076c64ff7cjl6p"
+_CHARGER_KPD = 0.876
 
 
 def _inverter_solar_series(
@@ -1572,20 +1578,26 @@ def _inverter_solar_series(
       WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
         AND raw_dps ? '19'
       GROUP BY bucket
+    ),
+    charger AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
     )
-    -- INNER JOIN: we can only compute solar when *both* sensors have
-    -- data in the bucket. Before the inverter socket was plugged in
-    -- (e.g. anything dated before ~17:00 on 2026-06-22) only Atorch
-    -- has samples — taking atorch_net + 0 there would label the
-    -- battery's daytime charging as 'solar', which is misleading when
-    -- the load measurement is missing.
-    --
-    -- GREATEST(0, …): solar is physically non-negative. Small negative
-    -- residuals at light load come from Atorch slightly overstating
-    -- discharge / KPD drift — not real "negative solar".
+    -- INNER JOIN on (inv, atorch): solar only computed when both sensors
+    -- have data in the bucket — pre-inverter periods have no inverter
+    -- samples and would otherwise show Atorch alone as 'solar'.
+    -- LEFT JOIN charger: when the wall charger runs, its DC contribution
+    -- to the battery (≈ AC × 0.876) has to be subtracted from atorch_net,
+    -- otherwise its kWh gets credited as solar on cloudy auto-charge nights.
+    -- GREATEST(0, …): solar is physically non-negative.
     SELECT i.bucket,
-           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}) AS solar_w
+           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                       - COALESCE(c.power_w, 0) * {_CHARGER_KPD}) AS solar_w
     FROM inv i INNER JOIN atorch a USING (bucket)
+                LEFT JOIN charger c USING (bucket)
     ORDER BY 1
     """
     with _connect(config.database_url) as connection:
@@ -1593,7 +1605,8 @@ def _inverter_solar_series(
             cursor.execute(
                 sql,
                 (_INVERTER_DEVICE_ID, start, end,
-                 _BATTERY_MONITOR_DEVICE_ID, start, end),
+                 _BATTERY_MONITOR_DEVICE_ID, start, end,
+                 _CHARGER_DEVICE_ID, start, end),
             )
             rows = cursor.fetchall()
     points: list[list[float]] = []
@@ -2567,12 +2580,21 @@ def get_inverter_solar_kwh_period(
       WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
         AND raw_dps ? '19'
       GROUP BY bucket
+    ),
+    charger AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
     )
     SELECT COALESCE(
-        SUM(GREATEST(0, a.net_w + i.power_w / %s)) * (5.0 / 60.0) / 1000.0,
+        SUM(GREATEST(0, a.net_w + i.power_w / %s
+                        - COALESCE(c.power_w, 0) * %s)) * (5.0 / 60.0) / 1000.0,
         0
     ) AS solar_kwh
     FROM inv i INNER JOIN atorch a USING (bucket)
+                LEFT JOIN charger c USING (bucket)
     """
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -2581,7 +2603,8 @@ def get_inverter_solar_kwh_period(
                 (
                     _INVERTER_DEVICE_ID, start, end,
                     _BATTERY_MONITOR_DEVICE_ID, start, end,
-                    _INVERTER_KPD,
+                    _CHARGER_DEVICE_ID, start, end,
+                    _INVERTER_KPD, _CHARGER_KPD,
                 ),
             )
             row = cursor.fetchone()
@@ -2611,7 +2634,12 @@ def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> 
     except (TypeError, ValueError):
         return 0.0
     load_ac_w = float(inv.power_w or 0.0)
-    return max(0.0, atorch_net_w + load_ac_w / _INVERTER_KPD)
+    # Subtract charger DC contribution when the wall charger is running —
+    # without this, every kWh from the socket would be (mis)credited as
+    # solar on cloudy auto-charge nights.
+    charger = live_samples.get(_CHARGER_DEVICE_ID)
+    charger_dc_w = float(charger.power_w or 0.0) * _CHARGER_KPD if charger else 0.0
+    return max(0.0, atorch_net_w + load_ac_w / _INVERTER_KPD - charger_dc_w)
 
 
 def get_inverter_solar_trace(
@@ -2645,11 +2673,20 @@ def get_inverter_solar_trace(
       WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
         AND raw_dps ? '19'
       GROUP BY bucket
+    ),
+    charger AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket
     )
     SELECT i.bucket,
-           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}) AS solar_w,
+           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                       - COALESCE(c.power_w, 0) * {_CHARGER_KPD}) AS solar_w,
            i.power_w AS load_w
     FROM inv i INNER JOIN atorch a USING (bucket)
+                LEFT JOIN charger c USING (bucket)
     ORDER BY 1
     """
     with _connect(config.database_url) as connection:
@@ -2657,7 +2694,8 @@ def get_inverter_solar_trace(
             cursor.execute(
                 sql,
                 (_INVERTER_DEVICE_ID, start, end,
-                 _BATTERY_MONITOR_DEVICE_ID, start, end),
+                 _BATTERY_MONITOR_DEVICE_ID, start, end,
+                 _CHARGER_DEVICE_ID, start, end),
             )
             rows = cursor.fetchall()
     series: list[dict[str, Any]] = []
