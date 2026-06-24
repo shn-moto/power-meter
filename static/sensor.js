@@ -266,11 +266,20 @@ if (sensorPage) {
         const bucketUnit = payload.bucket_unit || 'day';
         const labelFmt = bucketUnit === 'month' ? MONTH_LONG_FMT : SHORT_DATE_FMT;
         const categories = points.map((p) => labelFmt.format(new Date(p.ts)));
-        // Solar is negative-Y so it visually mirrors below zero; the legend
-        // and tooltip still display the absolute kWh number.
-        const loadData = points.map((p) => Number(p.load_kwh || 0));
+        // Classic energy-balance layout:
+        //   - one up-bar per bucket = total consumption (load), two-toned:
+        //       lower segment = self-consumed (load - grid_delta), upper
+        //       segment = grid_delta. Sum = load_kwh.
+        //   - one down-bar per bucket = total solar generation.
+        // The two up-segments share the same `stack: 'load'` so ECharts
+        // draws them as a single column; the solar bar uses a different
+        // stack name so it doesn't merge into the load column.
+        const selfData = points.map((p) => +Math.max(
+            0,
+            Number(p.load_kwh || 0) - Number(p.delta_kwh || 0)
+        ).toFixed(3));
+        const gridData = points.map((p) => Number(p.delta_kwh || 0));
         const solarData = points.map((p) => -Math.abs(Number(p.solar_kwh || 0)));
-        const deltaData = points.map((p) => Number(p.delta_kwh || 0));
         chart.setOption({
             animation: false,
             tooltip: {
@@ -315,22 +324,25 @@ if (sensorPage) {
             },
             series: [
                 {
-                    name: 'Нагрузка',
+                    name: 'Покрыто солнцем',
                     type: 'bar',
-                    itemStyle: { color: '#ff3838' },
-                    data: loadData,
-                },
-                {
-                    name: 'Солнце',
-                    type: 'bar',
-                    itemStyle: { color: '#f5c542' },
-                    data: solarData,
+                    stack: 'load',
+                    itemStyle: { color: '#67b86b' },
+                    data: selfData,
                 },
                 {
                     name: 'Из сети',
                     type: 'bar',
-                    itemStyle: { color: '#7fd0ff' },
-                    data: deltaData,
+                    stack: 'load',
+                    itemStyle: { color: '#e8a838' },
+                    data: gridData,
+                },
+                {
+                    name: 'Солнце',
+                    type: 'bar',
+                    stack: 'generation',
+                    itemStyle: { color: '#f5c542' },
+                    data: solarData,
                 },
             ],
         }, true);
