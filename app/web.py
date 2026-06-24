@@ -54,6 +54,7 @@ from app.storage import (
     get_solar_consumers_power_trace,
     get_battery_load_power_trace,
     get_inverter_solar_trace,
+    get_inverter_energy_breakdown,
     set_device_solar_consumer,
     list_automations,
     get_automation,
@@ -2609,6 +2610,7 @@ def device_sensor_history_api(
     period: str = "day",
     start: str | None = None,
     end: str | None = None,
+    view: str | None = None,
 ) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     device = get_device_row(config, device_id)
@@ -2641,15 +2643,48 @@ def device_sensor_history_api(
 
     capabilities = get_device_capabilities(config, device_id)
     visualized_codes = device.get("visualized_codes") or []
+    start_utc = start_dt.astimezone(timezone.utc)
+    end_utc = end_dt.astimezone(timezone.utc)
+
+    # Inverter device on week/month/year shows daily/monthly bars (load up,
+    # solar generation down, grid-delta up) instead of raw lines — far more
+    # readable at those scales. The day view keeps the existing line chart.
+    # Totals (load / solar / share %) come back on all periods so the panel
+    # under the chart always has fresh numbers to render. The selected tab
+    # comes in as `view` (the request itself is usually period=custom for
+    # navigation arrows).
+    from app.storage import _INVERTER_DEVICE_ID as INV_ID
+    effective_view = (view or period or "day").lower()
+    if device_id == INV_ID and effective_view != "day":
+        bucket_unit = "month" if effective_view == "year" else "day"
+        breakdown = get_inverter_energy_breakdown(
+            config, start_utc, end_utc, bucket_unit, tz_name=config.timezone
+        )
+        payload = {
+            "mode": "bars",
+            "bucket_unit": breakdown["bucket_unit"],
+            "points": breakdown["points"],
+            "totals": breakdown["totals"],
+            "period": period,
+            "series": [],
+        }
+        return JSONResponse(jsonable_encoder(payload))
+
     payload = get_sensor_history(
         config,
         device_id,
         capabilities,
         visualized_codes,
-        start_dt.astimezone(timezone.utc),
-        end_dt.astimezone(timezone.utc),
+        start_utc,
+        end_utc,
     )
     payload["period"] = period
+    payload["mode"] = "lines"
+    if device_id == INV_ID:
+        breakdown = get_inverter_energy_breakdown(
+            config, start_utc, end_utc, "day", tz_name=config.timezone
+        )
+        payload["totals"] = breakdown["totals"]
     return JSONResponse(jsonable_encoder(payload))
 
 

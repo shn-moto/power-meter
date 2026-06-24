@@ -217,6 +217,124 @@ if (sensorPage) {
 
     let lastHistoryPayload = null;
     const isNarrowViewport = () => window.matchMedia('(max-width: 720px)').matches;
+    const historyTotalsEl = document.querySelector('[data-sensor-history-totals]');
+
+    const SHORT_DATE_FMT = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short' });
+    const MONTH_LONG_FMT = new Intl.DateTimeFormat('ru-RU', { month: 'short' });
+
+    const renderTotals = (totals) => {
+        if (!historyTotalsEl) return;
+        if (!totals) {
+            historyTotalsEl.hidden = true;
+            historyTotalsEl.innerHTML = '';
+            return;
+        }
+        const load = Number(totals.load_kwh || 0);
+        const solar = Number(totals.solar_kwh || 0);
+        const delta = Number(totals.delta_kwh || 0);
+        const share = Number(totals.solar_share_pct || 0);
+        historyTotalsEl.hidden = false;
+        historyTotalsEl.innerHTML = `
+            <div class="sensor-history-total is-load">
+                <span class="sensor-history-total-label">Потребление</span>
+                <strong class="sensor-history-total-value">${load.toFixed(2)} кВт·ч</strong>
+            </div>
+            <div class="sensor-history-total is-solar">
+                <span class="sensor-history-total-label">Солнце</span>
+                <strong class="sensor-history-total-value">${solar.toFixed(2)} кВт·ч</strong>
+            </div>
+            <div class="sensor-history-total is-share">
+                <span class="sensor-history-total-label">Покрытие солнцем</span>
+                <strong class="sensor-history-total-value">${share.toFixed(1)}%</strong>
+            </div>
+            <div class="sensor-history-total is-grid">
+                <span class="sensor-history-total-label">Из сети</span>
+                <strong class="sensor-history-total-value">${delta.toFixed(2)} кВт·ч</strong>
+            </div>
+        `;
+    };
+
+    const renderBars = (payload) => {
+        const chart = ensureHistoryChart();
+        if (!chart) return;
+        const points = Array.isArray(payload?.points) ? payload.points : [];
+        if (historyEmptyEl) historyEmptyEl.hidden = points.length > 0;
+        if (!points.length) {
+            chart.clear();
+            return;
+        }
+        const bucketUnit = payload.bucket_unit || 'day';
+        const labelFmt = bucketUnit === 'month' ? MONTH_LONG_FMT : SHORT_DATE_FMT;
+        const categories = points.map((p) => labelFmt.format(new Date(p.ts)));
+        // Solar is negative-Y so it visually mirrors below zero; the legend
+        // and tooltip still display the absolute kWh number.
+        const loadData = points.map((p) => Number(p.load_kwh || 0));
+        const solarData = points.map((p) => -Math.abs(Number(p.solar_kwh || 0)));
+        const deltaData = points.map((p) => Number(p.delta_kwh || 0));
+        chart.setOption({
+            animation: false,
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                backgroundColor: 'rgba(11, 18, 26, 0.94)',
+                borderColor: 'rgba(127, 208, 255, 0.24)',
+                textStyle: { color: '#e8f0fa' },
+                formatter: (params) => {
+                    if (!params || !params.length) return '';
+                    const lines = [`<strong>${params[0].axisValue}</strong>`];
+                    params.forEach((p) => {
+                        const raw = Array.isArray(p.value) ? p.value[1] : p.value;
+                        const abs = Math.abs(Number(raw) || 0);
+                        lines.push(`${p.marker} ${p.seriesName}: ${abs.toFixed(2)} кВт·ч`);
+                    });
+                    return lines.join('<br/>');
+                },
+            },
+            legend: {
+                top: 0,
+                textStyle: { color: 'rgba(217, 226, 238, 0.85)' },
+                inactiveColor: 'rgba(127, 208, 255, 0.28)',
+            },
+            grid: { top: 36, left: 50, right: 16, bottom: 30 },
+            xAxis: {
+                type: 'category',
+                data: categories,
+                axisLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.4)' } },
+                axisLabel: { color: 'rgba(217, 226, 238, 0.78)', hideOverlap: true },
+            },
+            yAxis: {
+                type: 'value',
+                name: 'кВт·ч',
+                nameTextStyle: { color: 'rgba(217, 226, 238, 0.78)' },
+                axisLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.22)' } },
+                axisLabel: {
+                    color: 'rgba(217, 226, 238, 0.78)',
+                    formatter: (v) => Math.abs(v).toFixed(1),
+                },
+                splitLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.08)' } },
+            },
+            series: [
+                {
+                    name: 'Нагрузка',
+                    type: 'bar',
+                    itemStyle: { color: '#ff3838' },
+                    data: loadData,
+                },
+                {
+                    name: 'Солнце',
+                    type: 'bar',
+                    itemStyle: { color: '#f5c542' },
+                    data: solarData,
+                },
+                {
+                    name: 'Из сети',
+                    type: 'bar',
+                    itemStyle: { color: '#7fd0ff' },
+                    data: deltaData,
+                },
+            ],
+        }, true);
+    };
 
     const ensureHistoryChart = () => {
         if (historyChart || !historyChartEl || !window.echarts) return historyChart;
@@ -366,6 +484,11 @@ if (sensorPage) {
         const chart = ensureHistoryChart();
         if (!chart) return;
         lastHistoryPayload = payload;
+        renderTotals(payload?.totals || null);
+        if (payload?.mode === 'bars') {
+            renderBars(payload);
+            return;
+        }
         const savedZoom = captureHistoryZoom();
         const series = payload?.series || [];
         const hasAnyPoints = series.some((s) => Array.isArray(s.data) && s.data.length);
@@ -481,6 +604,11 @@ if (sensorPage) {
             const params = new URLSearchParams({ period: query.period });
             if (query.start) params.set('start', query.start);
             if (query.end) params.set('end', query.end);
+            // Pass the selected view tab so the server can switch into
+            // bar-chart breakdown mode for week/month/year on the inverter
+            // page even when the actual request comes through as period=custom
+            // for date-range navigation.
+            params.set('view', historyPeriod);
             const url = `/api/devices/${encodeURIComponent(deviceId)}/sensor-history?${params.toString()}`;
             const r = await fetch(url, { cache: 'no-store', signal: controller.signal });
             if (!r.ok) return;

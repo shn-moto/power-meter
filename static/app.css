@@ -2124,3 +2124,38 @@ button:hover {
 .meter-row-delete:hover {
     color: #d97757;
 }
+
+.sensor-history-totals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(127, 208, 255, 0.18);
+    border-radius: 10px;
+    background: rgba(11, 18, 26, 0.42);
+}
+
+.sensor-history-total {
+    display: grid;
+    gap: 4px;
+    min-width: 110px;
+    flex: 1 1 110px;
+}
+
+.sensor-history-total-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(217, 226, 238, 0.65);
+}
+
+.sensor-history-total-value {
+    font-size: 1.15rem;
+    color: #e8f0fa;
+}
+
+.sensor-history-total.is-load .sensor-history-total-value { color: #ff7a7a; }
+.sensor-history-total.is-solar .sensor-history-total-value { color: #f5c542; }
+.sensor-history-total.is-share .sensor-history-total-value { color: #8edb95; }
+.sensor-history-total.is-grid .sensor-history-total-value { color: #7fd0ff; }

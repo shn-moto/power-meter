@@ -2611,6 +2611,110 @@ def get_inverter_solar_kwh_period(
     return round(float(row.get("solar_kwh") or 0.0), 3) if row else 0.0
 
 
+def get_inverter_energy_breakdown(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_unit: str,
+    tz_name: str = "Europe/Warsaw",
+) -> dict[str, Any]:
+    """Per-bucket load/solar/grid-delta breakdown for the inverter page on
+    week/month/year. Uses the same 5-minute integration grid as
+    get_inverter_solar_kwh_period, then aggregates to day or month buckets.
+
+    `bucket_unit` is one of: 'day', 'month'. 'day' suits week/month views
+    (7/30 bars); 'month' suits year view (up to 12 bars).
+    """
+    if bucket_unit not in {"day", "month"}:
+        bucket_unit = "day"
+    sql = f"""
+    WITH inv_5m AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket5,
+             AVG(power_w) AS w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket5
+    ),
+    atorch_5m AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket5,
+             AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+        AND raw_dps ? '19'
+      GROUP BY bucket5
+    ),
+    charger_5m AS (
+      SELECT time_bucket(INTERVAL '5 minutes', captured_at) AS bucket5,
+             AVG(power_w) AS w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+      GROUP BY bucket5
+    )
+    SELECT (date_trunc('{bucket_unit}', i.bucket5 AT TIME ZONE %s)
+              AT TIME ZONE %s) AS bucket,
+           SUM(i.w / 1000.0 * (5.0/60.0)) AS load_kwh,
+           SUM(
+               CASE WHEN a.net_w IS NOT NULL
+                    THEN GREATEST(
+                        0,
+                        a.net_w + i.w / {_INVERTER_KPD}
+                                - COALESCE(c.w, 0) * {_CHARGER_KPD}
+                    )
+                    ELSE 0
+               END / 1000.0 * (5.0/60.0)
+           ) AS solar_kwh
+    FROM inv_5m i
+    LEFT JOIN atorch_5m a USING (bucket5)
+    LEFT JOIN charger_5m c USING (bucket5)
+    GROUP BY 1
+    ORDER BY 1
+    """
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    _INVERTER_DEVICE_ID, start, end,
+                    _BATTERY_MONITOR_DEVICE_ID, start, end,
+                    _CHARGER_DEVICE_ID, start, end,
+                    tz_name, tz_name,
+                ),
+            )
+            rows = cursor.fetchall()
+
+    points: list[dict[str, Any]] = []
+    total_load = 0.0
+    total_solar = 0.0
+    for row in rows:
+        ts = row.get("bucket")
+        if not isinstance(ts, datetime):
+            ts = _parse_dt(ts)
+        load = float(row.get("load_kwh") or 0.0)
+        solar = float(row.get("solar_kwh") or 0.0)
+        delta = max(0.0, load - solar)
+        points.append({
+            "ts": int(ts.timestamp() * 1000),
+            "load_kwh": round(load, 3),
+            "solar_kwh": round(solar, 3),
+            "delta_kwh": round(delta, 3),
+        })
+        total_load += load
+        total_solar += solar
+    total_delta = max(0.0, total_load - total_solar)
+    return {
+        "bucket_unit": bucket_unit,
+        "points": points,
+        "totals": {
+            "load_kwh": round(total_load, 3),
+            "solar_kwh": round(total_solar, 3),
+            "delta_kwh": round(total_delta, 3),
+            "solar_share_pct": (
+                round(100.0 * total_solar / total_load, 1) if total_load > 0 else 0.0
+            ),
+        },
+    }
+
+
 def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> float:
     """Instantaneous computed solar wattage: atorch_net_W + load_AC_W / KPD,
     clamped to ≥ 0. Pulls from the in-memory live_samples snapshot so we
