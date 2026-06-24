@@ -296,7 +296,10 @@ _ATORCH_KEEPALIVE_INTERVAL_S = 30.0
 # internal ADC sees the steady-state value just fine. A single
 # updatedps() on each poll cycle forces a fresh report. Simpler than
 # Atorch: no keepalive write, no microburst averaging — just one shot.
-_FORCE_REFRESH_DEVICE_IDS = {"bfef2249e8f03df7891epc"}
+_FORCE_REFRESH_DEVICE_IDS = {
+    "bfef2249e8f03df7891epc",   # инвертер AC OUT
+    "bf1bd578076c64ff7cjl6p",   # 72V зарядник — DP 17 (add_ele) уезжал назад без принуждения
+}
 _FORCE_REFRESH_DPS = [17, 18, 19, 20]
 # Microburst: take N updatedps shots spaced this much apart and average
 # their numeric DPS values. Real Atorch readings jitter ±10-30 % second-

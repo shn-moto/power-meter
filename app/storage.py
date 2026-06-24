@@ -3261,7 +3261,12 @@ def get_charger_day_stats(
 
     # If we have an add_ele counter, replace each session's trapezoidal energy
     # with the telescoping counter delta — that matches the device's internal
-    # meter exactly (same physical quantity Atorch shows).
+    # meter exactly (same physical quantity Atorch shows). Skip the override
+    # when the counter delta disagrees with the trapezoidal estimate by more
+    # than 2× in either direction: some Tuya plugs (e.g. 72V charger) ship a
+    # glitchy add_ele that decrements between samples or under-counts heavily
+    # due to DPS event-cache staleness on LAN. In those cases trapezoidal of
+    # cur_power is the trustworthy source.
     if add_ele_meta is not None and sessions and sample_rows:
         dp_key, scale_divisor = add_ele_meta
         counter_points: list[tuple[datetime, float]] = []
@@ -3278,6 +3283,11 @@ def get_charger_day_stats(
                 if anchor_kwh is None or end_kwh is None or end_kwh <= anchor_kwh:
                     continue
                 delta_kwh = end_kwh - anchor_kwh
+                trap_kwh = float(session["energy_kwh"] or 0.0)
+                if trap_kwh > 0.01:
+                    ratio = delta_kwh / trap_kwh
+                    if ratio < 0.5 or ratio > 2.0:
+                        continue
                 session["energy_kwh"] = round(delta_kwh, 3)
                 duration_h = session["duration_seconds"] / 3600.0
                 if duration_h > 0:
