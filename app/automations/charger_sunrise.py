@@ -139,11 +139,16 @@ class ChargerSunrise(BaseAutomation):
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
         "safety_floor_soc": 30,
-        # Floor target high enough that even an "ideal weather" day starts
-        # near-full and lets the panels top up the last 10-15 %. Ceiling at
-        # 97 % so a no-sun forecast pulls the battery up to almost full.
-        "min_target_soc": 85,
-        "max_target_soc": 97,
+        # Floor + ceiling sized to leave the panels' daytime contribution
+        # somewhere to land. Calibrated 2026-06-24 after a 97 % overnight
+        # target left the battery at 99 % by lunch — losing roughly 15-25 %
+        # of the day's solar to clipping. Sunny forecast → 80 (room for
+        # 15-20 % topping); cloudy → 88 (still 10-12 % headroom for the
+        # 1-3 h of direct sun the balcony catches even under cloud cover).
+        # Bonus: LiFePO4 cycle life is meaningfully better with daily peaks
+        # at 88 % than at 97 %.
+        "min_target_soc": 80,
+        "max_target_soc": 88,
         # Leave as null → auto-resolved per device (single-channel plug uses
         # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
         # force a specific code.
