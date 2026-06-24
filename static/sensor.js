@@ -323,25 +323,28 @@ if (sensorPage) {
                 splitLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.08)' } },
             },
             series: [
-                {
-                    name: 'Покрыто солнцем',
-                    type: 'bar',
-                    stack: 'load',
-                    itemStyle: { color: '#67b86b' },
-                    data: selfData,
-                },
+                // Stack order: grid_delta on the bottom (anchored to zero),
+                // self-consumed on top → matches the standard "grid first,
+                // own consumption on top" energy-balance layout.
                 {
                     name: 'Из сети',
                     type: 'bar',
                     stack: 'load',
-                    itemStyle: { color: '#e8a838' },
+                    itemStyle: { color: '#7fd0ff' },
                     data: gridData,
+                },
+                {
+                    name: 'Покрыто солнцем',
+                    type: 'bar',
+                    stack: 'load',
+                    itemStyle: { color: '#ff5a5a' },
+                    data: selfData,
                 },
                 {
                     name: 'Солнце',
                     type: 'bar',
                     stack: 'generation',
-                    itemStyle: { color: '#f5c542' },
+                    itemStyle: { color: '#8edb95' },
                     data: solarData,
                 },
             ],

@@ -2155,7 +2155,7 @@ button:hover {
     color: #e8f0fa;
 }
 
-.sensor-history-total.is-load .sensor-history-total-value { color: #ff7a7a; }
-.sensor-history-total.is-solar .sensor-history-total-value { color: #f5c542; }
-.sensor-history-total.is-share .sensor-history-total-value { color: #8edb95; }
+.sensor-history-total.is-load .sensor-history-total-value { color: #ff5a5a; }
+.sensor-history-total.is-solar .sensor-history-total-value { color: #8edb95; }
+.sensor-history-total.is-share .sensor-history-total-value { color: #f5c542; }
 .sensor-history-total.is-grid .sensor-history-total-value { color: #7fd0ff; }
