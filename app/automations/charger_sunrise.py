@@ -139,16 +139,16 @@ class ChargerSunrise(BaseAutomation):
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
         "safety_floor_soc": 30,
-        # Floor + ceiling sized to leave the panels' daytime contribution
-        # somewhere to land. Calibrated 2026-06-24 after a 97 % overnight
-        # target left the battery at 99 % by lunch — losing roughly 15-25 %
-        # of the day's solar to clipping. Sunny forecast → 80 (room for
-        # 15-20 % topping); cloudy → 88 (still 10-12 % headroom for the
-        # 1-3 h of direct sun the balcony catches even under cloud cover).
-        # Bonus: LiFePO4 cycle life is meaningfully better with daily peaks
-        # at 88 % than at 97 %.
+        # Floor 80 % = sunny-day ceiling (panels will push the rest);
+        # max_target_soc = 95 % is the absolute cap, used on fully cloudy
+        # forecasts when the panels won't make any meaningful contribution.
+        # The actual nightly ceiling is *interpolated* between these two
+        # against the day's expected solar (see `solar_aware_ceiling` in
+        # run()): bright forecast → 80 %, half-cloudy → ~88 %, fully cloudy
+        # → 95 %. Bonus: LiFePO4 cycle life is meaningfully better with
+        # daily peaks below 90 % than at 100 %.
         "min_target_soc": 80,
-        "max_target_soc": 88,
+        "max_target_soc": 95,
         # Leave as null → auto-resolved per device (single-channel plug uses
         # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
         # force a specific code.
@@ -210,7 +210,23 @@ class ChargerSunrise(BaseAutomation):
         # Battery must hold enough at sunrise so that (current - safety_floor)
         # capacity covers the net evening draw.
         target = safety_floor + max(0.0, net_need_wh) / capacity_wh * 100.0
-        target = max(float(cfg["min_target_soc"]), min(float(cfg["max_target_soc"]), target))
+        # Solar-aware shrinkage of the upper bound. Truly cloudy days can
+        # safely fill the battery up to max_target_soc (95 %) because the
+        # panels won't push it past 100 %; bright forecast days need
+        # headroom so the next afternoon's gain lands inside 100 %.
+        # Linear interpolation: 0 Wh expected → 95 % ceiling, configured
+        # max_expected_solar_wh → 80 % ceiling.
+        max_solar_ref = max(float(cfg.get("max_expected_solar_wh") or 1500.0), 1.0)
+        solar_fraction = min(1.0, max(0.0, expected_solar_wh / max_solar_ref))
+        reserve_pct = 5.0 + 15.0 * solar_fraction
+        solar_aware_ceiling = 100.0 - reserve_pct
+        effective_max = min(float(cfg["max_target_soc"]), solar_aware_ceiling)
+        target = max(float(cfg["min_target_soc"]), min(effective_max, target))
+        log.append(
+            f"Потолок: {effective_max:.0f}% "
+            f"(резерв под солнце {reserve_pct:.0f}%, "
+            f"абс. макс {float(cfg['max_target_soc']):.0f}%)."
+        )
         log.append(f"Net потребность: {net_need_wh:.0f} Вт·ч → target SoC: {target:.0f}%.")
 
         if soc >= target:
