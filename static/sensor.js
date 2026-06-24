@@ -323,27 +323,29 @@ if (sensorPage) {
                 splitLine: { lineStyle: { color: 'rgba(127, 208, 255, 0.08)' } },
             },
             series: [
-                // Stack order: grid_delta on the bottom (anchored to zero),
-                // self-consumed on top → matches the standard "grid first,
-                // own consumption on top" energy-balance layout.
+                // All three series share one stack name so ECharts groups
+                // them into a single column per bucket: positives stack
+                // upward (delta on the bottom, self-consumed on top → sum
+                // = load), the negative solar series extends downward from
+                // the same x position.
                 {
                     name: 'Из сети',
                     type: 'bar',
-                    stack: 'load',
+                    stack: 'balance',
                     itemStyle: { color: '#7fd0ff' },
                     data: gridData,
                 },
                 {
                     name: 'Покрыто солнцем',
                     type: 'bar',
-                    stack: 'load',
+                    stack: 'balance',
                     itemStyle: { color: '#ff5a5a' },
                     data: selfData,
                 },
                 {
                     name: 'Солнце',
                     type: 'bar',
-                    stack: 'generation',
+                    stack: 'balance',
                     itemStyle: { color: '#8edb95' },
                     data: solarData,
                 },
