@@ -122,19 +122,21 @@ class ChargerSunrise(BaseAutomation):
         "solar_peak_w": 350,
         # Empirical derating: open-meteo's sunshine_duration counts every
         # hour the sun is "unobscured" at full weight including dawn/dusk
-        # angles, but panels at 49.8°N produce maybe 20-30 % of peak during
-        # those low-angle hours. Observed daily totals after MPPT calibration:
-        # ~1.0-1.5 kWh against forecast 8-9 sunshine_hours → effective
-        # derating ≈ 0.45 (kWh / (peak × hours)).
-        "solar_derating_factor": 0.45,
+        # Recalibrated 2026-06-25: today the forecast model said 0.63 kWh
+        # would land but the rig actually produced 1.12 kWh (battery topped
+        # out at 99 % despite the new dynamic ceiling). The old 0.45 derate
+        # was a relic of the era when the MPPT current sensor under-read by
+        # ~1.8 ×; after the calibration fix the same physical setup now
+        # delivers a much larger fraction of (peak × hours). 0.75 reproduces
+        # 4 h × 350 W × 0.75 = 1050 Wh, in line with today's actual 1.12 kWh.
+        "solar_derating_factor": 0.75,
         # Balcony only gets direct sun roughly 11:00-15:00; everything else
         # is shade/reflections that the forecast still counts as full sun.
         # Cap the forecast at 4 effective hours.
         "max_sunshine_hours": 4,
-        # Even with peak ×  4 h × 0.45 derate = 630 Wh, the real best-case
-        # ceiling on this two-panel rig is around 1.5 kWh per day. Use that
-        # as an absolute upper bound so a freak high forecast can't push
-        # the target SoC down too low.
+        # With peak × 4 h × 0.75 derate = 1050 Wh as the baseline expectation,
+        # keep 1500 Wh as the absolute upper bound — a freak fully-clear day
+        # plus light evening shoulders could push us close to that.
         "max_expected_solar_wh": 1500,
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
