@@ -102,7 +102,13 @@ class ChargerSunrise(BaseAutomation):
         "и включает зарядку до его достижения."
     )
     device_type = "charger"
-    default_cron = "0 2 * * *"
+    # Weekdays only — the user controls weekend charging manually so they
+    # can use the rig under different patterns (longer naps + lighter loads
+    # vs the weekday baseline assumed by the heuristic). Cron weekday field:
+    # 0 = Sunday, 1-5 = Mon-Fri, 6 = Saturday. So 1-5 fires Mon-Fri 02:00,
+    # skipping the Sat 02:00 (= Fri→Sat night) and Sun 02:00 (Sat→Sun night)
+    # runs that the user vetoed.
+    default_cron = "0 2 * * 1-5"
     default_config = {
         "latitude": 49.82,
         "longitude": 19.06,
@@ -122,34 +128,36 @@ class ChargerSunrise(BaseAutomation):
         "solar_peak_w": 350,
         # Empirical derating: open-meteo's sunshine_duration counts every
         # hour the sun is "unobscured" at full weight including dawn/dusk
-        # Recalibrated 2026-06-25: today the forecast model said 0.63 kWh
-        # would land but the rig actually produced 1.12 kWh (battery topped
-        # out at 99 % despite the new dynamic ceiling). The old 0.45 derate
-        # was a relic of the era when the MPPT current sensor under-read by
-        # ~1.8 ×; after the calibration fix the same physical setup now
-        # delivers a much larger fraction of (peak × hours). 0.75 reproduces
-        # 4 h × 350 W × 0.75 = 1050 Wh, in line with today's actual 1.12 kWh.
-        "solar_derating_factor": 0.75,
-        # Balcony only gets direct sun roughly 11:00-15:00; everything else
-        # is shade/reflections that the forecast still counts as full sun.
-        # Cap the forecast at 4 effective hours.
-        "max_sunshine_hours": 4,
-        # With peak × 4 h × 0.75 derate = 1050 Wh as the baseline expectation,
-        # keep 1500 Wh as the absolute upper bound — a freak fully-clear day
-        # plus light evening shoulders could push us close to that.
+        # Recalibrated 2026-06-27 after the user re-aimed the panels: on a
+        # clear-sky day the rig delivered 1.60 kWh vs the previous formula's
+        # 1.05 kWh estimate (35 % under-prediction → battery hit 100 % by
+        # 13:00 and clipped 4 h of generation). The angle tweak + wider
+        # effective production window means both knobs need a nudge:
+        # 5 h × 350 W × 0.85 = 1487 Wh, which reproduces 2026-06-27's
+        # 1.6 kWh comfortably and leaves a tiny safety margin on the
+        # high-derate side.
+        "solar_derating_factor": 0.85,
+        # Wider effective window after the angle optimisation — panels now
+        # contribute meaningfully from ~10:00 to ~16:00 instead of the
+        # earlier 11:00-15:00. 5 h is closer to what we actually integrate.
+        "max_sunshine_hours": 5,
+        # 5 h × 350 W × 0.85 ≈ 1487 Wh is now the base expectation, so the
+        # absolute cap of 1500 Wh is essentially the same as a normal clear
+        # day. A freak shoulder-heavy day could plausibly nudge above this
+        # but very rarely — keep 1500 as the ceiling.
         "max_expected_solar_wh": 1500,
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
         "safety_floor_soc": 30,
-        # Floor 80 % = sunny-day ceiling (panels will push the rest);
+        # Floor 75 % = sunny-day ceiling (panels will push the last 20-25 %);
         # max_target_soc = 95 % is the absolute cap, used on fully cloudy
         # forecasts when the panels won't make any meaningful contribution.
         # The actual nightly ceiling is *interpolated* between these two
         # against the day's expected solar (see `solar_aware_ceiling` in
-        # run()): bright forecast → 80 %, half-cloudy → ~88 %, fully cloudy
-        # → 95 %. Bonus: LiFePO4 cycle life is meaningfully better with
-        # daily peaks below 90 % than at 100 %.
-        "min_target_soc": 80,
+        # run()): bright forecast → 75-80 %, half-cloudy → ~88 %, fully
+        # cloudy → 95 %. Bonus: LiFePO4 cycle life is meaningfully better
+        # with daily peaks below 90 % than at 100 %.
+        "min_target_soc": 75,
         "max_target_soc": 95,
         # Leave as null → auto-resolved per device (single-channel plug uses
         # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
