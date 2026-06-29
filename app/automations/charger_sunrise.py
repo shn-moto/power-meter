@@ -63,16 +63,22 @@ def _read_latest_soc(database_url: str, device_id: str) -> float | None:
         return None
 
 
-def _fetch_forecast(lat: float, lon: float) -> tuple[float, int] | None:
-    """Open-meteo daily forecast — returns (sunshine_hours_tomorrow,
-    cloud_cover_max_tomorrow_pct) or None on failure."""
+def _fetch_forecast(lat: float, lon: float) -> dict | None:
+    """Open-meteo daily forecast for **today** (index 0 in Europe/Warsaw),
+    which is the day whose daytime the 02:00 night charge is preparing for.
+    Previously this used index [1] (tomorrow) — incorrect: at 02:00 the
+    calendar day has just started and panels will run later the same day.
+
+    Returns a dict with sunshine_hours, cloud_cover_pct, temp_max_c,
+    weather_code — or None on failure.
+    """
     params = urllib.parse.urlencode(
         {
             "latitude": lat,
             "longitude": lon,
-            "daily": "cloud_cover_max,sunshine_duration",
+            "daily": "cloud_cover_max,sunshine_duration,temperature_2m_max,weather_code",
             "timezone": "Europe/Warsaw",
-            "forecast_days": 2,
+            "forecast_days": 1,
         }
     )
     url = f"https://api.open-meteo.com/v1/forecast?{params}"
@@ -83,13 +89,18 @@ def _fetch_forecast(lat: float, lon: float) -> tuple[float, int] | None:
         logger.warning("Open-meteo fetch failed: %s", exc)
         return None
     daily = payload.get("daily") or {}
-    sunshine_seconds_arr = daily.get("sunshine_duration") or []
-    cloud_cover_arr = daily.get("cloud_cover_max") or []
-    if len(sunshine_seconds_arr) < 2 or len(cloud_cover_arr) < 2:
+    sun_arr = daily.get("sunshine_duration") or []
+    cloud_arr = daily.get("cloud_cover_max") or []
+    temp_arr = daily.get("temperature_2m_max") or []
+    wc_arr = daily.get("weather_code") or []
+    if not sun_arr or not cloud_arr:
         return None
-    sunshine_hours = float(sunshine_seconds_arr[1]) / 3600.0
-    cloud_cover = int(cloud_cover_arr[1])
-    return sunshine_hours, cloud_cover
+    return {
+        "sunshine_hours": float(sun_arr[0]) / 3600.0,
+        "cloud_cover_pct": int(cloud_arr[0]),
+        "temp_max_c": float(temp_arr[0]) if temp_arr else None,
+        "weather_code": int(wc_arr[0]) if wc_arr else None,
+    }
 
 
 @register
@@ -185,13 +196,48 @@ class ChargerSunrise(BaseAutomation):
 
         forecast = await asyncio.to_thread(_fetch_forecast, float(cfg["latitude"]), float(cfg["longitude"]))
         if forecast is None:
-            # Worst-case fallback: assume zero solar generation tomorrow.
+            # Worst-case fallback: assume zero solar generation today.
             sunshine_hours = 0.0
             cloud_cover = 100
+            temp_max_c: float | None = None
+            weather_code: int | None = None
             log.append("Прогноз погоды недоступен — считаю как полностью пасмурный день.")
         else:
-            sunshine_hours, cloud_cover = forecast
-            log.append(f"Прогноз: {sunshine_hours:.1f} ч прямого солнца, облачность max {cloud_cover}%.")
+            sunshine_hours = float(forecast["sunshine_hours"])
+            cloud_cover = int(forecast["cloud_cover_pct"])
+            temp_max_c = forecast.get("temp_max_c")
+            weather_code = forecast.get("weather_code")
+            extras = []
+            if temp_max_c is not None:
+                extras.append(f"t° {temp_max_c:.0f}°")
+            if weather_code is not None:
+                extras.append(f"wmo {weather_code}")
+            extras_str = f" ({', '.join(extras)})" if extras else ""
+            log.append(
+                f"Прогноз: {sunshine_hours:.1f} ч прямого солнца, "
+                f"облачность max {cloud_cover}%{extras_str}."
+            )
+
+        # Hot-day floor: open-meteo's sunshine_duration is unreliable on
+        # heat-wave days (we've seen 0.9 h reported on a 36 °C clear-sky
+        # day that actually delivered 1.9 kWh). When max temp ≥ 28 °C and
+        # the weather code is precipitation-free (0 = clear, 1 = mainly
+        # clear, 2 = partly cloudy, 3 = overcast — none of these mean rain
+        # or storm), force the assumed sunshine_hours floor to 4 h so the
+        # charger heuristic doesn't over-fill the battery on what's
+        # actually a peak-production day.
+        precip_free = weather_code is not None and weather_code <= 3
+        if (
+            temp_max_c is not None
+            and temp_max_c >= 28.0
+            and precip_free
+            and sunshine_hours < 4.0
+        ):
+            log.append(
+                f"Hot-day floor: {temp_max_c:.0f}°C + wmo {weather_code} "
+                f"(без осадков) — принимаю минимум 4 ч солнца."
+            )
+            sunshine_hours = 4.0
 
         peak_w = float(cfg["solar_peak_w"])
         derating = float(cfg["solar_derating_factor"])
