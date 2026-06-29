@@ -63,20 +63,48 @@ def _read_latest_soc(database_url: str, device_id: str) -> float | None:
         return None
 
 
-def _fetch_forecast(lat: float, lon: float) -> dict | None:
-    """Open-meteo daily forecast for **today** (index 0 in Europe/Warsaw),
-    which is the day whose daytime the 02:00 night charge is preparing for.
-    Previously this used index [1] (tomorrow) — incorrect: at 02:00 the
-    calendar day has just started and panels will run later the same day.
+def _fetch_forecast(
+    lat: float,
+    lon: float,
+    tilt_deg: float,
+    azimuth_deg: float,
+) -> dict | None:
+    """Open-meteo solar forecast for **today** using `global_tilted_irradiance`
+    — the hourly irradiance arriving on a panel at the configured tilt and
+    azimuth. Sums those hourly W/m² values across the day to get total Wh/m²
+    incident on the panel surface. This is the most accurate forecast input
+    for PV yield: it bakes in cloud cover, panel orientation, sun-angle
+    geometry, and intra-day distribution all at once.
 
-    Returns a dict with sunshine_hours, cloud_cover_pct, temp_max_c,
-    weather_code — or None on failure.
+    The horizontal `shortwave_radiation` from the same call is kept for
+    cross-check logging.
+
+    Convention: tilt_deg = 0 is flat, 90 is vertical; azimuth_deg = 0 is
+    south in the northern hemisphere (open-meteo convention).
+
+    Returns a dict with:
+      gti_wh_per_m2     — sum of hourly tilted irradiance over the day
+      ghi_wh_per_m2     — same but horizontal (for diagnostic comparison)
+      precipitation_mm  — daily precipitation total
+      precip_prob_pct   — peak precipitation probability for the day
+      cloud_mean_pct    — daily-average cloud cover
+      temp_max_c        — daily peak temperature
+      weather_code      — WMO code (logging only)
     """
     params = urllib.parse.urlencode(
         {
             "latitude": lat,
             "longitude": lon,
-            "daily": "cloud_cover_max,sunshine_duration,temperature_2m_max,weather_code",
+            "hourly": "global_tilted_irradiance,shortwave_radiation",
+            "daily": ",".join([
+                "precipitation_sum",
+                "precipitation_probability_max",
+                "cloud_cover_mean",
+                "temperature_2m_max",
+                "weather_code",
+            ]),
+            "tilt": tilt_deg,
+            "azimuth": azimuth_deg,
             "timezone": "Europe/Warsaw",
             "forecast_days": 1,
         }
@@ -88,16 +116,26 @@ def _fetch_forecast(lat: float, lon: float) -> dict | None:
     except Exception as exc:
         logger.warning("Open-meteo fetch failed: %s", exc)
         return None
+    hourly = payload.get("hourly") or {}
+    gti = hourly.get("global_tilted_irradiance") or []
+    ghi = hourly.get("shortwave_radiation") or []
+    if not gti:
+        return None
+    # forecast_days=1 returns 24 hourly entries for "today" in the local tz.
+    gti_sum = float(sum(v for v in gti[:24] if v is not None))
+    ghi_sum = float(sum(v for v in ghi[:24] if v is not None))
     daily = payload.get("daily") or {}
-    sun_arr = daily.get("sunshine_duration") or []
-    cloud_arr = daily.get("cloud_cover_max") or []
+    precip_arr = daily.get("precipitation_sum") or []
+    pprob_arr = daily.get("precipitation_probability_max") or []
+    cloud_arr = daily.get("cloud_cover_mean") or []
     temp_arr = daily.get("temperature_2m_max") or []
     wc_arr = daily.get("weather_code") or []
-    if not sun_arr or not cloud_arr:
-        return None
     return {
-        "sunshine_hours": float(sun_arr[0]) / 3600.0,
-        "cloud_cover_pct": int(cloud_arr[0]),
+        "gti_wh_per_m2": gti_sum,
+        "ghi_wh_per_m2": ghi_sum,
+        "precipitation_mm": float(precip_arr[0]) if precip_arr else 0.0,
+        "precip_prob_pct": int(pprob_arr[0]) if pprob_arr else 0,
+        "cloud_mean_pct": int(cloud_arr[0]) if cloud_arr else 0,
         "temp_max_c": float(temp_arr[0]) if temp_arr else None,
         "weather_code": int(wc_arr[0]) if wc_arr else None,
     }
@@ -130,32 +168,31 @@ class ChargerSunrise(BaseAutomation):
         # there's headroom that doesn't exist.
         "battery_capacity_wh": 2530,
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
-        # Two-panel sub-kW setup. Calibrated 2026-06-21 against the MPPT
-        # current sensor (power_correction_factor 0.84): true solar-noon peak
-        # observed at 13:04 Warsaw was 360 W DC into the battery, on a day
-        # with intermittent clouds during the noon hour — so 350 W is a fair
-        # representative peak for "clear summer day". The old 600 W came from
-        # un-calibrated Atorch readings that over-stated DC output by ~2×.
-        "solar_peak_w": 350,
-        # Empirical derating: open-meteo's sunshine_duration counts every
-        # hour the sun is "unobscured" at full weight including dawn/dusk
-        # Recalibrated 2026-06-27 after the user re-aimed the panels: on a
-        # clear-sky day the rig delivered 1.60 kWh vs the previous formula's
-        # 1.05 kWh estimate (35 % under-prediction → battery hit 100 % by
-        # 13:00 and clipped 4 h of generation). The angle tweak + wider
-        # effective production window means both knobs need a nudge:
-        # 5 h × 350 W × 0.85 = 1487 Wh, which reproduces 2026-06-27's
-        # 1.6 kWh comfortably and leaves a tiny safety margin on the
-        # high-derate side.
-        "solar_derating_factor": 0.85,
-        # Wider effective window after the angle optimisation — panels now
-        # contribute meaningfully from ~10:00 to ~16:00 instead of the
-        # earlier 11:00-15:00. 5 h is closer to what we actually integrate.
-        "max_sunshine_hours": 5,
-        # 5 h × 350 W × 0.85 ≈ 1487 Wh is now the base expectation, so the
-        # absolute cap of 1500 Wh is essentially the same as a normal clear
-        # day. A freak shoulder-heavy day could plausibly nudge above this
-        # but very rarely — keep 1500 as the ceiling.
+        # GTI-based prediction. open-meteo's `global_tilted_irradiance`
+        # gives W/m² hourly on a panel at the configured tilt/azimuth, with
+        # clouds and intra-day sun-angle geometry already baked in.
+        # Calibrated 2026-06-29 against 2026-06-27 actual generation:
+        # 1605 Wh measured ÷ 7375 Wh/m² (GTI sum at tilt 30°, azimuth -90°
+        # = south) = 0.218 Wh per (Wh/m² of GTI). The calibration implicitly
+        # captures panel area × cell efficiency × wiring losses × angle
+        # factor; it only stays valid as long as the configured tilt/azimuth
+        # match whatever was used at calibration time.
+        # open-meteo azimuth convention is empirical: -90 = south (peak GTI
+        # at solar noon), 0 ≈ east, 90 ≈ west, ±180 = north. Tested by
+        # checking hourly GTI peak times — their docs were misleading on
+        # this point.
+        "panel_tilt_deg": 30,
+        "panel_azimuth_deg": -90,
+        "solar_calibration_wh_per_wh_per_m2": 0.22,
+        # Heavy precipitation drops effective generation further — wet
+        # panels reflect more, and storm clouds are usually thicker than
+        # the daily-average cloud cover captures. > 5 mm forecast → halve
+        # the GTI-based estimate.
+        "precip_discount_threshold_mm": 5.0,
+        "precip_discount_factor": 0.5,
+        # 1500 Wh ceiling on the GTI-based estimate. A truly peak summer
+        # day on this rig is ~1.8 kWh; staying conservative under the
+        # absolute peak avoids over-confidence on freak high forecasts.
         "max_expected_solar_wh": 1500,
         "expected_daily_load_w": 200,
         "load_window_hours": 14,
@@ -194,17 +231,30 @@ class ChargerSunrise(BaseAutomation):
             return AutomationResult(status="error", log=f"Нет свежих сэмплов для {battery_id} — SoC не получить.")
         log.append(f"Текущий SoC: {soc:.0f}%")
 
-        forecast = await asyncio.to_thread(_fetch_forecast, float(cfg["latitude"]), float(cfg["longitude"]))
+        tilt_deg = float(cfg.get("panel_tilt_deg", 30))
+        azimuth_deg = float(cfg.get("panel_azimuth_deg", 0))
+        forecast = await asyncio.to_thread(
+            _fetch_forecast,
+            float(cfg["latitude"]),
+            float(cfg["longitude"]),
+            tilt_deg,
+            azimuth_deg,
+        )
         if forecast is None:
             # Worst-case fallback: assume zero solar generation today.
-            sunshine_hours = 0.0
-            cloud_cover = 100
+            gti_wh_per_m2 = 0.0
+            precip_mm = 0.0
+            precip_prob = 0
+            cloud_mean = 100
             temp_max_c: float | None = None
             weather_code: int | None = None
             log.append("Прогноз погоды недоступен — считаю как полностью пасмурный день.")
         else:
-            sunshine_hours = float(forecast["sunshine_hours"])
-            cloud_cover = int(forecast["cloud_cover_pct"])
+            gti_wh_per_m2 = float(forecast["gti_wh_per_m2"])
+            ghi_wh_per_m2 = float(forecast["ghi_wh_per_m2"])
+            precip_mm = float(forecast["precipitation_mm"])
+            precip_prob = int(forecast["precip_prob_pct"])
+            cloud_mean = int(forecast["cloud_mean_pct"])
             temp_max_c = forecast.get("temp_max_c")
             weather_code = forecast.get("weather_code")
             extras = []
@@ -214,47 +264,37 @@ class ChargerSunrise(BaseAutomation):
                 extras.append(f"wmo {weather_code}")
             extras_str = f" ({', '.join(extras)})" if extras else ""
             log.append(
-                f"Прогноз: {sunshine_hours:.1f} ч прямого солнца, "
-                f"облачность max {cloud_cover}%{extras_str}."
+                f"Прогноз: GTI {gti_wh_per_m2:.0f} Вт·ч/м² "
+                f"(GHI {ghi_wh_per_m2:.0f}), облачность ср {cloud_mean}%, "
+                f"осадки {precip_mm:.1f} мм ({precip_prob}%){extras_str}."
             )
 
-        # Hot-day floor: open-meteo's sunshine_duration is unreliable on
-        # heat-wave days (we've seen 0.9 h reported on a 36 °C clear-sky
-        # day that actually delivered 1.9 kWh). When max temp ≥ 28 °C and
-        # the weather code is precipitation-free (0 = clear, 1 = mainly
-        # clear, 2 = partly cloudy, 3 = overcast — none of these mean rain
-        # or storm), force the assumed sunshine_hours floor to 4 h so the
-        # charger heuristic doesn't over-fill the battery on what's
-        # actually a peak-production day.
-        precip_free = weather_code is not None and weather_code <= 3
-        if (
-            temp_max_c is not None
-            and temp_max_c >= 28.0
-            and precip_free
-            and sunshine_hours < 4.0
-        ):
-            log.append(
-                f"Hot-day floor: {temp_max_c:.0f}°C + wmo {weather_code} "
-                f"(без осадков) — принимаю минимум 4 ч солнца."
-            )
-            sunshine_hours = 4.0
-
-        peak_w = float(cfg["solar_peak_w"])
-        derating = float(cfg["solar_derating_factor"])
-        max_sun_hours = float(cfg.get("max_sunshine_hours") or sunshine_hours or 0)
-        capped_sun_hours = min(sunshine_hours, max_sun_hours) if max_sun_hours > 0 else sunshine_hours
-        raw_expected = capped_sun_hours * peak_w * derating
+        # Convert tilted-irradiance forecast to expected battery-side Wh
+        # via the empirically-calibrated rig efficiency factor.
+        calibration = float(cfg.get("solar_calibration_wh_per_wh_per_m2", 0.207))
+        raw_expected = gti_wh_per_m2 * calibration
+        # Heavy precipitation drops effective yield beyond what the cloud-
+        # cover-modulated GTI captures (wet panels, persistent storm clouds).
+        precip_threshold = float(cfg.get("precip_discount_threshold_mm", 5.0))
+        precip_factor = float(cfg.get("precip_discount_factor", 0.5))
+        discount_applied = False
+        if precip_mm >= precip_threshold:
+            raw_expected *= precip_factor
+            discount_applied = True
+        # Safety cap on the expectation — used both as a literal upper
+        # bound and as the reference value for solar_aware_ceiling below.
         max_expected = float(cfg.get("max_expected_solar_wh") or 0)
         expected_solar_wh = min(raw_expected, max_expected) if max_expected > 0 else raw_expected
         cap_notes = []
-        if capped_sun_hours < sunshine_hours:
-            cap_notes.append(f"часы {sunshine_hours:.1f}→{capped_sun_hours:.1f}")
+        if discount_applied:
+            cap_notes.append(f"осадки ×{precip_factor:.2f}")
         if max_expected > 0 and raw_expected > max_expected:
             cap_notes.append(f"Вт·ч {raw_expected:.0f}→{max_expected:.0f}")
         suffix = f" [cap: {', '.join(cap_notes)}]" if cap_notes else ""
         log.append(
             f"Ожид. генерация: ~{expected_solar_wh:.0f} Вт·ч "
-            f"(peak {peak_w:.0f} Вт × {capped_sun_hours:.1f} ч × {derating:.2f}){suffix}."
+            f"(GTI {gti_wh_per_m2:.0f} × {calibration:.3f} "
+            f"Вт·ч/(Вт·ч/м²)){suffix}."
         )
 
         expected_consumption_wh = float(cfg["expected_daily_load_w"]) * float(cfg["load_window_hours"])
