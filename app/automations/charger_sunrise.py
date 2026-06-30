@@ -194,18 +194,23 @@ class ChargerSunrise(BaseAutomation):
         # day on this rig is ~1.8 kWh; staying conservative under the
         # absolute peak avoids over-confidence on freak high forecasts.
         "max_expected_solar_wh": 1500,
-        "expected_daily_load_w": 200,
+        # Lowered 2026-06-30 by 30 W: user moved the desktop monitor off
+        # the inverter (now mains-fed), so the baseline daytime draw is
+        # 170 W average instead of 200 W. Daytime window unchanged.
+        "expected_daily_load_w": 170,
         "load_window_hours": 14,
         "safety_floor_soc": 30,
-        # Floor 75 % = sunny-day ceiling (panels will push the last 20-25 %);
-        # max_target_soc = 95 % is the absolute cap, used on fully cloudy
-        # forecasts when the panels won't make any meaningful contribution.
-        # The actual nightly ceiling is *interpolated* between these two
-        # against the day's expected solar (see `solar_aware_ceiling` in
-        # run()): bright forecast → 75-80 %, half-cloudy → ~88 %, fully
-        # cloudy → 95 %. Bonus: LiFePO4 cycle life is meaningfully better
-        # with daily peaks below 90 % than at 100 %.
-        "min_target_soc": 75,
+        # Floor 65 % = sunny-day target on the new GTI-based formula. Even
+        # at 65 % start, a clear-sky day adds ~25-35 % during the noon
+        # window — leaves margin against 100 % clipping. Lowered from 75
+        # 2026-06-30 after the GTI forecast still over-charged: today
+        # peaked at 97 % with 1.65 kWh of measured generation against a
+        # 1.55 kWh forecast, so even the accurate prediction needed more
+        # headroom on the SoC side.
+        # max_target_soc 95 % = absolute cap for fully cloudy forecasts.
+        # Dynamic ceiling interpolates: bright → 65-75 %, half-cloudy →
+        # ~85 %, fully cloudy → 95 %.
+        "min_target_soc": 65,
         "max_target_soc": 95,
         # Leave as null → auto-resolved per device (single-channel plug uses
         # `switch`, Zigbee sub-device uses `switch_1`). Set explicitly only to
@@ -372,7 +377,8 @@ class ChargerSunrise(BaseAutomation):
                 "soc_end": final_soc,
                 "expected_solar_wh": expected_solar_wh,
                 "expected_consumption_wh": expected_consumption_wh,
-                "sunshine_hours": sunshine_hours,
-                "cloud_cover_max_pct": cloud_cover,
+                "gti_wh_per_m2": gti_wh_per_m2,
+                "precipitation_mm": precip_mm,
+                "cloud_mean_pct": cloud_mean,
             },
         )
