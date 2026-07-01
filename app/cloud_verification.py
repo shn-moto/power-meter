@@ -73,15 +73,59 @@ def _cloud_events_add_ele(
     return [ev for ev in logs if ev.get("code") == "add_ele"]
 
 
+def _daily_kwh_from_events(
+    day_events: list[tuple[int, float]],
+    scale_divisor: float,
+) -> float:
+    """Convert a single day's events (list of (ts_ms, raw_value), unsorted)
+    into kWh. Detects whether the plug's add_ele reports are incremental
+    (each event = kWh consumed since last report) or cumulative (each
+    event = running counter value):
+
+      - Sort by time. Count how many consecutive pairs strictly decrease.
+      - If < 20 % decrease → treat as CUMULATIVE; daily kWh = Σ positive
+        deltas between consecutive events (handles mid-day counter resets).
+      - Otherwise → INCREMENTAL; daily kWh = Σ raw values.
+
+    Empirically:
+      - Honda 22 kW charging plug reports incremental values that
+        fluctuate wildly (1 → 520 → 176 → 1) — no monotonic pattern.
+      - Детская media plug reports cumulative counter values that grow
+        monotonically (2170 → 2180 → 2190 → ...).
+    """
+    if not day_events:
+        return 0.0
+    events = sorted(day_events, key=lambda x: x[0])
+    values = [v for _, v in events]
+    n = len(values)
+    if n == 1:
+        # Ambiguous with a single point. Assume incremental — it's the
+        # safer default (worst case slightly over-counts on cumulative
+        # plugs).
+        return values[0] / max(scale_divisor, 1.0)
+    decreases = sum(1 for i in range(1, n) if values[i] < values[i - 1])
+    monotonic_ratio = 1.0 - (decreases / (n - 1))
+    if monotonic_ratio >= 0.8:
+        # Cumulative: sum positive step-deltas (handles resets).
+        total_raw = 0.0
+        for i in range(1, n):
+            delta = values[i] - values[i - 1]
+            if delta > 0:
+                total_raw += delta
+        return total_raw / max(scale_divisor, 1.0)
+    # Incremental: each event is a delta.
+    return sum(values) / max(scale_divisor, 1.0)
+
+
 def _sum_by_local_day(
     events: list[dict[str, Any]],
     scale_divisor: float,
     tz: ZoneInfo,
 ) -> dict[date, float]:
-    """Sum incremental add_ele values into kWh per local day. Each event's
-    `value` is the raw incremental counter reading — divide by the DPS
-    scale divisor to get kWh."""
-    per_day: dict[date, float] = defaultdict(float)
+    """Bucket add_ele events by local day, then apply
+    _daily_kwh_from_events per bucket. Each event's `value` is the raw
+    counter reading (or delta — auto-detected)."""
+    per_day_events: dict[date, list[tuple[int, float]]] = defaultdict(list)
     for ev in events:
         raw_ts = ev.get("event_time")
         raw_val = ev.get("value")
@@ -89,12 +133,15 @@ def _sum_by_local_day(
             continue
         try:
             ts_ms = int(raw_ts)
-            increment_raw = float(raw_val)
+            value = float(raw_val)
         except (TypeError, ValueError):
             continue
         local_dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(tz)
-        per_day[local_dt.date()] += increment_raw / max(scale_divisor, 1.0)
-    return dict(per_day)
+        per_day_events[local_dt.date()].append((ts_ms, value))
+    return {
+        d: _daily_kwh_from_events(evts, scale_divisor)
+        for d, evts in per_day_events.items()
+    }
 
 
 def _energy_meter_devices_with_add_ele(config: AppConfig) -> list[tuple[str, float]]:
