@@ -3616,26 +3616,30 @@ def _device_energy_kwh_for_range(
     """kWh consumed by one device between two exact timestamps.
     Returns (kwh, hours_with_data).
 
-    Two strategies, tried in order:
+    For power_type='total' devices (stove, main breaker) the counter is
+    the only meaningful signal — power_w in the samples table stores the
+    counter value itself, not power, so trapezoidal integration would
+    return garbage. Just take the delta.
 
-      1. If the device exposes an `add_ele` counter (most sockets do,
-         even those marked power_type='current'), read the counter value
-         at the last sample at-or-before start_dt and end_dt and return
-         the delta. This is the most accurate — captures energy across
-         offline gaps and matches what the device itself reports.
+    For power_type='current' devices we cross-check:
+      - counter delta between the last sample ≤ start_dt and ≤ end_dt
+      - trapezoidal integration of power_w on the raw samples in-range
 
-      2. Otherwise trapezoidal-integrate power_w on the raw samples
-         between start_dt and end_dt. This respects sub-hour boundaries
-         exactly (whereas the samples_hourly aggregate slices only at
-         whole-hour bucket starts and would drop the partial hours at
-         each end of the range)."""
+    Take max(counter, trapezoidal) when they diverge by > 2× — some
+    plug firmwares (72V charger being the obvious offender) ship a
+    glitchy add_ele that stays stuck for hours despite a steady real
+    load. Trapezoidal catches the real consumption in those cases;
+    the counter still wins when the plug went offline mid-period
+    (no raw samples → trapezoidal 0 while counter kept ticking on
+    device side).
+    """
     capabilities = get_device_capabilities(config, device_id)
-    # Prefer whichever counter capability the device exposes — `add_ele`
-    # (per-plug counter) or `total_forward_energy` (whole-house / stove
-    # counter). Bypasses the power_type filter in _get_energy_counter_meta
-    # so that current-type plugs also use their built-in counter (matches
-    # the device's own accumulator instead of trapezoidal noise).
     counter_meta = _get_energy_counter_meta_from_capabilities(capabilities)
+    control_device = get_control_device(config, device_id)
+    is_total_type = (
+        bool(control_device)
+        and str(control_device.power_type or "total").strip().lower() == "total"
+    )
 
     hours_with_data = 0
     with _connect(config.database_url) as connection:
@@ -3650,6 +3654,7 @@ def _device_energy_kwh_for_range(
             row = cursor.fetchone()
             hours_with_data = int((row.get("n") if row else 0) or 0)
 
+    counter_kwh: float | None = None
     if counter_meta is not None:
         dp_key, scale_divisor = counter_meta
         with _connect(config.database_url) as connection:
@@ -3684,8 +3689,12 @@ def _device_energy_kwh_for_range(
                 and end_counter is not None
                 and end_counter >= start_counter
             ):
-                return end_counter - start_counter, hours_with_data
-        # Counter unusable → fall through to trapezoidal on raw samples.
+                counter_kwh = end_counter - start_counter
+
+    # For total-type meters the trapezoidal is meaningless — power_w is a
+    # counter value, not instantaneous W. Trust whatever the counter says.
+    if is_total_type:
+        return (counter_kwh or 0.0), hours_with_data
 
     # Trapezoidal integration on raw samples. Cap the per-pair dt at 15 min
     # to avoid inflating energy across long offline gaps — if samples are
@@ -3704,14 +3713,29 @@ def _device_energy_kwh_for_range(
             )
             rows = cursor.fetchall()
     if len(rows) < 2:
-        return 0.0, hours_with_data
+        return (counter_kwh or 0.0), hours_with_data
     energy_wh = 0.0
     for r1, r2 in zip(rows, rows[1:]):
         dt_s = (r2["captured_at"] - r1["captured_at"]).total_seconds()
         if 0 < dt_s <= max_gap_s:
             avg_w = (float(r1["power_w"] or 0.0) + float(r2["power_w"] or 0.0)) / 2.0
             energy_wh += avg_w * dt_s / 3600.0
-    return energy_wh / 1000.0, hours_with_data
+    trap_kwh = energy_wh / 1000.0
+
+    # Reconcile the two estimates. When the plug's own counter is stuck
+    # or under-reporting (charger add_ele is the known offender), the
+    # trapezoidal is dramatically higher; take that. When the plug went
+    # offline mid-period and trapezoidal has holes, the counter (which
+    # keeps ticking on the device side) is dramatically higher; take
+    # that. Only swap when the ratio exceeds 2× AND the winner has real
+    # non-noise magnitude (> 10 Wh).
+    if counter_kwh is None:
+        return trap_kwh, hours_with_data
+    winner = max(counter_kwh, trap_kwh)
+    loser = min(counter_kwh, trap_kwh)
+    if winner > 0.010 and (loser * 2.0 < winner):
+        return winner, hours_with_data
+    return counter_kwh, hours_with_data
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
