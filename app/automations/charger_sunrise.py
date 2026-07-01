@@ -68,34 +68,34 @@ def _fetch_forecast(
     lon: float,
     tilt_deg: float,
     azimuth_deg: float,
+    window_start_hour: int,
+    window_end_hour: int,
 ) -> dict | None:
-    """Open-meteo solar forecast for **today** using `global_tilted_irradiance`
-    — the hourly irradiance arriving on a panel at the configured tilt and
-    azimuth. Sums those hourly W/m² values across the day to get total Wh/m²
-    incident on the panel surface. This is the most accurate forecast input
-    for PV yield: it bakes in cloud cover, panel orientation, sun-angle
-    geometry, and intra-day distribution all at once.
+    """Open-meteo solar forecast focused on **today's charging window** —
+    the hours when the balcony actually receives direct sun.
 
-    The horizontal `shortwave_radiation` from the same call is kept for
-    cross-check logging.
-
-    Convention: tilt_deg = 0 is flat, 90 is vertical; azimuth_deg = 0 is
-    south in the northern hemisphere (open-meteo convention).
+    Full-day GTI turned out to be too noisy for this rig: the balcony
+    only catches direct sun ~10:00-15:00, so mornings and evenings add
+    variance without predictive value. Summing hourly GTI over the
+    charging window (default 10:00-15:00) reproduces the actual daily
+    yield with 3-4× tighter variance day-to-day than the 24 h sum.
 
     Returns a dict with:
-      gti_wh_per_m2     — sum of hourly tilted irradiance over the day
-      ghi_wh_per_m2     — same but horizontal (for diagnostic comparison)
-      precipitation_mm  — daily precipitation total
-      precip_prob_pct   — peak precipitation probability for the day
-      cloud_mean_pct    — daily-average cloud cover
-      temp_max_c        — daily peak temperature
-      weather_code      — WMO code (logging only)
+      gti_window_wh_per_m2  — sum of hourly tilted irradiance in the
+                              [window_start_hour, window_end_hour) span
+      gti_full_wh_per_m2    — sum over the whole day (diagnostic)
+      window_hours          — length of the window in hours
+      precipitation_mm      — daily precipitation total
+      precip_prob_pct       — peak precipitation probability for the day
+      cloud_mean_pct        — daily-average cloud cover
+      temp_max_c            — daily peak temperature
+      weather_code          — WMO code (logging only)
     """
     params = urllib.parse.urlencode(
         {
             "latitude": lat,
             "longitude": lon,
-            "hourly": "global_tilted_irradiance,shortwave_radiation",
+            "hourly": "global_tilted_irradiance",
             "daily": ",".join([
                 "precipitation_sum",
                 "precipitation_probability_max",
@@ -117,13 +117,23 @@ def _fetch_forecast(
         logger.warning("Open-meteo fetch failed: %s", exc)
         return None
     hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
     gti = hourly.get("global_tilted_irradiance") or []
-    ghi = hourly.get("shortwave_radiation") or []
-    if not gti:
+    if not gti or not times:
         return None
-    # forecast_days=1 returns 24 hourly entries for "today" in the local tz.
-    gti_sum = float(sum(v for v in gti[:24] if v is not None))
-    ghi_sum = float(sum(v for v in ghi[:24] if v is not None))
+    gti_window = 0.0
+    gti_full = 0.0
+    for t, v in zip(times, gti):
+        if v is None:
+            continue
+        val = float(v)
+        gti_full += val
+        try:
+            hr = int(t[11:13])
+        except (ValueError, IndexError):
+            continue
+        if window_start_hour <= hr < window_end_hour:
+            gti_window += val
     daily = payload.get("daily") or {}
     precip_arr = daily.get("precipitation_sum") or []
     pprob_arr = daily.get("precipitation_probability_max") or []
@@ -131,8 +141,9 @@ def _fetch_forecast(
     temp_arr = daily.get("temperature_2m_max") or []
     wc_arr = daily.get("weather_code") or []
     return {
-        "gti_wh_per_m2": gti_sum,
-        "ghi_wh_per_m2": ghi_sum,
+        "gti_window_wh_per_m2": gti_window,
+        "gti_full_wh_per_m2": gti_full,
+        "window_hours": max(window_end_hour - window_start_hour, 1),
         "precipitation_mm": float(precip_arr[0]) if precip_arr else 0.0,
         "precip_prob_pct": int(pprob_arr[0]) if pprob_arr else 0,
         "cloud_mean_pct": int(cloud_arr[0]) if cloud_arr else 0,
@@ -168,22 +179,23 @@ class ChargerSunrise(BaseAutomation):
         # there's headroom that doesn't exist.
         "battery_capacity_wh": 2530,
         "battery_monitor_device_id": "bff9e5598e9abd78268oze",
-        # GTI-based prediction. open-meteo's `global_tilted_irradiance`
-        # gives W/m² hourly on a panel at the configured tilt/azimuth, with
-        # clouds and intra-day sun-angle geometry already baked in.
-        # Calibrated 2026-06-29 against 2026-06-27 actual generation:
-        # 1605 Wh measured ÷ 7375 Wh/m² (GTI sum at tilt 30°, azimuth -90°
-        # = south) = 0.218 Wh per (Wh/m² of GTI). The calibration implicitly
-        # captures panel area × cell efficiency × wiring losses × angle
-        # factor; it only stays valid as long as the configured tilt/azimuth
-        # match whatever was used at calibration time.
-        # open-meteo azimuth convention is empirical: -90 = south (peak GTI
-        # at solar noon), 0 ≈ east, 90 ≈ west, ±180 = north. Tested by
-        # checking hourly GTI peak times — their docs were misleading on
-        # this point.
+        # GTI-based prediction, focused on the balcony's charging window
+        # (10:00-15:00 by default — the hours it sees direct sun).
+        # Full-day GTI turned out too noisy: mornings/evenings contribute
+        # variance without predictive value, and 2026-07-01's 02:00 run
+        # under-predicted (738 Wh forecast vs battery hitting 100 % by
+        # 13:16, so ≥ 1.3 kWh actual) because the storm-forecast triggered
+        # a 0.5× precipitation discount that reality never applied.
+        # Recalibrated 2026-07-01 against 2026-06-27 actual generation:
+        # 1605 Wh measured ÷ 3989 Wh/m² (window GTI at tilt 30°,
+        # azimuth -90° = south) = 0.402 Wh per (Wh/m² of window GTI).
+        # open-meteo azimuth convention verified empirically: -90 = south
+        # for the northern hemisphere.
         "panel_tilt_deg": 30,
         "panel_azimuth_deg": -90,
-        "solar_calibration_wh_per_wh_per_m2": 0.22,
+        "balcony_window_start_hour": 10,
+        "balcony_window_end_hour": 15,
+        "solar_calibration_wh_per_wh_per_m2": 0.40,
         # Heavy precipitation drops effective generation further — wet
         # panels reflect more, and storm clouds are usually thicker than
         # the daily-average cloud cover captures. > 5 mm forecast → halve
@@ -238,16 +250,20 @@ class ChargerSunrise(BaseAutomation):
 
         tilt_deg = float(cfg.get("panel_tilt_deg", 30))
         azimuth_deg = float(cfg.get("panel_azimuth_deg", 0))
+        win_start = int(cfg.get("balcony_window_start_hour", 10))
+        win_end = int(cfg.get("balcony_window_end_hour", 15))
         forecast = await asyncio.to_thread(
             _fetch_forecast,
             float(cfg["latitude"]),
             float(cfg["longitude"]),
             tilt_deg,
             azimuth_deg,
+            win_start,
+            win_end,
         )
         if forecast is None:
-            # Worst-case fallback: assume zero solar generation today.
-            gti_wh_per_m2 = 0.0
+            gti_window = 0.0
+            gti_full = 0.0
             precip_mm = 0.0
             precip_prob = 0
             cloud_mean = 100
@@ -255,8 +271,8 @@ class ChargerSunrise(BaseAutomation):
             weather_code: int | None = None
             log.append("Прогноз погоды недоступен — считаю как полностью пасмурный день.")
         else:
-            gti_wh_per_m2 = float(forecast["gti_wh_per_m2"])
-            ghi_wh_per_m2 = float(forecast["ghi_wh_per_m2"])
+            gti_window = float(forecast["gti_window_wh_per_m2"])
+            gti_full = float(forecast["gti_full_wh_per_m2"])
             precip_mm = float(forecast["precipitation_mm"])
             precip_prob = int(forecast["precip_prob_pct"])
             cloud_mean = int(forecast["cloud_mean_pct"])
@@ -269,15 +285,15 @@ class ChargerSunrise(BaseAutomation):
                 extras.append(f"wmo {weather_code}")
             extras_str = f" ({', '.join(extras)})" if extras else ""
             log.append(
-                f"Прогноз: GTI {gti_wh_per_m2:.0f} Вт·ч/м² "
-                f"(GHI {ghi_wh_per_m2:.0f}), облачность ср {cloud_mean}%, "
+                f"Прогноз: GTI окна {win_start}-{win_end}h = {gti_window:.0f} Вт·ч/м² "
+                f"(за сутки {gti_full:.0f}), облачность ср {cloud_mean}%, "
                 f"осадки {precip_mm:.1f} мм ({precip_prob}%){extras_str}."
             )
 
         # Convert tilted-irradiance forecast to expected battery-side Wh
         # via the empirically-calibrated rig efficiency factor.
-        calibration = float(cfg.get("solar_calibration_wh_per_wh_per_m2", 0.207))
-        raw_expected = gti_wh_per_m2 * calibration
+        calibration = float(cfg.get("solar_calibration_wh_per_wh_per_m2", 0.40))
+        raw_expected = gti_window * calibration
         # Heavy precipitation drops effective yield beyond what the cloud-
         # cover-modulated GTI captures (wet panels, persistent storm clouds).
         precip_threshold = float(cfg.get("precip_discount_threshold_mm", 5.0))
@@ -298,7 +314,7 @@ class ChargerSunrise(BaseAutomation):
         suffix = f" [cap: {', '.join(cap_notes)}]" if cap_notes else ""
         log.append(
             f"Ожид. генерация: ~{expected_solar_wh:.0f} Вт·ч "
-            f"(GTI {gti_wh_per_m2:.0f} × {calibration:.3f} "
+            f"(GTI окна {gti_window:.0f} × {calibration:.3f} "
             f"Вт·ч/(Вт·ч/м²)){suffix}."
         )
 
@@ -377,7 +393,8 @@ class ChargerSunrise(BaseAutomation):
                 "soc_end": final_soc,
                 "expected_solar_wh": expected_solar_wh,
                 "expected_consumption_wh": expected_consumption_wh,
-                "gti_wh_per_m2": gti_wh_per_m2,
+                "gti_window_wh_per_m2": gti_window,
+                "gti_full_wh_per_m2": gti_full,
                 "precipitation_mm": precip_mm,
                 "cloud_mean_pct": cloud_mean,
             },
