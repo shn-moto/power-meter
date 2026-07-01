@@ -701,11 +701,15 @@ if (meterSection) {
             const delta = Number(p.delta_kwh);
             const cls = delta > 0 ? 'is-positive' : (delta < 0 ? 'is-negative' : '');
             const sign = delta > 0 ? '+' : '';
+            const deltaPerDay = Number(p.delta_per_day_kwh || 0);
+            const dpdCls = deltaPerDay > 0 ? 'is-positive' : (deltaPerDay < 0 ? 'is-negative' : '');
+            const dpdSign = deltaPerDay > 0 ? '+' : '';
             return `<tr>
                 <td>${formatReadingAt(p.start_at)} – ${formatReadingAt(p.end_at)}</td>
                 <td>${Number(p.meter_kwh).toFixed(2)}</td>
                 <td>${Number(p.device_kwh).toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${cls}">${sign}${delta.toFixed(2)}</td>
+                <td class="meter-discrepancy-delta ${dpdCls}">${dpdSign}${deltaPerDay.toFixed(2)}</td>
             </tr>`;
         }).join('');
     };

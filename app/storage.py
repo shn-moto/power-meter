@@ -3613,20 +3613,40 @@ def _device_energy_kwh_for_range(
     start_dt: datetime,
     end_dt: datetime,
 ) -> tuple[float, int]:
-    """Sum kWh consumed by one device between start_dt (inclusive) and
-    end_dt (exclusive). Returns (kwh, hours_with_data).
+    """kWh consumed by one device between two exact timestamps.
+    Returns (kwh, hours_with_data).
 
-    For counter-type devices (`power_type='total'`) the value is the
-    counter delta between the last sample at-or-before `start_dt` and
-    the last sample at-or-before `end_dt`. Offline gaps don't drop the
-    counter, so this catches consumption even when the device wasn't
-    online to be polled. For current-type devices we still sum hourly
-    bucket energy — those buckets miss energy during offline gaps."""
+    Two strategies, tried in order:
+
+      1. If the device exposes an `add_ele` counter (most sockets do,
+         even those marked power_type='current'), read the counter value
+         at the last sample at-or-before start_dt and end_dt and return
+         the delta. This is the most accurate — captures energy across
+         offline gaps and matches what the device itself reports.
+
+      2. Otherwise trapezoidal-integrate power_w on the raw samples
+         between start_dt and end_dt. This respects sub-hour boundaries
+         exactly (whereas the samples_hourly aggregate slices only at
+         whole-hour bucket starts and would drop the partial hours at
+         each end of the range)."""
     capabilities = get_device_capabilities(config, device_id)
-    energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+    counter_meta = _get_add_ele_meta_from_capabilities(capabilities)
 
-    if energy_counter_meta is not None:
-        dp_key, scale_divisor = energy_counter_meta
+    hours_with_data = 0
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*) AS n FROM samples_hourly
+                WHERE device_id = %s AND bucket >= %s AND bucket < %s
+                """,
+                (device_id, start_dt, end_dt),
+            )
+            row = cursor.fetchone()
+            hours_with_data = int((row.get("n") if row else 0) or 0)
+
+    if counter_meta is not None:
+        dp_key, scale_divisor = counter_meta
         with _connect(config.database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -3641,53 +3661,52 @@ def _device_energy_kwh_for_range(
                 cursor.execute(
                     """
                     SELECT raw_dps FROM samples
-                    WHERE device_id = %s AND captured_at < %s
+                    WHERE device_id = %s AND captured_at <= %s
                     ORDER BY captured_at DESC LIMIT 1
                     """,
                     (device_id, end_dt),
                 )
                 end_row = cursor.fetchone()
-                # Coverage in hours: how many of the period's hours actually
-                # had a sample reach the DB?
-                cursor.execute(
-                    """
-                    SELECT count(*) AS n FROM samples_hourly
-                    WHERE device_id = %s AND bucket >= %s AND bucket < %s
-                    """,
-                    (device_id, start_dt, end_dt),
-                )
-                row = cursor.fetchone()
-                hours_with_data = int((row.get("n") if row else 0) or 0)
-        if not start_row or not end_row:
-            return 0.0, hours_with_data
-        start_counter = _read_energy_counter_kwh(
-            _normalize_json_field(start_row["raw_dps"]), dp_key, scale_divisor
-        )
-        end_counter = _read_energy_counter_kwh(
-            _normalize_json_field(end_row["raw_dps"]), dp_key, scale_divisor
-        )
-        if start_counter is None or end_counter is None:
-            return 0.0, hours_with_data
-        return max(end_counter - start_counter, 0.0), hours_with_data
+        if start_row and end_row:
+            start_counter = _read_energy_counter_kwh(
+                _normalize_json_field(start_row["raw_dps"]), dp_key, scale_divisor
+            )
+            end_counter = _read_energy_counter_kwh(
+                _normalize_json_field(end_row["raw_dps"]), dp_key, scale_divisor
+            )
+            if (
+                start_counter is not None
+                and end_counter is not None
+                and end_counter >= start_counter
+            ):
+                return end_counter - start_counter, hours_with_data
+        # Counter unusable → fall through to trapezoidal on raw samples.
 
+    # Trapezoidal integration on raw samples. Cap the per-pair dt at 15 min
+    # to avoid inflating energy across long offline gaps — if samples are
+    # farther apart, we don't know what happened between them.
+    max_gap_s = 15 * 60
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT bucket, avg_power_w, peak_power_w, sample_count, energy_wh,
-                       last_power_w, first_raw_dps, last_raw_dps,
-                       first_captured_at, last_captured_at
-                FROM samples_hourly
-                WHERE device_id = %s AND bucket >= %s AND bucket < %s
-                ORDER BY bucket ASC
+                SELECT captured_at, power_w
+                FROM samples
+                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                ORDER BY captured_at ASC
                 """,
                 (device_id, start_dt, end_dt),
             )
             rows = cursor.fetchall()
-    if not rows:
-        return 0.0, 0
-    kwh = _aggregate_energy_wh(rows, "hour", energy_counter_meta) / 1000.0
-    return kwh, len(rows)
+    if len(rows) < 2:
+        return 0.0, hours_with_data
+    energy_wh = 0.0
+    for r1, r2 in zip(rows, rows[1:]):
+        dt_s = (r2["captured_at"] - r1["captured_at"]).total_seconds()
+        if 0 < dt_s <= max_gap_s:
+            avg_w = (float(r1["power_w"] or 0.0) + float(r2["power_w"] or 0.0)) / 2.0
+            energy_wh += avg_w * dt_s / 3600.0
+    return energy_wh / 1000.0, hours_with_data
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
@@ -3749,13 +3768,18 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
         device_total = round(device_total, 3)
 
         local_tz = _get_timezone(config)
+        delta_kwh = round(meter_total - device_total, 3)
+        period_days = max((end_dt - start_dt).total_seconds() / 86400.0, 1e-6)
+        delta_per_day_kwh = round(delta_kwh / period_days, 3)
         periods.append(
             {
                 "start_at": start_dt.astimezone(local_tz).isoformat(),
                 "end_at": end_dt.astimezone(local_tz).isoformat(),
                 "meter_kwh": meter_total,
                 "device_kwh": device_total,
-                "delta_kwh": round(meter_total - device_total, 3),
+                "delta_kwh": delta_kwh,
+                "delta_per_day_kwh": delta_per_day_kwh,
+                "period_days": round(period_days, 2),
                 "coverage_pct": coverage_pct,
             }
         )
