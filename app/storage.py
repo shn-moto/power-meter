@@ -3786,20 +3786,32 @@ def _device_energy_kwh_for_range(
         except Exception:
             verified_kwh_by_day = {}
 
-        cursor_day = first_full_day_start
-        while cursor_day < last_full_day_end:
-            next_day = cursor_day + timedelta(days=1)
-            verified = verified_kwh_by_day.get(cursor_day.date())
-            if verified is not None:
-                total_kwh += verified
-            else:
-                total_kwh += _local_fragment_kwh(
-                    config, device_id,
-                    cursor_day.astimezone(timezone.utc),
-                    next_day.astimezone(timezone.utc),
-                    capabilities, counter_meta, is_total_type,
-                )
-            cursor_day = next_day
+        if not verified_kwh_by_day:
+            # No cloud verification available for any whole day in this
+            # range — do one fragment call for the entire whole-days
+            # span instead of N per-day calls. Huge win for pre-retention
+            # periods (most of history for older meter reads).
+            total_kwh += _local_fragment_kwh(
+                config, device_id,
+                first_full_day_start.astimezone(timezone.utc),
+                last_full_day_end.astimezone(timezone.utc),
+                capabilities, counter_meta, is_total_type,
+            )
+        else:
+            cursor_day = first_full_day_start
+            while cursor_day < last_full_day_end:
+                next_day = cursor_day + timedelta(days=1)
+                verified = verified_kwh_by_day.get(cursor_day.date())
+                if verified is not None:
+                    total_kwh += verified
+                else:
+                    total_kwh += _local_fragment_kwh(
+                        config, device_id,
+                        cursor_day.astimezone(timezone.utc),
+                        next_day.astimezone(timezone.utc),
+                        capabilities, counter_meta, is_total_type,
+                    )
+                cursor_day = next_day
 
     # Partial end fragment: [last_full_day_end, end_dt).
     if last_full_day_end < end_local:

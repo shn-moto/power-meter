@@ -1599,7 +1599,7 @@ def _build_dashboard_page_payload(request: Request, config: AppConfig) -> dict[s
         config,
         _decorate_devices_media(payload.get("sensor_devices", [])),
     )
-    payload["meter"] = _build_meter_overview(config)
+    payload["meter"] = _meter_overview_cached(request)
     return payload
 
 
@@ -2049,7 +2049,7 @@ def dashboard(request: Request) -> HTMLResponse:
         config,
         _decorate_devices_media(summary.get("sensor_devices", [])),
     )
-    summary["meter"] = _build_meter_overview(config)
+    summary["meter"] = _meter_overview_cached(request)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -2421,10 +2421,22 @@ def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
     }
 
 
+def _meter_overview_cached(request: Request) -> dict[str, Any]:
+    """Cache the meter overview payload for 5 min. The discrepancy periods
+    fan out per-device / per-day (hundreds of small queries for a
+    multi-week range) and are stable between manual meter-reading
+    submissions — no need to recompute on every dashboard tick."""
+    key = _get_aggregate_cache_key("meter-overview")
+    cached = _get_cached_aggregate_payload(request, key)
+    if cached is not None:
+        return cached
+    payload = _build_meter_overview(request.app.state.app_config)
+    return _set_cached_aggregate_payload(request, key, payload)
+
+
 @app.get("/api/meter-readings")
 def meter_readings_api(request: Request) -> JSONResponse:
-    config: AppConfig = request.app.state.app_config
-    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
+    return JSONResponse(jsonable_encoder(_meter_overview_cached(request)))
 
 
 @app.post("/api/meter-readings")
@@ -2447,6 +2459,9 @@ def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> 
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    # New reading changes the discrepancy periods — drop the cached
+    # overview so the next fetch recomputes.
+    _invalidate_aggregate_cache(request)
     return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
 
 
@@ -2454,6 +2469,7 @@ def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> 
 def delete_meter_reading_api(request: Request, reading_id: int) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     delete_meter_reading(config, reading_id=reading_id)
+    _invalidate_aggregate_cache(request)
     return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
 
 
