@@ -3664,30 +3664,49 @@ def _local_fragment_kwh(
     if is_total_type:
         return counter_kwh or 0.0
 
-    # Trapezoidal on raw samples with 15-min gap cap to avoid integrating
-    # over long offline periods.
-    max_gap_s = 15 * 60
-    with _connect(config.database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT captured_at, power_w
-                FROM samples
-                WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
-                ORDER BY captured_at ASC
-                """,
-                (device_id, start_dt, end_dt),
-            )
-            rows = cursor.fetchall()
-    if len(rows) < 2:
-        return counter_kwh or 0.0
-    energy_wh = 0.0
-    for r1, r2 in zip(rows, rows[1:]):
-        dt_s = (r2["captured_at"] - r1["captured_at"]).total_seconds()
-        if 0 < dt_s <= max_gap_s:
-            avg_w = (float(r1["power_w"] or 0.0) + float(r2["power_w"] or 0.0)) / 2.0
-            energy_wh += avg_w * dt_s / 3600.0
-    trap_kwh = energy_wh / 1000.0
+    # Trapezoidal estimate. For fragments longer than 4 hours use the
+    # samples_hourly continuous aggregate (energy_wh is already integrated
+    # per bucket, thousands× faster than pulling raw samples for a
+    # multi-day range). For shorter fragments (typical edge fragments at
+    # meter-reading boundaries) fall back to raw-sample trapezoidal so
+    # sub-hour precision at the boundary isn't lost.
+    fragment_hours = (end_dt - start_dt).total_seconds() / 3600.0
+    trap_kwh = 0.0
+    if fragment_hours >= 4.0:
+        with _connect(config.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COALESCE(SUM(energy_wh), 0) AS total_wh
+                    FROM samples_hourly
+                    WHERE device_id = %s AND bucket >= %s AND bucket < %s
+                    """,
+                    (device_id, start_dt, end_dt),
+                )
+                row = cursor.fetchone()
+                trap_kwh = float((row.get("total_wh") if row else 0.0) or 0.0) / 1000.0
+    else:
+        max_gap_s = 15 * 60
+        with _connect(config.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT captured_at, power_w
+                    FROM samples
+                    WHERE device_id = %s AND captured_at >= %s AND captured_at <= %s
+                    ORDER BY captured_at ASC
+                    """,
+                    (device_id, start_dt, end_dt),
+                )
+                rows = cursor.fetchall()
+        if len(rows) >= 2:
+            energy_wh = 0.0
+            for r1, r2 in zip(rows, rows[1:]):
+                dt_s = (r2["captured_at"] - r1["captured_at"]).total_seconds()
+                if 0 < dt_s <= max_gap_s:
+                    avg_w = (float(r1["power_w"] or 0.0) + float(r2["power_w"] or 0.0)) / 2.0
+                    energy_wh += avg_w * dt_s / 3600.0
+            trap_kwh = energy_wh / 1000.0
 
     if counter_kwh is None:
         return trap_kwh
