@@ -14,6 +14,7 @@ from app.automations.base import (
 )
 from app.automations import charger_sunrise  # noqa: F401 — register on import
 from app.automations import battery_emergency_charge  # noqa: F401
+from app.automations import energy_verifier  # noqa: F401
 
 __all__ = [
     "AutomationContext",

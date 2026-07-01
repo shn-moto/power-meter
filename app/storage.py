@@ -3607,52 +3607,20 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
     }
 
 
-def _device_energy_kwh_for_range(
+def _local_fragment_kwh(
     config: AppConfig,
     device_id: str,
     start_dt: datetime,
     end_dt: datetime,
-) -> tuple[float, int]:
-    """kWh consumed by one device between two exact timestamps.
-    Returns (kwh, hours_with_data).
-
-    For power_type='total' devices (stove, main breaker) the counter is
-    the only meaningful signal — power_w in the samples table stores the
-    counter value itself, not power, so trapezoidal integration would
-    return garbage. Just take the delta.
-
-    For power_type='current' devices we cross-check:
-      - counter delta between the last sample ≤ start_dt and ≤ end_dt
-      - trapezoidal integration of power_w on the raw samples in-range
-
-    Take max(counter, trapezoidal) when they diverge by > 2× — some
-    plug firmwares (72V charger being the obvious offender) ship a
-    glitchy add_ele that stays stuck for hours despite a steady real
-    load. Trapezoidal catches the real consumption in those cases;
-    the counter still wins when the plug went offline mid-period
-    (no raw samples → trapezoidal 0 while counter kept ticking on
-    device side).
-    """
-    capabilities = get_device_capabilities(config, device_id)
-    counter_meta = _get_energy_counter_meta_from_capabilities(capabilities)
-    control_device = get_control_device(config, device_id)
-    is_total_type = (
-        bool(control_device)
-        and str(control_device.power_type or "total").strip().lower() == "total"
-    )
-
-    hours_with_data = 0
-    with _connect(config.database_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT count(*) AS n FROM samples_hourly
-                WHERE device_id = %s AND bucket >= %s AND bucket < %s
-                """,
-                (device_id, start_dt, end_dt),
-            )
-            row = cursor.fetchone()
-            hours_with_data = int((row.get("n") if row else 0) or 0)
+    capabilities: list[dict[str, Any]],
+    counter_meta: tuple[str, float] | None,
+    is_total_type: bool,
+) -> float:
+    """kWh estimate for an arbitrary [start, end] fragment using local
+    samples only. Counter delta preferred, trapezoidal fallback, take
+    max() when they diverge > 2× (glitchy counter or offline plug)."""
+    if start_dt >= end_dt:
+        return 0.0
 
     counter_kwh: float | None = None
     if counter_meta is not None:
@@ -3691,14 +3659,13 @@ def _device_energy_kwh_for_range(
             ):
                 counter_kwh = end_counter - start_counter
 
-    # For total-type meters the trapezoidal is meaningless — power_w is a
-    # counter value, not instantaneous W. Trust whatever the counter says.
+    # total-type: only counter is meaningful — power_w column stores the
+    # counter reading, not instantaneous power.
     if is_total_type:
-        return (counter_kwh or 0.0), hours_with_data
+        return counter_kwh or 0.0
 
-    # Trapezoidal integration on raw samples. Cap the per-pair dt at 15 min
-    # to avoid inflating energy across long offline gaps — if samples are
-    # farther apart, we don't know what happened between them.
+    # Trapezoidal on raw samples with 15-min gap cap to avoid integrating
+    # over long offline periods.
     max_gap_s = 15 * 60
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -3713,7 +3680,7 @@ def _device_energy_kwh_for_range(
             )
             rows = cursor.fetchall()
     if len(rows) < 2:
-        return (counter_kwh or 0.0), hours_with_data
+        return counter_kwh or 0.0
     energy_wh = 0.0
     for r1, r2 in zip(rows, rows[1:]):
         dt_s = (r2["captured_at"] - r1["captured_at"]).total_seconds()
@@ -3722,20 +3689,128 @@ def _device_energy_kwh_for_range(
             energy_wh += avg_w * dt_s / 3600.0
     trap_kwh = energy_wh / 1000.0
 
-    # Reconcile the two estimates. When the plug's own counter is stuck
-    # or under-reporting (charger add_ele is the known offender), the
-    # trapezoidal is dramatically higher; take that. When the plug went
-    # offline mid-period and trapezoidal has holes, the counter (which
-    # keeps ticking on the device side) is dramatically higher; take
-    # that. Only swap when the ratio exceeds 2× AND the winner has real
-    # non-noise magnitude (> 10 Wh).
     if counter_kwh is None:
-        return trap_kwh, hours_with_data
+        return trap_kwh
     winner = max(counter_kwh, trap_kwh)
     loser = min(counter_kwh, trap_kwh)
     if winner > 0.010 and (loser * 2.0 < winner):
-        return winner, hours_with_data
-    return counter_kwh, hours_with_data
+        return winner
+    return counter_kwh
+
+
+def _device_energy_kwh_for_range(
+    config: AppConfig,
+    device_id: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> tuple[float, int]:
+    """kWh consumed by one device between two exact timestamps.
+    Returns (kwh, hours_with_data).
+
+    Strategy: split the [start_dt, end_dt] range into three pieces on
+    local-day boundaries — a partial start-of-day, zero or more whole
+    local days, and a partial end-of-day. Each whole day is served
+    from Tuya Cloud verified totals (device_energy_daily.kwh_cloud)
+    when available — that's ground truth even across Wi-Fi outages,
+    since the plug buffers its add_ele counter and pushes it on the
+    next reconnect. Days without a verified row and both partial
+    fragments fall back to the local counter+trapezoidal heuristic.
+    """
+    tz = ZoneInfo(config.timezone) if config.timezone else ZoneInfo("Europe/Warsaw")
+
+    capabilities = get_device_capabilities(config, device_id)
+    counter_meta = _get_energy_counter_meta_from_capabilities(capabilities)
+    control_device = get_control_device(config, device_id)
+    is_total_type = (
+        bool(control_device)
+        and str(control_device.power_type or "total").strip().lower() == "total"
+    )
+
+    # Coverage in hours — unchanged behaviour, based on samples_hourly
+    # bucket presence over the (whole-hour-rounded) range.
+    hours_with_data = 0
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*) AS n FROM samples_hourly
+                WHERE device_id = %s AND bucket >= %s AND bucket < %s
+                """,
+                (device_id, start_dt, end_dt),
+            )
+            row = cursor.fetchone()
+            hours_with_data = int((row.get("n") if row else 0) or 0)
+
+    # Split into fragments on local-day boundaries.
+    start_local = start_dt.astimezone(tz)
+    end_local = end_dt.astimezone(tz)
+
+    # First full day (inclusive start-of-day) that fits fully inside range.
+    if start_local.time() == datetime.min.time():
+        first_full_day_start = start_local
+    else:
+        next_day = (start_local + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        first_full_day_start = next_day
+
+    # Last full day (exclusive end-of-day = start of the next).
+    if end_local.time() == datetime.min.time():
+        last_full_day_end = end_local
+    else:
+        last_full_day_end = end_local.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    total_kwh = 0.0
+
+    # Partial start fragment: [start_dt, first_full_day_start).
+    if first_full_day_start > start_local:
+        total_kwh += _local_fragment_kwh(
+            config, device_id, start_dt,
+            first_full_day_start.astimezone(timezone.utc),
+            capabilities, counter_meta, is_total_type,
+        )
+
+    # Whole days between first_full_day_start (inclusive) and
+    # last_full_day_end (exclusive).
+    if first_full_day_start < last_full_day_end:
+        from app.cloud_verification import get_verified_daily_kwh
+        verified_kwh_by_day: dict = {}
+        try:
+            verified_kwh_by_day = get_verified_daily_kwh(
+                config, device_id,
+                first_full_day_start.date(),
+                (last_full_day_end - timedelta(days=1)).date(),
+            )
+        except Exception:
+            verified_kwh_by_day = {}
+
+        cursor_day = first_full_day_start
+        while cursor_day < last_full_day_end:
+            next_day = cursor_day + timedelta(days=1)
+            verified = verified_kwh_by_day.get(cursor_day.date())
+            if verified is not None:
+                total_kwh += verified
+            else:
+                total_kwh += _local_fragment_kwh(
+                    config, device_id,
+                    cursor_day.astimezone(timezone.utc),
+                    next_day.astimezone(timezone.utc),
+                    capabilities, counter_meta, is_total_type,
+                )
+            cursor_day = next_day
+
+    # Partial end fragment: [last_full_day_end, end_dt).
+    if last_full_day_end < end_local:
+        total_kwh += _local_fragment_kwh(
+            config, device_id,
+            last_full_day_end.astimezone(timezone.utc),
+            end_dt,
+            capabilities, counter_meta, is_total_type,
+        )
+
+    return total_kwh, hours_with_data
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
