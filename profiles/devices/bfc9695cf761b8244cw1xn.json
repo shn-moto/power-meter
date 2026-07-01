@@ -24,9 +24,9 @@
     "default_power_mode": "current",
     "default_power_dps_key": "5",
     "default_visualized_codes": [
-      "cur_current",
-      "cur_power",
-      "cur_voltage"
+      "4",
+      "5",
+      "6"
     ]
   },
   "dps": [
@@ -107,7 +107,7 @@
       "source_group": "status",
       "value_type": "value",
       "unit": "W",
-      "scale_digits": 0,
+      "scale_digits": 1,
       "step": 1,
       "min": 0,
       "max": 50000,
