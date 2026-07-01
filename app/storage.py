@@ -3630,7 +3630,12 @@ def _device_energy_kwh_for_range(
          whole-hour bucket starts and would drop the partial hours at
          each end of the range)."""
     capabilities = get_device_capabilities(config, device_id)
-    counter_meta = _get_add_ele_meta_from_capabilities(capabilities)
+    # Prefer whichever counter capability the device exposes — `add_ele`
+    # (per-plug counter) or `total_forward_energy` (whole-house / stove
+    # counter). Bypasses the power_type filter in _get_energy_counter_meta
+    # so that current-type plugs also use their built-in counter (matches
+    # the device's own accumulator instead of trapezoidal noise).
+    counter_meta = _get_energy_counter_meta_from_capabilities(capabilities)
 
     hours_with_data = 0
     with _connect(config.database_url) as connection:
@@ -3732,7 +3737,10 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
             reading_rows = list(cursor.fetchall())
             cursor.execute(
                 """
-                SELECT device_id FROM devices WHERE is_energy_meter
+                SELECT device_id FROM devices
+                WHERE is_energy_meter
+                  AND NOT COALESCE(is_generator, false)
+                  AND NOT COALESCE(disabled, false)
                 """
             )
             energy_device_ids = [str(r["device_id"]) for r in cursor.fetchall()]
