@@ -241,19 +241,34 @@ def verify_device_energy_daily(
 
     per_day = _sum_by_local_day(events, scale_divisor, tz)
 
-    # Also insert a zero row for days in the window with no events — the
-    # cloud says "0 kWh this day" and that's a real, verified fact.
+    # Determine the earliest day for which the cloud actually has data —
+    # anything earlier is outside Tuya's retention window (~7 days on the
+    # free tier) and must NOT be marked as "verified 0" (would be wrong:
+    # the plug DID consume energy those days, we just don't have cloud
+    # evidence). Days at/after this cutoff with no events legitimately
+    # are 0-kWh days (plug idle enough that even heartbeat events
+    # skipped, e.g. plug fully off).
+    earliest_cloud_day: date | None = None
+    if events:
+        earliest_ts_ms = min(int(ev["event_time"]) for ev in events
+                             if ev.get("event_time") is not None)
+        earliest_cloud_day = (
+            datetime.fromtimestamp(earliest_ts_ms / 1000.0, tz=timezone.utc)
+            .astimezone(tz).date()
+        )
+
     from app.storage import _connect
     with _connect(config.database_url) as conn:
         d = start_day
         while d < end_day_exclusive:
-            # Skip today if it's not yet finished — the day-total will
-            # keep growing. Still verify all past days.
+            # Skip today if it's not yet finished.
             if d == today and now_local.hour < 12:
                 d += timedelta(days=1)
                 continue
-            kwh = per_day.get(d, 0.0)
-            _upsert_daily_row(conn, device_id, d, kwh, "cloud")
+            # Only mark as verified from the first day cloud has evidence.
+            if earliest_cloud_day is not None and d >= earliest_cloud_day:
+                kwh = per_day.get(d, 0.0)
+                _upsert_daily_row(conn, device_id, d, kwh, "cloud")
             d += timedelta(days=1)
         conn.commit()
 
