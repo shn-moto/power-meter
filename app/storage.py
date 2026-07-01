@@ -3856,6 +3856,7 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
     if len(common_timestamps) < 2:
         return []
 
+    local_tz = _get_timezone(config)
     periods: list[dict[str, Any]] = []
     for start_dt, end_dt in zip(common_timestamps, common_timestamps[1:]):
         meter_total = 0.0
@@ -3874,7 +3875,58 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
         coverage_pct = round(coverage_hours * 100.0 / period_hours, 1) if period_hours else 0.0
         device_total = round(device_total, 3)
 
-        local_tz = _get_timezone(config)
+        # Cloud-verified whole-day coverage across the range.
+        # Only count whole local days that lie fully inside [start_dt, end_dt],
+        # and only devices that actually have an add_ele capability.
+        start_local = start_dt.astimezone(local_tz)
+        end_local = end_dt.astimezone(local_tz)
+        first_full_day = (
+            (start_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            if start_local.time() != datetime.min.time() else start_local
+        )
+        last_full_day_end = end_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        whole_days_in_range = max(
+            int((last_full_day_end - first_full_day).total_seconds() / 86400.0), 0
+        )
+        verified_device_days = 0
+        cloud_capable_devices = 0
+        if whole_days_in_range > 0:
+            with _connect(config.database_url) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT d.device_id
+                          FROM devices d
+                          JOIN device_capabilities dc USING (device_id)
+                         WHERE d.is_energy_meter
+                           AND NOT COALESCE(d.is_generator, false)
+                           AND NOT COALESCE(d.disabled, false)
+                           AND dc.capability_code = 'add_ele'
+                        """
+                    )
+                    cloud_ids = [str(r["device_id"]) for r in cursor.fetchall()]
+            cloud_capable_devices = len(cloud_ids)
+            if cloud_ids:
+                with _connect(config.database_url) as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT COUNT(*) AS n FROM device_energy_daily
+                             WHERE source = 'cloud'
+                               AND device_id = ANY(%s)
+                               AND day_local >= %s
+                               AND day_local < %s
+                            """,
+                            (cloud_ids, first_full_day.date(), last_full_day_end.date()),
+                        )
+                        row = cursor.fetchone()
+                        verified_device_days = int((row.get("n") if row else 0) or 0)
+        total_possible_device_days = cloud_capable_devices * whole_days_in_range
+        verified_pct = (
+            round(100.0 * verified_device_days / total_possible_device_days, 1)
+            if total_possible_device_days > 0 else 0.0
+        )
+
         delta_kwh = round(meter_total - device_total, 3)
         period_days = max((end_dt - start_dt).total_seconds() / 86400.0, 1e-6)
         delta_per_day_kwh = round(delta_kwh / period_days, 3)
@@ -3888,6 +3940,9 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 "delta_per_day_kwh": delta_per_day_kwh,
                 "period_days": round(period_days, 2),
                 "coverage_pct": coverage_pct,
+                "verified_pct": verified_pct,
+                "verified_device_days": verified_device_days,
+                "total_possible_device_days": total_possible_device_days,
             }
         )
     return periods

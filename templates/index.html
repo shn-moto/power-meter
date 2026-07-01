@@ -170,6 +170,7 @@
                         <th>Устройства</th>
                         <th>Δ</th>
                         <th>Δ/день</th>
+                        <th>Верификация</th>
                     </tr>
                 </thead>
                 <tbody data-meter-discrepancy-body>
@@ -180,6 +181,7 @@
                         <td>{{ '%.2f'|format(period.device_kwh) }}</td>
                         <td class="meter-discrepancy-delta {% if period.delta_kwh > 0 %}is-positive{% elif period.delta_kwh < 0 %}is-negative{% endif %}">{{ '%+.2f'|format(period.delta_kwh) }}</td>
                         <td class="meter-discrepancy-delta {% if period.delta_per_day_kwh > 0 %}is-positive{% elif period.delta_per_day_kwh < 0 %}is-negative{% endif %}">{{ '%+.2f'|format(period.delta_per_day_kwh) }}</td>
+                        <td class="meter-discrepancy-verified {% if period.verified_pct >= 80 %}is-high{% elif period.verified_pct >= 30 %}is-mid{% else %}is-low{% endif %}" title="{{ period.verified_device_days }} / {{ period.total_possible_device_days }} день·устройств из облака">{{ '%.0f'|format(period.verified_pct) }}%</td>
                     </tr>
                     {% endfor %}
                 </tbody>
