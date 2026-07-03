@@ -121,6 +121,22 @@ async def scheduler_loop(app: FastAPI) -> None:
                 if next_at.tzinfo is None:
                     next_at = next_at.replace(tzinfo=tz)
                 if next_at <= now:
+                    # If the scheduled fire time is more than an hour in
+                    # the past, we're seeing a catch-up window that
+                    # opened while the app was down. Firing charger-
+                    # sunrise at 12:00 because 02:00 was missed is worse
+                    # than skipping — the user is now on daytime solar
+                    # instead of night grid. Just roll next_run_at
+                    # forward to the following scheduled slot.
+                    if (now - next_at) > timedelta(hours=1):
+                        logger.info(
+                            "Skipping catch-up run of %s (scheduled at %s, now %s)",
+                            slug, next_at.isoformat(), now.isoformat(),
+                        )
+                        update_automation_next_run(
+                            config, slug, _next_fire_time(row["cron_schedule"], now)
+                        )
+                        continue
                     running.add(slug)
 
                     async def _run_and_release(s=slug):
