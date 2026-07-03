@@ -2132,7 +2132,11 @@ def monthly_report(
     current_consumed = _sum(daily, "consumed_kwh")
     current_generated = _sum(daily, "generated_kwh")
     current_solar = _sum(daily, "solar_kwh")
-    current_net = round(current_consumed - current_generated, 3)
+    # "Net" = what actually came from the grid = total consumption offset
+    # by solar. Consistent across both eras: pre-inverter the BDM shows
+    # discharge inside solar_kwh (via generated_kwh in period_breakdown),
+    # post-inverter the inverter formula puts it in solar_kwh directly.
+    current_net = round(max(0.0, current_consumed - current_solar), 3)
 
     prev_daily = get_period_breakdown(config, prev_month_start, prev_month_end, "day")
     prev_solar_by_key = get_hybrid_solar_kwh_by_bucket(config, prev_month_start, prev_month_end, "day")
@@ -2140,7 +2144,7 @@ def monthly_report(
     prev_consumed = _sum(prev_daily, "consumed_kwh")
     prev_generated = _sum(prev_daily, "generated_kwh")
     prev_solar = _sum(prev_daily, "solar_kwh")
-    prev_net = round(prev_consumed - prev_generated, 3)
+    prev_net = round(max(0.0, prev_consumed - prev_solar), 3)
 
     delta_vs_prev = round(current_net - prev_net, 3)
     delta_vs_prepaid = round(current_net - METER_PREPAID_KWH, 3)

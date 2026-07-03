@@ -29,42 +29,45 @@
 
     <div class="report-grid">
         <article class="stat-card lcd-panel">
-            <span class="stat-label">Текущий месяц, нетто</span>
-            <strong class="stat-value">{{ '%.1f'|format(report.current.net_kwh) }} кВт·ч</strong>
-            <span class="stat-sub">расход {{ '%.1f'|format(report.current.consumed_kwh) }} − генерация {{ '%.1f'|format(report.current.generated_kwh) }}</span>
-            <span class="stat-sub">≈ {{ '%.2f'|format(report.current.cost) }} zł</span>
+            <span class="stat-label">К оплате{% if report.is_current_month %} (пока){% endif %}</span>
+            <strong class="stat-value">{{ '%.2f'|format(report.current.cost) }} zł</strong>
+            <span class="stat-sub">{{ '%.1f'|format(report.current.net_kwh) }} кВт·ч из сети</span>
+            <span class="stat-sub">расход {{ '%.1f'|format(report.current.consumed_kwh) }} − солнце {{ '%.1f'|format(report.current.solar_kwh) }}</span>
         </article>
 
         <article class="stat-card lcd-panel">
-            <span class="stat-label">Солнце за месяц</span>
-            <strong class="stat-value">{{ '%.1f'|format(report.current.solar_kwh) }} кВт·ч</strong>
+            <span class="stat-label">Сэкономлено солнцем</span>
+            <strong class="stat-value">{{ '%.2f'|format(report.current.saved_cost) }} zł</strong>
+            <span class="stat-sub">{{ '%.1f'|format(report.current.solar_kwh) }} кВт·ч солнца</span>
             <span class="stat-sub">покрытие {{ '%.1f'|format(report.current.solar_share_pct) }}%, пик {{ report.current.peak_w|round(0)|int }} Вт</span>
-            <span class="stat-sub">сэкономлено ≈ {{ '%.2f'|format(report.current.saved_cost) }} zł</span>
         </article>
 
         <article class="stat-card lcd-panel">
             <span class="stat-label">Прошлый месяц ({{ report.previous_label }})</span>
-            <strong class="stat-value">{{ '%.1f'|format(report.previous.net_kwh) }} кВт·ч</strong>
-            <span class="stat-sub {% if report.delta_prev.kwh > 0 %}is-negative{% elif report.delta_prev.kwh < 0 %}is-positive{% endif %}">
-                Δ {{ '%+.1f'|format(report.delta_prev.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_prev.cost) }} zł)
-            </span>
+            <strong class="stat-value">{{ '%.2f'|format(report.previous.cost) }} zł</strong>
+            <span class="stat-sub">{{ '%.1f'|format(report.previous.net_kwh) }} кВт·ч из сети</span>
+            <span class="stat-sub">сэкономлено {{ '%.2f'|format(report.previous.saved_cost) }} zł</span>
         </article>
 
         <article class="stat-card lcd-panel">
             <span class="stat-label">Предоплачено</span>
             <strong class="stat-value">{{ '%.0f'|format(report.prepaid.kwh) }} кВт·ч</strong>
             <span class="stat-sub">≈ {{ '%.2f'|format(report.prepaid.cost) }} zł</span>
+            {% if not report.is_current_month %}
             <span class="stat-sub {% if report.delta_prepaid.kwh > 0 %}is-negative{% elif report.delta_prepaid.kwh < 0 %}is-positive{% endif %}">
                 Δ {{ '%+.1f'|format(report.delta_prepaid.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_prepaid.cost) }} zł)
             </span>
+            {% endif %}
         </article>
 
         <article class="stat-card lcd-panel">
             <span class="stat-label">Среднее за {{ report.average.months_in_window or 0 }} мес</span>
             <strong class="stat-value">{{ '%.1f'|format(report.average.kwh) }} кВт·ч</strong>
+            {% if not report.is_current_month %}
             <span class="stat-sub {% if report.delta_avg.kwh > 0 %}is-negative{% elif report.delta_avg.kwh < 0 %}is-positive{% endif %}">
                 Δ {{ '%+.1f'|format(report.delta_avg.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_avg.cost) }} zł)
             </span>
+            {% endif %}
         </article>
 
         <article class="stat-card lcd-panel">
