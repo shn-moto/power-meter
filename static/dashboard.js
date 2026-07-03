@@ -269,6 +269,9 @@ if (dashboardPage) {
                 </div>
                 <div class="generator-card-meta">
                     <div class="generator-current-power" data-device-current-power>${fmtWatts(device.current_power_kw)} Вт</div>
+                    ${(device.peak_power_w_today !== undefined && device.peak_power_w_today !== null)
+                        ? `<div class="generator-peak-today" data-device-peak-today>пик ${Math.round(Number(device.peak_power_w_today) || 0)} Вт</div>`
+                        : ''}
                     <div class="generator-month-energy" data-device-day-energy>${fmtWh(device.day_energy_kwh)} Вт·ч / день</div>
                     <div class="reading-status is-${escapeHtml(device.last_seen_status || 'error')}" data-device-last-seen title="${escapeHtml(device.last_seen || 'Пока нет данных')}">${escapeHtml(device.last_seen || 'Пока нет данных')}</div>
                 </div>
@@ -480,6 +483,10 @@ if (dashboardPage) {
             if (nameEl) nameEl.textContent = device.name || '';
             const cp = card.querySelector('[data-device-current-power]');
             if (cp) cp.textContent = `${fmtWatts(device.current_power_kw)} Вт`;
+            const peak = card.querySelector('[data-device-peak-today]');
+            if (peak && device.peak_power_w_today !== undefined && device.peak_power_w_today !== null) {
+                peak.textContent = `пик ${Math.round(Number(device.peak_power_w_today) || 0)} Вт`;
+            }
             const de = card.querySelector('[data-device-day-energy]');
             if (de) de.textContent = `${fmtWh(device.day_energy_kwh)} Вт·ч / день`;
             const ls = card.querySelector('[data-device-last-seen]');

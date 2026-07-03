@@ -1445,7 +1445,15 @@ def get_sensor_history(
     span_seconds = max(int((end - start).total_seconds()), 1)
     # Round bucket to a sensible interval. <5s gives 0 in older Timescale,
     # and very small buckets blow up the result set.
-    bucket_seconds = max(span_seconds // max_points, 5)
+    # Day-scale views get bumped to 30 s buckets so brief solar peaks
+    # (e.g. 30-second cloud-gap +100 W spikes) don't average away —
+    # matches the dashboard's small-card trace resolution. Larger ranges
+    # keep the max_points cap since 30 s over a week = 20k points is too
+    # much for both DB and chart.
+    if span_seconds <= 30 * 3600:
+        bucket_seconds = max(span_seconds // 2880, 5)
+    else:
+        bucket_seconds = max(span_seconds // max_points, 5)
 
     # dp_id is sourced from the device profile / DB, not user input — safe
     # to interpolate. Boolean / numeric / string mix gets coerced inside the
@@ -2715,6 +2723,54 @@ def get_inverter_energy_breakdown(
     }
 
 
+def get_inverter_solar_peak_w_since(
+    config: AppConfig,
+    since: datetime,
+    bucket_seconds: int = 30,
+) -> float:
+    """Highest solar_w over 30-second buckets from `since` up to now — the
+    max of the same computed-solar formula the dashboard trace uses. Same
+    SQL shape as get_inverter_solar_trace, just returns the max of the
+    per-bucket clamped values."""
+    sql = f"""
+    WITH inv AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s
+      GROUP BY bucket
+    ),
+    atorch AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s AND raw_dps ? '19'
+      GROUP BY bucket
+    ),
+    charger AS (
+      SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
+             AVG(power_w) AS power_w
+      FROM samples
+      WHERE device_id = %s AND captured_at >= %s
+      GROUP BY bucket
+    )
+    SELECT MAX(GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                             - COALESCE(c.power_w, 0) * {_CHARGER_KPD})) AS peak_w
+    FROM inv i INNER JOIN atorch a USING (bucket)
+                LEFT JOIN charger c USING (bucket)
+    """
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (_INVERTER_DEVICE_ID, since,
+                 _BATTERY_MONITOR_DEVICE_ID, since,
+                 _CHARGER_DEVICE_ID, since),
+            )
+            row = cursor.fetchone()
+    return float(row.get("peak_w") or 0.0) if row else 0.0
+
+
 def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> float:
     """Instantaneous computed solar wattage: atorch_net_W + load_AC_W / KPD,
     clamped to ≥ 0. Pulls from the in-memory live_samples snapshot so we
@@ -3077,6 +3133,12 @@ def get_dashboard_summary(
                 now,
             ),
             "current_power_kw": round(live_solar_w / 1000.0, 3),
+            "peak_power_w_today": round(get_inverter_solar_peak_w_since(
+                config,
+                now.astimezone(_get_timezone(config)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ),
+            ), 1),
         })
 
     return {
