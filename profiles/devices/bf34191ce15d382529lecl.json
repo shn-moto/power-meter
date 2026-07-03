@@ -13,7 +13,7 @@
   },
   "connection": {
     "local_key": "!=CEO:vzIvU{7s0r",
-    "local_ip": "192.168.1.128",
+    "local_ip": "192.168.1.17",
     "protocol_version": 3.4,
     "ip_source": "manual-seed",
     "last_verified_at": null,

@@ -12,7 +12,7 @@
   },
   "connection": {
     "local_key": "'jFkG]0_zKfEu{GO",
-    "local_ip": "192.168.1.55",
+    "local_ip": "192.168.1.11",
     "protocol_version": 3.3,
     "ip_source": "manual-seed",
     "last_verified_at": null,
