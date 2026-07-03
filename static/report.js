@@ -28,12 +28,15 @@ if (reportPage) {
     } else {
         const payload = JSON.parse(payloadNode.textContent || '{}');
 
+        // Same palette as the inverter sensor-history page's classic
+        // energy-balance bars so the mental model translates between
+        // pages: red = load covered by solar (up), amber = grid buy (up),
+        // green = solar generation (down).
         const palette = {
-            consumed: '#e8a838',
-            generated: '#67b86b',
-            solar: '#f5c542',
-            net: '#7fd0ff',
-            grid: 'rgba(127, 208, 255, 0.12)',
+            self_covered: '#ff7a7a',    // red — load offset by solar
+            grid: '#e8a838',            // amber — load supplied by grid
+            solar: '#67b86b',           // green — generation
+            gridline: 'rgba(127, 208, 255, 0.12)',
             text: 'rgba(232, 240, 250, 0.78)',
         };
 
@@ -66,15 +69,37 @@ if (reportPage) {
             if (emptyNode) emptyNode.hidden = true;
             const chart = window.echarts.init(container);
             const labels = series.map((p) => formatter(p.bucket));
+            // Classic energy-balance layout, one column per bucket:
+            //   up bar = load (grid-delta on the bottom + solar-covered
+            //            remainder on top, sum = consumed_kwh)
+            //   down bar = solar generation
+            // Shared stack name so positives stack up from zero and the
+            // negative solar bar extends down from the same x.
+            const gridData = series.map((p) => Number(p.delta_kwh || 0));
+            const selfData = series.map((p) => Math.max(
+                0, Number(p.consumed_kwh || 0) - Number(p.delta_kwh || 0)
+            ));
+            const solarData = series.map((p) => -Math.abs(Number(p.solar_kwh || 0)));
             chart.setOption({
                 tooltip: {
                     trigger: 'axis',
+                    axisPointer: { type: 'shadow' },
                     backgroundColor: 'rgba(11, 18, 26, 0.92)',
                     borderColor: 'rgba(127, 208, 255, 0.22)',
                     textStyle: { color: '#e8f0fa' },
+                    formatter: (params) => {
+                        if (!params || !params.length) return '';
+                        const lines = [`<strong>${params[0].axisValue}</strong>`];
+                        params.forEach((p) => {
+                            const raw = Array.isArray(p.value) ? p.value[1] : p.value;
+                            const abs = Math.abs(Number(raw) || 0);
+                            lines.push(`${p.marker} ${p.seriesName}: ${abs.toFixed(2)} кВт·ч`);
+                        });
+                        return lines.join('<br/>');
+                    },
                 },
                 legend: {
-                    data: ['Потребление', 'Генерация', 'Солнце', 'Нетто'],
+                    data: ['Из сети', 'Покрыто солнцем', 'Солнце'],
                     textStyle: { color: palette.text },
                     top: 4,
                 },
@@ -82,53 +107,41 @@ if (reportPage) {
                 xAxis: {
                     type: 'category',
                     data: labels,
-                    axisLine: { lineStyle: { color: palette.grid } },
-                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.gridline } },
+                    axisLabel: { color: palette.text, hideOverlap: true },
                 },
                 yAxis: {
                     type: 'value',
                     name: 'кВт·ч',
                     nameTextStyle: { color: palette.text },
-                    axisLine: { lineStyle: { color: palette.grid } },
-                    splitLine: { lineStyle: { color: palette.grid } },
-                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.gridline } },
+                    splitLine: { lineStyle: { color: palette.gridline } },
+                    axisLabel: {
+                        color: palette.text,
+                        formatter: (v) => Math.abs(v).toFixed(1),
+                    },
                 },
                 series: [
                     {
-                        name: 'Потребление',
+                        name: 'Из сети',
                         type: 'bar',
-                        stack: 'energy',
-                        data: series.map((p) => Number(p.consumed_kwh || 0).toFixed(2)),
-                        itemStyle: { color: palette.consumed },
+                        stack: 'balance',
+                        data: gridData,
+                        itemStyle: { color: palette.grid },
                     },
                     {
-                        name: 'Генерация',
+                        name: 'Покрыто солнцем',
                         type: 'bar',
-                        stack: 'energy',
-                        data: series.map((p) => -Number(p.generated_kwh || 0).toFixed(2)),
-                        itemStyle: { color: palette.generated },
+                        stack: 'balance',
+                        data: selfData,
+                        itemStyle: { color: palette.self_covered },
                     },
                     {
-                        // Implicit solar: computed from Atorch discharge minus
-                        // wall-charger consumption. Stacked under "generation"
-                        // (negative) so it visually adds to what came from
-                        // outside the grid — even though we don't meter the
-                        // panels directly.
                         name: 'Солнце',
                         type: 'bar',
-                        stack: 'energy',
-                        data: series.map((p) => -Number(p.solar_kwh || 0).toFixed(2)),
+                        stack: 'balance',
+                        data: solarData,
                         itemStyle: { color: palette.solar },
-                    },
-                    {
-                        name: 'Нетто',
-                        type: 'line',
-                        data: series.map((p) => Number(p.net_kwh || 0).toFixed(2)),
-                        smooth: true,
-                        lineStyle: { color: palette.net, width: 2 },
-                        itemStyle: { color: palette.net },
-                        symbol: 'circle',
-                        symbolSize: 6,
                     },
                 ],
             });

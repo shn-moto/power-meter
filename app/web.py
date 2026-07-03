@@ -40,6 +40,9 @@ from app.storage import (
     get_meter_discrepancy_periods,
     get_period_breakdown,
     get_implicit_solar_by_bucket,
+    get_hybrid_solar_kwh_by_bucket,
+    get_hybrid_solar_kwh_all_time,
+    get_inverter_solar_peak_w_since,
     list_meter_readings,
     save_meter_reading,
     delete_meter_reading,
@@ -2094,30 +2097,25 @@ def monthly_report(
     daily = get_period_breakdown(config, month_start, window_end, "day")
     monthly_year_series = get_period_breakdown(config, year_start, year_end_for_chart, "month")
 
-    # Implicit solar generation: discharge - charger consumption per bucket.
-    # No direct meter on the panels — derived from the Atorch's absolute
-    # discharge counter (dp 127) minus what the wall charger drew. See
-    # storage.get_implicit_solar_by_bucket for the rationale.
-    solar_daily = get_implicit_solar_by_bucket(config, month_start, window_end, "day")
-    solar_monthly = get_implicit_solar_by_bucket(config, year_start, year_end_for_chart, "month")
+    # Solar generation per bucket (hybrid: BDM historical + new inverter-
+    # based computed solar; no overlap because bdm-invertor stopped
+    # emitting samples the day the inverter went online).
+    solar_daily = get_hybrid_solar_kwh_by_bucket(config, month_start, window_end, "day")
+    solar_monthly = get_hybrid_solar_kwh_by_bucket(config, year_start, year_end_for_chart, "month")
 
-    def _merge_solar(series: list[dict[str, Any]], solar_by_bucket: dict[datetime, dict[str, float]]) -> None:
-        # solar_by_bucket keys are tz-aware datetimes whose date in the project
-        # timezone uniquely identifies the day/month bucket. Reduce both sides
-        # to that date string so we side-step any tz/normalisation drift
-        # between the cagg-driven breakdown and our raw-sample integration.
-        tz = ZoneInfo(config.timezone)
-        solar_by_key: dict[str, float] = {}
-        for bucket_dt, v in solar_by_bucket.items():
-            local_dt = bucket_dt.astimezone(tz) if bucket_dt.tzinfo else bucket_dt.replace(tzinfo=tz)
-            solar_by_key[local_dt.date().isoformat()] = float(v.get("solar_kwh") or 0.0)
+    def _merge_solar(series: list[dict[str, Any]], solar_by_key: dict[str, float], key_len: int) -> None:
         for item in series:
             bucket_iso = str(item.get("bucket") or "")
-            bucket_date = bucket_iso[:10]  # YYYY-MM-DD prefix is enough for both day & month buckets
-            item["solar_kwh"] = solar_by_key.get(bucket_date, 0.0)
+            key = bucket_iso[:key_len]
+            solar = float(solar_by_key.get(key, 0.0))
+            item["solar_kwh"] = round(solar, 3)
+            # Delta = grid consumption after solar offset. Max with 0 so
+            # a solar-surplus bucket doesn't fake negative grid draw.
+            consumed = float(item.get("consumed_kwh") or 0.0)
+            item["delta_kwh"] = round(max(0.0, consumed - solar), 3)
 
-    _merge_solar(daily, solar_daily)
-    _merge_solar(monthly_year_series, solar_monthly)
+    _merge_solar(daily, solar_daily, 10)
+    _merge_solar(monthly_year_series, solar_monthly, 7)
 
     # Past 12 full months (before the selected month) for the average baseline.
     avg_window_start = (month_start - timedelta(days=365)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -2137,8 +2135,8 @@ def monthly_report(
     current_net = round(current_consumed - current_generated, 3)
 
     prev_daily = get_period_breakdown(config, prev_month_start, prev_month_end, "day")
-    prev_solar_by_bucket = get_implicit_solar_by_bucket(config, prev_month_start, prev_month_end, "day")
-    _merge_solar(prev_daily, prev_solar_by_bucket)
+    prev_solar_by_key = get_hybrid_solar_kwh_by_bucket(config, prev_month_start, prev_month_end, "day")
+    _merge_solar(prev_daily, prev_solar_by_key, 10)
     prev_consumed = _sum(prev_daily, "consumed_kwh")
     prev_generated = _sum(prev_daily, "generated_kwh")
     prev_solar = _sum(prev_daily, "solar_kwh")
@@ -2149,6 +2147,35 @@ def monthly_report(
     delta_vs_avg = round(current_net - avg_net_kwh, 3)
 
     tariff = float(config.tariff_per_kwh or 0.0)
+
+    # Peak generation over the current month (30-second grid, same as the
+    # dashboard live card). Range-bounded flavour of the "peak_since"
+    # helper so switching months in the report scrubs history correctly.
+    peak_w_month = get_inverter_solar_peak_w_since(
+        config, month_start, until=window_end
+    )
+
+    # All-time cumulative saved: sum of hybrid solar × tariff, from the
+    # first sample in the project up to now. Slow first hit; monthly
+    # aggregation keeps it manageable.
+    all_time_solar_kwh = get_hybrid_solar_kwh_all_time(config)
+    all_time_saved_cost = round(all_time_solar_kwh * tariff, 2)
+
+    # Solar-coverage share (%) for the current and previous months.
+    solar_share_pct = (
+        round(100.0 * current_solar / current_consumed, 1)
+        if current_consumed > 0 else 0.0
+    )
+    prev_solar_share_pct = (
+        round(100.0 * prev_solar / prev_consumed, 1)
+        if prev_consumed > 0 else 0.0
+    )
+
+    # "Saved by solar" cost for the current month = solar_kwh × tariff.
+    # Assumes any kWh the panels supplied would otherwise have come from
+    # the grid — a fair proxy since we've never been in net-export.
+    saved_cost_month = round(current_solar * tariff, 2)
+    prev_saved_cost_month = round(prev_solar * tariff, 2)
 
     # Build year choices: current ±4 (cap at current year)
     year_choices = list(range(max(2020, now.year - 4), now.year + 1))
@@ -2172,6 +2199,9 @@ def monthly_report(
             "solar_kwh": current_solar,
             "net_kwh": current_net,
             "cost": round(current_net * tariff, 2),
+            "peak_w": round(peak_w_month, 1),
+            "solar_share_pct": solar_share_pct,
+            "saved_cost": saved_cost_month,
         },
         "previous": {
             "consumed_kwh": prev_consumed,
@@ -2179,6 +2209,12 @@ def monthly_report(
             "solar_kwh": prev_solar,
             "net_kwh": prev_net,
             "cost": round(prev_net * tariff, 2),
+            "solar_share_pct": prev_solar_share_pct,
+            "saved_cost": prev_saved_cost_month,
+        },
+        "all_time_saved": {
+            "kwh": all_time_solar_kwh,
+            "cost": all_time_saved_cost,
         },
         "delta_prev": {
             "kwh": delta_vs_prev,

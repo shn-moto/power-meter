@@ -2726,32 +2726,34 @@ def get_inverter_energy_breakdown(
 def get_inverter_solar_peak_w_since(
     config: AppConfig,
     since: datetime,
+    until: datetime | None = None,
     bucket_seconds: int = 30,
 ) -> float:
-    """Highest solar_w over 30-second buckets from `since` up to now — the
-    max of the same computed-solar formula the dashboard trace uses. Same
-    SQL shape as get_inverter_solar_trace, just returns the max of the
-    per-bucket clamped values."""
+    """Highest solar_w over 30-second buckets from `since` up to `until`
+    (defaults to now) — the max of the same computed-solar formula the
+    dashboard trace uses. Same SQL shape as get_inverter_solar_trace,
+    just returns the max of the per-bucket clamped values."""
+    until_clause = "AND captured_at <= %s" if until is not None else ""
     sql = f"""
     WITH inv AS (
       SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
              AVG(power_w) AS power_w
       FROM samples
-      WHERE device_id = %s AND captured_at >= %s
+      WHERE device_id = %s AND captured_at >= %s {until_clause}
       GROUP BY bucket
     ),
     atorch AS (
       SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
              AVG((raw_dps->>'19')::numeric / 100.0) AS net_w
       FROM samples
-      WHERE device_id = %s AND captured_at >= %s AND raw_dps ? '19'
+      WHERE device_id = %s AND captured_at >= %s {until_clause} AND raw_dps ? '19'
       GROUP BY bucket
     ),
     charger AS (
       SELECT time_bucket(INTERVAL '{bucket_seconds} seconds', captured_at) AS bucket,
              AVG(power_w) AS power_w
       FROM samples
-      WHERE device_id = %s AND captured_at >= %s
+      WHERE device_id = %s AND captured_at >= %s {until_clause}
       GROUP BY bucket
     )
     SELECT MAX(GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
@@ -2759,16 +2761,91 @@ def get_inverter_solar_peak_w_since(
     FROM inv i INNER JOIN atorch a USING (bucket)
                 LEFT JOIN charger c USING (bucket)
     """
+    params: list[Any] = []
+    for device_id in (_INVERTER_DEVICE_ID, _BATTERY_MONITOR_DEVICE_ID, _CHARGER_DEVICE_ID):
+        params.extend([device_id, since] + ([until] if until is not None else []))
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+    return float(row.get("peak_w") or 0.0) if row else 0.0
+
+
+def get_hybrid_solar_kwh_by_bucket(
+    config: AppConfig,
+    start: datetime,
+    end: datetime,
+    bucket_unit: str,
+) -> dict[str, float]:
+    """Per-bucket solar kWh combining BDM historical generation and the
+    new inverter-based computed solar, keyed by YYYY-MM-DD (day bucket)
+    or YYYY-MM (month bucket). No double-count risk: the bdm-invertor
+    device stopped emitting samples the day the inverter went online, so
+    for any post-inverter bucket its `generated_kwh` is 0.
+
+    Used by the /report page instead of the older
+    get_implicit_solar_by_bucket (which relied on Atorch dp127 minus the
+    72V charger — misses solar that flowed through the inverter after
+    the rewiring)."""
+    if bucket_unit not in {"day", "month"}:
+        bucket_unit = "day"
+
+    # BDM historical component: `generated_kwh` per bucket from the
+    # existing period breakdown. `bucket` values are ISO strings.
+    period = get_period_breakdown(config, start, end, bucket_unit)
+    key_len = 10 if bucket_unit == "day" else 7  # YYYY-MM-DD vs YYYY-MM
+    bdm_by_key: dict[str, float] = {}
+    for item in period:
+        bucket_iso = str(item.get("bucket") or "")
+        if not bucket_iso:
+            continue
+        bdm_by_key[bucket_iso[:key_len]] = float(item.get("generated_kwh") or 0.0)
+
+    # Inverter component: use the same helper the sensor-history page
+    # uses, then read `solar_kwh` per point.
+    breakdown = get_inverter_energy_breakdown(
+        config, start, end, bucket_unit, tz_name=config.timezone
+    )
+    tz = ZoneInfo(config.timezone) if config.timezone else ZoneInfo("Europe/Warsaw")
+    inv_by_key: dict[str, float] = {}
+    for point in breakdown.get("points", []):
+        ts_ms = int(point.get("ts") or 0)
+        if ts_ms <= 0:
+            continue
+        bucket_dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone(tz)
+        key = bucket_dt.date().isoformat()[:key_len]
+        inv_by_key[key] = float(point.get("solar_kwh") or 0.0)
+
+    merged: dict[str, float] = {}
+    for key in set(bdm_by_key) | set(inv_by_key):
+        merged[key] = round(bdm_by_key.get(key, 0.0) + inv_by_key.get(key, 0.0), 3)
+    return merged
+
+
+def get_hybrid_solar_kwh_all_time(config: AppConfig) -> float:
+    """Total solar kWh across the project's full sample history (BDM
+    era + inverter era combined). Uses month-bucket aggregation so the
+    walk fits inside a single continuous-aggregate scan."""
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                sql,
-                (_INVERTER_DEVICE_ID, since,
-                 _BATTERY_MONITOR_DEVICE_ID, since,
-                 _CHARGER_DEVICE_ID, since),
+                """
+                SELECT MIN(captured_at) AS first_ts
+                  FROM samples
+                 WHERE device_id IN ('bdm-invertor', %s, %s)
+                """,
+                (_INVERTER_DEVICE_ID, _BATTERY_MONITOR_DEVICE_ID),
             )
             row = cursor.fetchone()
-    return float(row.get("peak_w") or 0.0) if row else 0.0
+    if not row or not row.get("first_ts"):
+        return 0.0
+    tz = ZoneInfo(config.timezone) if config.timezone else ZoneInfo("Europe/Warsaw")
+    start = row["first_ts"]
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    now = datetime.now(tz)
+    monthly = get_hybrid_solar_kwh_by_bucket(config, start, now, "month")
+    return round(sum(monthly.values()), 3)
 
 
 def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> float:

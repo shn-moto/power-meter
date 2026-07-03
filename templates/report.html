@@ -38,7 +38,8 @@
         <article class="stat-card lcd-panel">
             <span class="stat-label">Солнце за месяц</span>
             <strong class="stat-value">{{ '%.1f'|format(report.current.solar_kwh) }} кВт·ч</strong>
-            <span class="stat-sub">по разрядке Atorch − потребление 72V Charger</span>
+            <span class="stat-sub">покрытие {{ '%.1f'|format(report.current.solar_share_pct) }}%, пик {{ report.current.peak_w|round(0)|int }} Вт</span>
+            <span class="stat-sub">сэкономлено ≈ {{ '%.2f'|format(report.current.saved_cost) }} zł</span>
         </article>
 
         <article class="stat-card lcd-panel">
@@ -65,10 +66,16 @@
                 Δ {{ '%+.1f'|format(report.delta_avg.kwh) }} кВт·ч ({{ '%+.2f'|format(report.delta_avg.cost) }} zł)
             </span>
         </article>
+
+        <article class="stat-card lcd-panel">
+            <span class="stat-label">Экономия за всё время</span>
+            <strong class="stat-value">{{ '%.2f'|format(report.all_time_saved.cost) }} zł</strong>
+            <span class="stat-sub">{{ '%.1f'|format(report.all_time_saved.kwh) }} кВт·ч солнца</span>
+        </article>
     </div>
 
     <article class="detail-card report-chart-card">
-        <h2>Потребление и генерация по дням ({{ report.month_label }})</h2>
+        <h2>Потребление и солнце по дням ({{ report.month_label }})</h2>
         <div class="chart-frame">
             <div class="chart-canvas" data-report-daily-chart></div>
             <div class="chart-empty" data-report-daily-empty {% if report.daily_series %}hidden{% endif %}>За этот период данные пока не собраны.</div>
