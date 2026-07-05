@@ -2182,15 +2182,22 @@ def _bucket_energy_wh(row: dict[str, Any], bucket: str) -> float:
 def _counter_bar_energies_kwh(
     bucket_rows: list[dict[str, Any]],
     energy_counter_meta: tuple[str, float],
+    initial_anchor_kwh: float | None = None,
 ) -> list[float]:
     """For counter devices, per-bucket energy = last_kwh - prev_bucket_last_kwh.
     Anchoring on the previous bucket's last counter (instead of this bucket's
     first counter) makes the bars telescope: sum equals last_of_last_bucket
     minus first_of_first_bucket. Inter-bucket counter increments are no longer
-    lost between adjacent buckets."""
+    lost between adjacent buckets.
+
+    `initial_anchor_kwh` is used as the anchor for the very first bucket in
+    the range. Passing the counter value AT-OR-BEFORE the query start lets a
+    gap-recovery jump attribute to the first bucket after the gap, even when
+    the pre-gap sample lies outside the query window (e.g. day-view chart
+    that starts on the recovery day)."""
     dp_key, scale_divisor = energy_counter_meta
     energies: list[float] = []
-    prev_last_kwh: float | None = None
+    prev_last_kwh: float | None = initial_anchor_kwh
     for row in bucket_rows:
         last_kwh = _read_energy_counter_kwh(
             _normalize_json_field(row.get("last_raw_dps")), dp_key, scale_divisor
@@ -2214,12 +2221,13 @@ def _aggregate_energy_wh(
     bucket_rows: list[dict[str, Any]],
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
+    initial_anchor_kwh: float | None = None,
 ) -> float:
     if not bucket_rows:
         return 0.0
 
     if energy_counter_meta:
-        return sum(_counter_bar_energies_kwh(bucket_rows, energy_counter_meta)) * 1000.0
+        return sum(_counter_bar_energies_kwh(bucket_rows, energy_counter_meta, initial_anchor_kwh)) * 1000.0
 
     return sum(_bucket_energy_wh(row, bucket) for row in bucket_rows)
 
@@ -2228,10 +2236,11 @@ def _build_chart_series_from_aggregate(
     bucket_rows: list[dict[str, Any]],
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
+    initial_anchor_kwh: float | None = None,
 ) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
     if energy_counter_meta:
-        counter_energies = _counter_bar_energies_kwh(bucket_rows, energy_counter_meta)
+        counter_energies = _counter_bar_energies_kwh(bucket_rows, energy_counter_meta, initial_anchor_kwh)
     else:
         counter_energies = []
 
@@ -2273,8 +2282,11 @@ def _prepare_chart_series(
     period: str,
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
+    initial_anchor_kwh: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    base_series = _build_chart_series_from_aggregate(rows_by_device, bucket, energy_counter_meta)
+    base_series = _build_chart_series_from_aggregate(
+        rows_by_device, bucket, energy_counter_meta, initial_anchor_kwh
+    )
     use_power_chart = (
         energy_counter_meta is None
         and
@@ -3245,8 +3257,34 @@ def _build_device_stats_result(
 ) -> dict[str, Any]:
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
 
-    chart_series, chart = _prepare_chart_series(config, bucket_rows, start, end, period, bucket, energy_counter_meta)
-    total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta)
+    # For counter devices, look up the counter value AT-OR-BEFORE start so
+    # the first bucket in range can telescope over any pre-range gap
+    # recovery (Smart Life shows the full delta as a spike on the first
+    # bucket back online — this makes our day-view do the same when the
+    # gap crossed the query start boundary).
+    initial_anchor_kwh: float | None = None
+    if energy_counter_meta is not None:
+        dp_key, scale_divisor = energy_counter_meta
+        with _connect(config.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT raw_dps FROM samples
+                    WHERE device_id = %s AND captured_at < %s
+                    ORDER BY captured_at DESC LIMIT 1
+                    """,
+                    (device_id, start),
+                )
+                row = cursor.fetchone()
+        if row and row.get("raw_dps"):
+            initial_anchor_kwh = _read_energy_counter_kwh(
+                _normalize_json_field(row["raw_dps"]), dp_key, scale_divisor
+            )
+
+    chart_series, chart = _prepare_chart_series(
+        config, bucket_rows, start, end, period, bucket, energy_counter_meta, initial_anchor_kwh
+    )
+    total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta, initial_anchor_kwh)
     duration_hours = max((end - start).total_seconds() / 3600.0, 0.0)
 
     if bucket_rows:

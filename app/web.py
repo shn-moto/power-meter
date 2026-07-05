@@ -1758,7 +1758,9 @@ def _invalidate_aggregate_cache(request: Request, *, device_id: str | None = Non
     cache: dict[tuple[str, ...], dict[str, Any]] = request.app.state.aggregate_cache
     keys_to_remove = []
     for key in cache:
-        if key[:1] == ("summary",):
+        # Global dashboard/meter payloads that always need to reflect the
+        # latest sample or meter reading.
+        if key[:1] in (("summary",), ("meter-overview",)):
             keys_to_remove.append(key)
             continue
         if device_id and len(key) > 1 and key[1] == device_id:
@@ -2500,9 +2502,12 @@ def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> 
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     # New reading changes the discrepancy periods — drop the cached
-    # overview so the next fetch recomputes.
+    # overview so the next fetch recomputes. Don't compute here: the
+    # frontend discards the POST response body and immediately calls
+    # GET /api/meter-readings anyway. Skipping the compute here saves
+    # ~2 s per submitted row (was ~4 s for two-apartment forms).
     _invalidate_aggregate_cache(request)
-    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
+    return JSONResponse({"status": "ok"})
 
 
 @app.delete("/api/meter-readings/{reading_id}")
@@ -2510,7 +2515,7 @@ def delete_meter_reading_api(request: Request, reading_id: int) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     delete_meter_reading(config, reading_id=reading_id)
     _invalidate_aggregate_cache(request)
-    return JSONResponse(jsonable_encoder(_build_meter_overview(config)))
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/api/sensors/summary")
