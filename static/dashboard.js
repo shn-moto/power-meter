@@ -711,16 +711,16 @@ if (meterSection) {
             const deltaPerDay = Number(p.delta_per_day_kwh || 0);
             const dpdCls = deltaPerDay > 0 ? 'is-positive' : (deltaPerDay < 0 ? 'is-negative' : '');
             const dpdSign = deltaPerDay > 0 ? '+' : '';
-            const vPct = Number(p.verified_pct || 0);
-            const vCls = vPct >= 80 ? 'is-high' : (vPct >= 30 ? 'is-mid' : 'is-low');
-            const vTitle = `${p.verified_device_days || 0} / ${p.total_possible_device_days || 0} день·устройств из облака`;
+            const restored = Number(p.restored_kwh || 0);
+            const rCls = restored > 0.05 ? 'is-high' : 'is-low';
+            const rText = restored > 0 ? `+${restored.toFixed(2)} кВт·ч` : '—';
             return `<tr>
                 <td>${formatReadingAt(p.start_at)} – ${formatReadingAt(p.end_at)}</td>
                 <td>${Number(p.meter_kwh).toFixed(2)}</td>
                 <td>${Number(p.device_kwh).toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${cls}">${sign}${delta.toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${dpdCls}">${dpdSign}${deltaPerDay.toFixed(2)}</td>
-                <td class="meter-discrepancy-verified ${vCls}" title="${vTitle}">${vPct.toFixed(0)}%</td>
+                <td class="meter-discrepancy-verified ${rCls}" title="Δ восстановленной облаком энергии сверх LAN-оценки">${rText}</td>
             </tr>`;
         }).join('');
     };
