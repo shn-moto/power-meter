@@ -181,7 +181,11 @@
                         <td>{{ '%.2f'|format(period.device_kwh) }}</td>
                         <td class="meter-discrepancy-delta {% if period.delta_kwh > 0 %}is-positive{% elif period.delta_kwh < 0 %}is-negative{% endif %}">{{ '%+.2f'|format(period.delta_kwh) }}</td>
                         <td class="meter-discrepancy-delta {% if period.delta_per_day_kwh > 0 %}is-positive{% elif period.delta_per_day_kwh < 0 %}is-negative{% endif %}">{{ '%+.2f'|format(period.delta_per_day_kwh) }}</td>
-                        <td class="meter-discrepancy-verified {% if period.restored_kwh > 0.05 %}is-high{% else %}is-low{% endif %}" title="Δ восстановленной облаком энергии сверх LAN-оценки">{% if period.restored_kwh > 0 %}+{{ '%.2f'|format(period.restored_kwh) }} кВт·ч{% else %}—{% endif %}</td>
+                        <td class="meter-discrepancy-verified {% if period.restored_kwh > 0.05 %}is-high{% else %}is-low{% endif %}"
+                            {% if period.restored_devices %}
+                            data-restored-tooltip="<div class='meter-tooltip-title'>Восстановлено облаком:</div>{% for d in period.restored_devices %}<div class='meter-tooltip-row'><span>{{ d.name }}</span><span>+{{ '%.2f'|format(d.kwh) }} кВт·ч</span></div>{% endfor %}"
+                            {% endif %}
+                        >{% if period.restored_kwh > 0 %}+{{ '%.2f'|format(period.restored_kwh) }} кВт·ч{% else %}—{% endif %}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

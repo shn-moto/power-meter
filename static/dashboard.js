@@ -696,6 +696,41 @@ if (meterSection) {
     const discrepancyContainer = meterSection.querySelector('[data-meter-discrepancy]');
     const discrepancyBody = meterSection.querySelector('[data-meter-discrepancy-body]');
 
+    // Floating tooltip for the "Восстановлено" cells — the native title
+    // attribute lags a second and can't render structured content, so
+    // this shows immediately with a device breakdown.
+    let restoredTooltipEl = null;
+    const showRestoredTooltip = (target, html) => {
+        if (!restoredTooltipEl) {
+            restoredTooltipEl = document.createElement('div');
+            restoredTooltipEl.className = 'meter-tooltip';
+            document.body.appendChild(restoredTooltipEl);
+        }
+        restoredTooltipEl.innerHTML = html;
+        restoredTooltipEl.style.opacity = '0';
+        restoredTooltipEl.style.display = 'block';
+        const rect = target.getBoundingClientRect();
+        const ttRect = restoredTooltipEl.getBoundingClientRect();
+        let left = rect.left + window.scrollX + (rect.width / 2) - (ttRect.width / 2);
+        left = Math.max(8, Math.min(left, window.innerWidth - ttRect.width - 8));
+        const top = rect.top + window.scrollY - ttRect.height - 8;
+        restoredTooltipEl.style.left = `${left}px`;
+        restoredTooltipEl.style.top = `${top}px`;
+        restoredTooltipEl.style.opacity = '1';
+    };
+    const hideRestoredTooltip = () => {
+        if (restoredTooltipEl) restoredTooltipEl.style.display = 'none';
+    };
+    if (discrepancyBody) {
+        discrepancyBody.addEventListener('mouseover', (event) => {
+            const cell = event.target.closest('[data-restored-tooltip]');
+            if (cell) showRestoredTooltip(cell, cell.dataset.restoredTooltip);
+        });
+        discrepancyBody.addEventListener('mouseout', (event) => {
+            if (event.target.closest('[data-restored-tooltip]')) hideRestoredTooltip();
+        });
+    }
+
     const renderDiscrepancy = (periods) => {
         if (!discrepancyContainer || !discrepancyBody) return;
         if (!periods || !periods.length) {
@@ -714,13 +749,22 @@ if (meterSection) {
             const restored = Number(p.restored_kwh || 0);
             const rCls = restored > 0.05 ? 'is-high' : 'is-low';
             const rText = restored > 0 ? `+${restored.toFixed(2)} кВт·ч` : '—';
+            const restoredDevs = Array.isArray(p.restored_devices) ? p.restored_devices : [];
+            const tooltipHtml = restoredDevs.length
+                ? `<div class="meter-tooltip-title">Восстановлено облаком:</div>${
+                    restoredDevs.map((d) => `<div class="meter-tooltip-row"><span>${escapeHtml(d.name)}</span><span>+${Number(d.kwh).toFixed(2)} кВт·ч</span></div>`).join('')
+                }`
+                : '';
+            const tooltipAttr = tooltipHtml
+                ? ` data-restored-tooltip="${escapeHtml(tooltipHtml)}"`
+                : '';
             return `<tr>
                 <td>${formatReadingAt(p.start_at)} – ${formatReadingAt(p.end_at)}</td>
                 <td>${Number(p.meter_kwh).toFixed(2)}</td>
                 <td>${Number(p.device_kwh).toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${cls}">${sign}${delta.toFixed(2)}</td>
                 <td class="meter-discrepancy-delta ${dpdCls}">${dpdSign}${deltaPerDay.toFixed(2)}</td>
-                <td class="meter-discrepancy-verified ${rCls}" title="Δ восстановленной облаком энергии сверх LAN-оценки">${rText}</td>
+                <td class="meter-discrepancy-verified ${rCls}"${tooltipAttr}>${rText}</td>
             </tr>`;
         }).join('');
     };

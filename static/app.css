@@ -2095,6 +2095,43 @@ button:hover {
     background: rgba(127, 208, 255, 0.05);
 }
 
+.meter-tooltip {
+    position: absolute;
+    display: none;
+    max-width: 320px;
+    background: rgba(11, 18, 26, 0.96);
+    border: 1px solid rgba(127, 208, 255, 0.28);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    color: #e8f0fa;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    z-index: 9999;
+    transition: opacity 100ms ease-out;
+    pointer-events: none;
+}
+
+.meter-tooltip .meter-tooltip-title {
+    color: rgba(217, 226, 238, 0.7);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+}
+
+.meter-tooltip .meter-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.meter-tooltip .meter-tooltip-row span:last-child {
+    color: #8edb95;
+    white-space: nowrap;
+}
+
 .meter-history > summary {
     color: var(--muted);
     font-size: 0.85rem;

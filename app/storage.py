@@ -4172,6 +4172,17 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 """
             )
             energy_device_ids = [str(r["device_id"]) for r in cursor.fetchall()]
+            # Fetch names once so the per-period tooltip payload can list
+            # which devices contributed restored energy without another
+            # round-trip per period.
+            cursor.execute(
+                "SELECT device_id, name FROM devices WHERE device_id = ANY(%s)",
+                (energy_device_ids,),
+            )
+            device_names_by_id = {
+                str(r["device_id"]): str(r.get("name") or r["device_id"])
+                for r in cursor.fetchall()
+            }
 
     by_apt: dict[str, dict[datetime, float]] = {}
     for row in reading_rows:
@@ -4197,11 +4208,22 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
         device_total = 0.0
         device_hours: dict[str, int] = {}
         restored_total = 0.0
+        restored_by_device: list[dict[str, Any]] = []
         for device_id in energy_device_ids:
             kwh, hours = _device_energy_kwh_for_range(config, device_id, start_dt, end_dt)
             device_total += kwh
             device_hours[device_id] = hours
-            restored_total += get_last_range_restored_kwh(device_id)
+            per_device_restored = get_last_range_restored_kwh(device_id)
+            restored_total += per_device_restored
+            if per_device_restored > 0.005:
+                restored_by_device.append({
+                    "device_id": device_id,
+                    "name": device_names_by_id.get(device_id, device_id),
+                    "kwh": round(per_device_restored, 3),
+                })
+        # Sort by contribution, largest first — the tooltip shows the
+        # biggest offenders first.
+        restored_by_device.sort(key=lambda item: item["kwh"], reverse=True)
         coverage_hours = min(device_hours.values()) if device_hours else 0
         coverage_pct = round(coverage_hours * 100.0 / period_hours, 1) if period_hours else 0.0
         device_total = round(device_total, 3)
@@ -4221,6 +4243,7 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 "period_days": round(period_days, 2),
                 "coverage_pct": coverage_pct,
                 "restored_kwh": restored_total,
+                "restored_devices": restored_by_device,
             }
         )
     return periods
