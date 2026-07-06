@@ -2460,7 +2460,10 @@ def get_period_breakdown(
                 FROM devices d
                 LEFT JOIN device_connections c ON c.device_id = d.device_id
                 WHERE d.is_energy_meter = TRUE
-                  AND NOT d.disabled
+                -- disabled devices kept in — their historical samples still
+                -- belong in past-period totals even if the physical socket
+                -- has been replaced. Future periods naturally see zero
+                -- from them because polling has stopped.
                 """
             )
             device_rows = cursor.fetchall()
@@ -4163,7 +4166,9 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 SELECT device_id FROM devices
                 WHERE is_energy_meter
                   AND NOT COALESCE(is_generator, false)
-                  AND NOT COALESCE(disabled, false)
+                -- disabled devices stay in — see note in
+                -- get_period_breakdown, same rationale for meter
+                -- discrepancy history.
                 """
             )
             energy_device_ids = [str(r["device_id"]) for r in cursor.fetchall()]
