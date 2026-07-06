@@ -257,7 +257,17 @@ def verify_device_energy_daily(
             .astimezone(tz).date()
         )
 
-    from app.storage import _connect
+    from app.storage import (
+        _connect, get_device_capabilities, get_control_device,
+        _get_energy_counter_meta_from_capabilities, _local_fragment_kwh,
+    )
+    capabilities = get_device_capabilities(config, device_id)
+    counter_meta = _get_energy_counter_meta_from_capabilities(capabilities)
+    ctl = get_control_device(config, device_id)
+    is_total_type = (
+        bool(ctl) and str(ctl.power_type or "total").strip().lower() == "total"
+    )
+
     with _connect(config.database_url) as conn:
         d = start_day
         while d < end_day_exclusive:
@@ -269,6 +279,45 @@ def verify_device_energy_daily(
             if earliest_cloud_day is not None and d >= earliest_cloud_day:
                 kwh = per_day.get(d, 0.0)
                 _upsert_daily_row(conn, device_id, d, kwh, "cloud")
+                # If cloud saw more consumption than LAN did, drop a
+                # synthetic hourly row so the device-day chart can show
+                # a visually distinct "restored" bar at end-of-day.
+                if kwh > 0.01:
+                    day_start = datetime.combine(d, datetime.min.time(), tzinfo=tz)
+                    day_end = day_start + timedelta(days=1)
+                    local_kwh = _local_fragment_kwh(
+                        config, device_id,
+                        day_start.astimezone(timezone.utc),
+                        day_end.astimezone(timezone.utc),
+                        capabilities, counter_meta, is_total_type,
+                    )
+                    restored = max(0.0, kwh - local_kwh)
+                    # Put the marker on the last hour of the local day so
+                    # it lands inside the day-view chart window.
+                    marker_bucket = day_start.replace(hour=23)
+                    with conn.cursor() as cursor:
+                        if restored > 0.01:
+                            cursor.execute(
+                                """
+                                INSERT INTO device_synthetic_hourly
+                                    (device_id, bucket, kwh, source)
+                                VALUES (%s, %s, %s, 'cloud')
+                                ON CONFLICT (device_id, bucket, source) DO UPDATE
+                                  SET kwh = EXCLUDED.kwh,
+                                      created_at = NOW()
+                                """,
+                                (device_id, marker_bucket.astimezone(timezone.utc), restored),
+                            )
+                        else:
+                            # Cloud agrees with LAN → drop any stale marker
+                            # from a previous verify pass.
+                            cursor.execute(
+                                """
+                                DELETE FROM device_synthetic_hourly
+                                 WHERE device_id = %s AND bucket = %s AND source = 'cloud'
+                                """,
+                                (device_id, marker_bucket.astimezone(timezone.utc)),
+                            )
             d += timedelta(days=1)
         conn.commit()
 

@@ -2257,10 +2257,87 @@ def _build_chart_series_from_aggregate(
                 "timestamp": timestamp_dt.isoformat(),
                 "energy_kwh": round(energy_kwh, 4),
                 "avg_power_kw": round(avg_power_kw, 4),
+                "cloud_kwh": 0.0,
             }
         )
 
     return series
+
+
+def _merge_synthetic_hourly(
+    config: AppConfig,
+    device_id: str,
+    series: list[dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    bucket: str,
+) -> None:
+    """Attach cloud-verified restoration bars from device_synthetic_hourly
+    onto an already-built chart series. For each synthetic row falling
+    into a series bucket, adds the restored kWh to that bucket's total
+    and stashes the portion in `cloud_kwh` so the frontend can render
+    it with a distinctive fill.
+
+    For hour buckets, sub-hour granularity matches naturally. For day /
+    month buckets, all synthetic rows for the calendar day / month
+    collapse into that bucket.
+    """
+    if not series:
+        return
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT bucket, SUM(kwh) AS kwh, MIN(source) AS source
+                  FROM device_synthetic_hourly
+                 WHERE device_id = %s
+                   AND bucket >= %s
+                   AND bucket < %s
+                 GROUP BY bucket
+                """,
+                (device_id, start, end),
+            )
+            rows = cursor.fetchall()
+    if not rows:
+        return
+
+    tz = _get_timezone(config)
+
+    def _key_of(dt: datetime) -> str:
+        local = dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=tz)
+        if bucket == "hour":
+            return local.strftime("%Y-%m-%dT%H")
+        if bucket == "day":
+            return local.strftime("%Y-%m-%d")
+        if bucket == "month":
+            return local.strftime("%Y-%m")
+        return local.strftime("%Y-%m-%dT%H:%M")
+
+    synth_by_key: dict[str, float] = {}
+    for row in rows:
+        b = row.get("bucket")
+        if not isinstance(b, datetime):
+            b = _parse_dt(b)
+        synth_by_key[_key_of(b)] = synth_by_key.get(_key_of(b), 0.0) + float(row.get("kwh") or 0.0)
+
+    for item in series:
+        ts = item.get("timestamp")
+        if not ts:
+            continue
+        dt = _parse_dt(ts) if not isinstance(ts, datetime) else ts
+        key = _key_of(dt)
+        cloud_kwh = synth_by_key.get(key, 0.0)
+        if cloud_kwh > 0.001:
+            item["cloud_kwh"] = round(cloud_kwh, 4)
+            item["energy_kwh"] = round(float(item.get("energy_kwh") or 0.0) + cloud_kwh, 4)
+            # If `chart_value` was already computed by _prepare_chart_series
+            # (energy-metric chart), keep it in sync so the bar height
+            # includes the restored portion. Doesn't apply to power-metric
+            # charts because those show avg power, not energy.
+            if "chart_value" in item:
+                item["chart_value"] = round(
+                    float(item.get("chart_value") or 0.0) + cloud_kwh, 4
+                )
 
 
 def _normalize_bucket_for_timezone(config: AppConfig, value: datetime, bucket: str) -> datetime:
@@ -3284,7 +3361,16 @@ def _build_device_stats_result(
     chart_series, chart = _prepare_chart_series(
         config, bucket_rows, start, end, period, bucket, energy_counter_meta, initial_anchor_kwh
     )
+    # Overlay cloud-verified restoration bars from device_synthetic_hourly.
+    # They land in whichever bucket contains their end-of-day marker; the
+    # frontend uses the injected `cloud_kwh` field to render the extra
+    # amount in a distinct fill.
+    _merge_synthetic_hourly(config, device_id, chart_series, start, end, bucket)
     total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta, initial_anchor_kwh)
+    # Cloud restorations aren't in the samples-hourly totals — add them.
+    total_energy_wh += sum(
+        float(item.get("cloud_kwh") or 0.0) for item in chart_series
+    ) * 1000.0
     duration_hours = max((end - start).total_seconds() / 3600.0, 0.0)
 
     if bucket_rows:

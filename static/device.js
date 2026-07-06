@@ -778,14 +778,24 @@ if (page) {
 
         chartEmpty.hidden = true;
         chartMeta.textContent = `${chartConfig.label} по ${describeBucket(chartConfig.bucket)}`;
+        const cloudBarGradient = new window.echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: '#8edb95' },
+            { offset: 1, color: '#3a7f43' },
+        ]);
         const intervalBarData = useIntervalHourBars
             ? series.map((item) => {
                 const startMs = Date.parse(item.timestamp);
-                return {
+                const cloudKwh = Number(item.cloud_kwh || 0);
+                const entry = {
                     value: [startMs, startMs + HOUR_BUCKET_MS, Number(item.chart_value ?? 0)],
                     timestamp: item.timestamp,
                     tooltipLabel: item.tooltip_label,
+                    cloudKwh,
                 };
+                if (cloudKwh > 0.001) {
+                    entry.itemStyle = { color: cloudBarGradient };
+                }
+                return entry;
             })
             : [];
         const chartWidth = Math.max(chart?.clientWidth || 0, 1);
@@ -941,11 +951,19 @@ if (page) {
                                 color: '#a1deff',
                         },
                     },
-                    data: series.map((item) => ({
-                        value: Number(item.chart_value ?? 0),
-                        tooltipLabel: item.tooltip_label,
-                        timestamp: item.timestamp,
-                    })),
+                    data: series.map((item) => {
+                        const cloudKwh = Number(item.cloud_kwh || 0);
+                        const entry = {
+                            value: Number(item.chart_value ?? 0),
+                            tooltipLabel: item.tooltip_label,
+                            timestamp: item.timestamp,
+                            cloudKwh,
+                        };
+                        if (cloudKwh > 0.001) {
+                            entry.itemStyle = { color: cloudBarGradient };
+                        }
+                        return entry;
+                    }),
                     cursor: currentPeriod === 'week' || currentPeriod === MONTH_PERIOD || currentPeriod === YEAR_PERIOD ? 'pointer' : 'default',
                 },
             ],
