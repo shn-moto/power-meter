@@ -1602,8 +1602,11 @@ def _inverter_solar_series(
     -- otherwise its kWh gets credited as solar on cloudy auto-charge nights.
     -- GREATEST(0, …): solar is physically non-negative.
     SELECT i.bucket,
-           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
-                       - COALESCE(c.power_w, 0) * {_CHARGER_KPD}) AS solar_w
+           CASE WHEN abs(a.net_w) < 0.01 AND i.power_w > 1
+                THEN 0
+                ELSE GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                                - COALESCE(c.power_w, 0) * {_CHARGER_KPD})
+           END AS solar_w
     FROM inv i INNER JOIN atorch a USING (bucket)
                 LEFT JOIN charger c USING (bucket)
     ORDER BY 1
@@ -2689,8 +2692,11 @@ def get_inverter_solar_kwh_period(
       GROUP BY bucket
     )
     SELECT COALESCE(
-        SUM(GREATEST(0, a.net_w + i.power_w / %s
-                        - COALESCE(c.power_w, 0) * %s)) * (5.0 / 60.0) / 1000.0,
+        SUM(CASE WHEN abs(a.net_w) < 0.01 AND i.power_w > 1
+                 THEN 0
+                 ELSE GREATEST(0, a.net_w + i.power_w / %s
+                                 - COALESCE(c.power_w, 0) * %s)
+            END) * (5.0 / 60.0) / 1000.0,
         0
     ) AS solar_kwh
     FROM inv i INNER JOIN atorch a USING (bucket)
@@ -2754,13 +2760,15 @@ def get_inverter_energy_breakdown(
               AT TIME ZONE %s) AS bucket,
            SUM(i.w / 1000.0 * (5.0/60.0)) AS load_kwh,
            SUM(
-               CASE WHEN a.net_w IS NOT NULL
-                    THEN GREATEST(
+               CASE WHEN a.net_w IS NULL
+                    THEN 0
+                    WHEN abs(a.net_w) < 0.01 AND i.w > 1
+                    THEN 0
+                    ELSE GREATEST(
                         0,
                         a.net_w + i.w / {_INVERTER_KPD}
                                 - COALESCE(c.w, 0) * {_CHARGER_KPD}
                     )
-                    ELSE 0
                END / 1000.0 * (5.0/60.0)
            ) AS solar_kwh
     FROM inv_5m i
@@ -2848,8 +2856,11 @@ def get_inverter_solar_peak_w_since(
       WHERE device_id = %s AND captured_at >= %s {until_clause}
       GROUP BY bucket
     )
-    SELECT MAX(GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
-                             - COALESCE(c.power_w, 0) * {_CHARGER_KPD})) AS peak_w
+    SELECT MAX(CASE WHEN abs(a.net_w) < 0.01 AND i.power_w > 1
+                    THEN 0
+                    ELSE GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                                    - COALESCE(c.power_w, 0) * {_CHARGER_KPD})
+                END) AS peak_w
     FROM inv i INNER JOIN atorch a USING (bucket)
                 LEFT JOIN charger c USING (bucket)
     """
@@ -2963,6 +2974,19 @@ def get_inverter_solar_now_w(live_samples: dict[str, "DeviceSample"] | None) -> 
     except (TypeError, ValueError):
         return 0.0
     load_ac_w = float(inv.power_w or 0.0)
+    # Atorch has a dead-band: for shunt currents below roughly 0.5 A
+    # (~50 W at 72 V) it reports DP 19 = exactly 0 instead of the true
+    # small discharge. If we blindly apply the formula in that state
+    # while the inverter is quietly running, load_ac_w / KPD comes out
+    # positive and gets mis-credited as solar (visible at night as
+    # a phantom "7 W solar generation"). Physical reality: no solar
+    # producing at night → the load is coming from the battery →
+    # Atorch is just under-reporting the discharge. Guard by returning
+    # 0 when Atorch shows exactly zero and there's a load; the tiny
+    # amount of solar we'd miss during actual sub-dead-band production
+    # is negligible.
+    if abs(atorch_net_w) < 0.01 and load_ac_w > 1.0:
+        return 0.0
     # Subtract charger DC contribution when the wall charger is running —
     # without this, every kWh from the socket would be (mis)credited as
     # solar on cloudy auto-charge nights.
@@ -3011,8 +3035,11 @@ def get_inverter_solar_trace(
       GROUP BY bucket
     )
     SELECT i.bucket,
-           GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
-                       - COALESCE(c.power_w, 0) * {_CHARGER_KPD}) AS solar_w,
+           CASE WHEN abs(a.net_w) < 0.01 AND i.power_w > 1
+                THEN 0
+                ELSE GREATEST(0, a.net_w + i.power_w / {_INVERTER_KPD}
+                                - COALESCE(c.power_w, 0) * {_CHARGER_KPD})
+           END AS solar_w,
            i.power_w AS load_w
     FROM inv i INNER JOIN atorch a USING (bucket)
                 LEFT JOIN charger c USING (bucket)
