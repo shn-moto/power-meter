@@ -2186,6 +2186,16 @@ button:hover {
     color: #d97757;
 }
 
+.meter-discrepancy-pending {
+    margin: 6px 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+
+.meter-discrepancy-pending[hidden] {
+    display: none;
+}
+
 .meter-pager {
     display: flex;
     align-items: center;

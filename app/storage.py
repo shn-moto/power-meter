@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -4227,11 +4228,25 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
 
     local_tz = _get_timezone(config)
     periods: list[dict[str, Any]] = []
+    now_utc = datetime.now(timezone.utc)
+    device_key = tuple(sorted(energy_device_ids))
     for start_dt, end_dt in zip(common_timestamps, common_timestamps[1:]):
         meter_total = 0.0
         for apt_readings in by_apt.values():
             meter_total += apt_readings[end_dt] - apt_readings[start_dt]
         meter_total = round(meter_total, 3)
+
+        # Each period costs a per-device, per-day energy pass (seconds
+        # each), so reuse earlier results. Periods that ended before the
+        # cloud-verification window can no longer change; recent ones
+        # are refreshed after a TTL.
+        memo_key = (start_dt, end_dt, meter_total, device_key)
+        memo = _DISCREPANCY_PERIOD_MEMO.get(memo_key)
+        if memo is not None:
+            settled = end_dt < now_utc - _DISCREPANCY_SETTLED_AFTER
+            if settled or monotonic() - memo[0] < _DISCREPANCY_RECENT_TTL_SECONDS:
+                periods.append(memo[1])
+                continue
 
         period_hours = max(int(round((end_dt - start_dt).total_seconds() / 3600.0)), 1)
         device_total = 0.0
@@ -4275,4 +4290,12 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
                 "restored_devices": restored_by_device,
             }
         )
+        _DISCREPANCY_PERIOD_MEMO[memo_key] = (monotonic(), periods[-1])
     return periods
+
+
+# (start_dt, end_dt, meter_kwh, device ids) -> (computed_at monotonic, period dict)
+_DISCREPANCY_PERIOD_MEMO: dict[tuple, tuple[float, dict[str, Any]]] = {}
+# Cloud verification rewrites up to 30 local days back (days_back=30).
+_DISCREPANCY_SETTLED_AFTER = timedelta(days=32)
+_DISCREPANCY_RECENT_TTL_SECONDS = 30 * 60

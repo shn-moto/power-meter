@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import threading
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
@@ -1890,6 +1891,9 @@ async def lifespan(app: FastAPI):
     # populated directly by the poll loop after each successful build_sample.
     _ = select_listener_devices  # noqa: F841 — kept for future re-introduction
     app.state.poller = asyncio.create_task(_poll_loop(app))
+    # Warm the meter discrepancy snapshot so the first dashboard load
+    # doesn't show an empty table for long.
+    _schedule_meter_periods_refresh(app.state.app_config)
     # Custom automations scheduler
     from app.scheduler import scheduler_loop, invoke_device_function_via_app
     app.state.invoke_device_function = lambda device_id, function_code, value: invoke_device_function_via_app(
@@ -2450,18 +2454,75 @@ class MeterReadingPayload(BaseModel):
     note: str | None = None
 
 
+# Discrepancy periods take tens of seconds on a cold cache, so they are
+# never computed on the request path: requests read the last snapshot and
+# a single background thread refreshes it (stale-while-revalidate).
+_METER_PERIODS_LOCK = threading.Lock()
+_METER_PERIODS_STATE: dict[str, Any] = {"periods": None, "computed_at": 0.0, "running": False, "dirty": False}
+METER_PERIODS_REFRESH_SECONDS = 10 * 60
+
+
+def _refresh_meter_periods_worker(config: AppConfig) -> None:
+    started = monotonic()
+    try:
+        periods = list(reversed(get_meter_discrepancy_periods(config)))
+    except Exception:
+        LOGGER.exception("Meter discrepancy periods refresh failed")
+        with _METER_PERIODS_LOCK:
+            _METER_PERIODS_STATE["running"] = False
+            _METER_PERIODS_STATE["computed_at"] = monotonic()
+        return
+    LOGGER.info("Meter discrepancy periods refreshed in %.1f s (%d periods)", monotonic() - started, len(periods))
+    with _METER_PERIODS_LOCK:
+        _METER_PERIODS_STATE["periods"] = periods
+        _METER_PERIODS_STATE["computed_at"] = monotonic()
+        _METER_PERIODS_STATE["running"] = False
+        rerun = _METER_PERIODS_STATE["dirty"]
+    if rerun:
+        _schedule_meter_periods_refresh(config)
+
+
+def _schedule_meter_periods_refresh(config: AppConfig, *, force: bool = False) -> None:
+    with _METER_PERIODS_LOCK:
+        state = _METER_PERIODS_STATE
+        if force:
+            state["dirty"] = True
+        stale = (
+            state["periods"] is None
+            or state["dirty"]
+            or monotonic() - state["computed_at"] > METER_PERIODS_REFRESH_SECONDS
+        )
+        if not stale or state["running"]:
+            return
+        state["running"] = True
+        state["dirty"] = False
+    threading.Thread(
+        target=_refresh_meter_periods_worker, args=(config,), name="meter-periods", daemon=True
+    ).start()
+
+
+def _get_meter_periods_snapshot(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
+    """Returns (newest-first periods, pending) without blocking."""
+    _schedule_meter_periods_refresh(config)
+    with _METER_PERIODS_LOCK:
+        state = _METER_PERIODS_STATE
+        periods = state["periods"]
+        pending = periods is None or state["running"] or state["dirty"]
+    return list(periods or []), pending
+
+
 def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
     status = get_meter_status(config)
     # Full history — the dashboard paginates both tables client-side.
     readings = list_meter_readings(config)
-    # Newest period first, same as the readings history.
-    periods = list(reversed(get_meter_discrepancy_periods(config)))
+    periods, periods_pending = _get_meter_periods_snapshot(config)
     return {
         "status": status,
         "apartments": list(METER_APARTMENTS),
         "prepaid_kwh": METER_PREPAID_KWH,
         "readings": readings,
         "discrepancy_periods": periods,
+        "discrepancy_pending": periods_pending,
     }
 
 
@@ -2509,6 +2570,7 @@ def submit_meter_reading_api(request: Request, payload: MeterReadingPayload) -> 
     # GET /api/meter-readings anyway. Skipping the compute here saves
     # ~2 s per submitted row (was ~4 s for two-apartment forms).
     _invalidate_aggregate_cache(request)
+    _schedule_meter_periods_refresh(config, force=True)
     return JSONResponse({"status": "ok"})
 
 
@@ -2517,6 +2579,7 @@ def delete_meter_reading_api(request: Request, reading_id: int) -> JSONResponse:
     config: AppConfig = request.app.state.app_config
     delete_meter_reading(config, reading_id=reading_id)
     _invalidate_aggregate_cache(request)
+    _schedule_meter_periods_refresh(config, force=True)
     return JSONResponse({"status": "ok"})
 
 

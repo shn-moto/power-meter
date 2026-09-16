@@ -815,6 +815,9 @@ if (meterSection) {
     };
     const discrepancyPager = createPager('discrepancy', 10, renderDiscrepancyPage);
 
+    const discrepancyPendingEl = meterSection.querySelector('[data-meter-discrepancy-pending]');
+    let pendingRetryTimer = null;
+
     const refreshMeter = async () => {
         try {
             const response = await fetch('/api/meter-readings', { cache: 'no-store' });
@@ -823,6 +826,12 @@ if (meterSection) {
             renderStatusTable(payload);
             historyPager.setRows(payload.readings);
             discrepancyPager.setRows(payload.discrepancy_periods);
+            // Periods are computed in the background on the server; poll
+            // until the fresh snapshot lands.
+            const pending = !!payload.discrepancy_pending;
+            if (discrepancyPendingEl) discrepancyPendingEl.hidden = !pending;
+            clearTimeout(pendingRetryTimer);
+            if (pending) pendingRetryTimer = setTimeout(refreshMeter, 5000);
         } catch (error) {
             // silent
         }

@@ -160,6 +160,7 @@
             </div>
         </form>
 
+        <p class="meter-discrepancy-pending" data-meter-discrepancy-pending {% if not meter.discrepancy_pending %}hidden{% endif %}>Считаем расхождения по периодам…</p>
         <div class="meter-discrepancy" data-meter-discrepancy {% if not meter.discrepancy_periods %}hidden{% endif %}>
             <h4>Расхождение с устройствами по периодам</h4>
             <table class="meter-discrepancy-table">
