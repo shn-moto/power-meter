@@ -679,8 +679,52 @@ if (meterSection) {
         }
     };
 
+    // Client-side pagination: the API returns the full (small) history,
+    // each table keeps its own page index across refreshes.
+    const createPager = (name, pageSize, render) => {
+        const container = meterSection.querySelector(`[data-meter-pager="${name}"]`);
+        const state = { rows: [], page: 0 };
+        const pageCount = () => Math.max(1, Math.ceil(state.rows.length / pageSize));
+        const draw = () => {
+            state.page = Math.min(Math.max(state.page, 0), pageCount() - 1);
+            const start = state.page * pageSize;
+            render(state.rows.slice(start, start + pageSize));
+            if (!container) return;
+            if (state.rows.length <= pageSize) {
+                container.hidden = true;
+                container.innerHTML = '';
+                return;
+            }
+            container.hidden = false;
+            const last = pageCount() - 1;
+            const end = Math.min(start + pageSize, state.rows.length);
+            container.innerHTML = `
+                <button type="button" data-pager-go="first" ${state.page === 0 ? 'disabled' : ''} aria-label="Первая страница">«</button>
+                <button type="button" data-pager-go="prev" ${state.page === 0 ? 'disabled' : ''} aria-label="Назад">‹</button>
+                <span class="meter-pager-info">${start + 1}–${end} из ${state.rows.length}</span>
+                <button type="button" data-pager-go="next" ${state.page === last ? 'disabled' : ''} aria-label="Вперёд">›</button>
+                <button type="button" data-pager-go="last" ${state.page === last ? 'disabled' : ''} aria-label="Последняя страница">»</button>`;
+        };
+        container?.addEventListener('click', (event) => {
+            const btn = event.target.closest('[data-pager-go]');
+            if (!btn || btn.disabled) return;
+            const go = btn.dataset.pagerGo;
+            if (go === 'first') state.page = 0;
+            else if (go === 'prev') state.page -= 1;
+            else if (go === 'next') state.page += 1;
+            else if (go === 'last') state.page = pageCount() - 1;
+            draw();
+        });
+        return {
+            setRows: (rows) => {
+                state.rows = Array.isArray(rows) ? rows : [];
+                draw();
+            },
+        };
+    };
+
     const formatReadingAt = (iso) => iso ? String(iso).slice(0, 16).replace('T', ' ') : '';
-    const renderHistory = (rows) => {
+    const renderHistoryPage = (rows) => {
         if (!historyBody) return;
         historyBody.innerHTML = (rows || []).map((row) => `
             <tr data-reading-id="${row.id}">
@@ -692,6 +736,7 @@ if (meterSection) {
             </tr>
         `).join('');
     };
+    const historyPager = createPager('history', 12, renderHistoryPage);
 
     const discrepancyContainer = meterSection.querySelector('[data-meter-discrepancy]');
     const discrepancyBody = meterSection.querySelector('[data-meter-discrepancy-body]');
@@ -731,7 +776,7 @@ if (meterSection) {
         });
     }
 
-    const renderDiscrepancy = (periods) => {
+    const renderDiscrepancyPage = (periods) => {
         if (!discrepancyContainer || !discrepancyBody) return;
         if (!periods || !periods.length) {
             discrepancyContainer.hidden = true;
@@ -768,6 +813,7 @@ if (meterSection) {
             </tr>`;
         }).join('');
     };
+    const discrepancyPager = createPager('discrepancy', 10, renderDiscrepancyPage);
 
     const refreshMeter = async () => {
         try {
@@ -775,8 +821,8 @@ if (meterSection) {
             if (!response.ok) throw new Error('failed');
             const payload = await response.json();
             renderStatusTable(payload);
-            renderHistory(payload.readings);
-            renderDiscrepancy(payload.discrepancy_periods);
+            historyPager.setRows(payload.readings);
+            discrepancyPager.setRows(payload.discrepancy_periods);
         } catch (error) {
             // silent
         }
@@ -862,4 +908,8 @@ if (meterSection) {
         const pad = (n) => String(n).padStart(2, '0');
         dtInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
     }
+
+    // Server renders only the first page; load the full lists (served
+    // from the 5-min overview cache) to enable the pagers.
+    refreshMeter();
 }

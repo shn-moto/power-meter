@@ -2452,8 +2452,10 @@ class MeterReadingPayload(BaseModel):
 
 def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
     status = get_meter_status(config)
-    readings = list_meter_readings(config, limit=24)
-    periods = get_meter_discrepancy_periods(config)
+    # Full history — the dashboard paginates both tables client-side.
+    readings = list_meter_readings(config)
+    # Newest period first, same as the readings history.
+    periods = list(reversed(get_meter_discrepancy_periods(config)))
     return {
         "status": status,
         "apartments": list(METER_APARTMENTS),

@@ -174,7 +174,7 @@
                     </tr>
                 </thead>
                 <tbody data-meter-discrepancy-body>
-                    {% for period in meter.discrepancy_periods %}
+                    {% for period in meter.discrepancy_periods[:10] %}
                     <tr>
                         <td>{{ period.start_at[:16].replace('T',' ') }} – {{ period.end_at[:16].replace('T',' ') }}</td>
                         <td>{{ '%.2f'|format(period.meter_kwh) }}</td>
@@ -190,6 +190,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            <div class="meter-pager" data-meter-pager="discrepancy"></div>
         </div>
 
         <details class="meter-history">
@@ -205,7 +206,7 @@
                     </tr>
                 </thead>
                 <tbody data-meter-history>
-                    {% for row in meter.readings %}
+                    {% for row in meter.readings[:12] %}
                     <tr data-reading-id="{{ row.id }}">
                         <td>{{ row.reading_at|string|truncate(16, true, '') }}</td>
                         <td>{{ row.apartment }}</td>
@@ -216,6 +217,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            <div class="meter-pager" data-meter-pager="history"></div>
         </details>
     </div>
 </details>

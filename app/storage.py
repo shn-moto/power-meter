@@ -3798,7 +3798,9 @@ def delete_meter_reading(config: AppConfig, *, reading_id: int) -> None:
             cursor.execute("DELETE FROM meter_readings WHERE id = %s", (reading_id,))
 
 
-def list_meter_readings(config: AppConfig, *, limit: int = 50) -> list[dict[str, Any]]:
+def list_meter_readings(config: AppConfig, *, limit: int | None = None) -> list[dict[str, Any]]:
+    """Newest first. `limit=None` returns the whole history (a few manual
+    readings per month — small enough to paginate client-side)."""
     tz = _get_timezone(config)
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:

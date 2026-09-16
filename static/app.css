@@ -2186,6 +2186,45 @@ button:hover {
     color: #d97757;
 }
 
+.meter-pager {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-feature-settings: "tnum";
+}
+
+.meter-pager[hidden] {
+    display: none;
+}
+
+.meter-pager-info {
+    padding: 0 8px;
+}
+
+.meter-pager button {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    color: var(--text);
+    min-width: 26px;
+    padding: 2px 6px;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.meter-pager button:hover:not(:disabled) {
+    background: rgba(127, 208, 255, 0.12);
+}
+
+.meter-pager button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 .sensor-history-totals {
     display: flex;
     flex-wrap: wrap;
