@@ -1,5 +1,13 @@
 const dashboardPage = document.querySelector('[data-dashboard]');
 
+// Shared by the dashboard and the meter section below.
+const escapeHtml = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
 if (dashboardPage) {
     const DASHBOARD_REFRESH_INTERVAL_MS = 1000;
     const monthEnergy = dashboardPage.querySelector('[data-summary-month-energy]');
@@ -16,13 +24,6 @@ if (dashboardPage) {
     let dashboardTimerId = null;
     let dashboardAbortController = null;
     let dashboardPollingStopped = false;
-
-    const escapeHtml = (value) => String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
 
     const applyReadingStatus = (node, status) => {
         node.classList.remove('is-ok', 'is-warning', 'is-error');
@@ -833,7 +834,7 @@ if (meterSection) {
             clearTimeout(pendingRetryTimer);
             if (pending) pendingRetryTimer = setTimeout(refreshMeter, 5000);
         } catch (error) {
-            // silent
+            console.error('Meter refresh failed', error);
         }
     };
 
