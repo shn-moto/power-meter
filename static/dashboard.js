@@ -823,7 +823,7 @@ if (meterSection) {
             const tooltipHtml = restoredDevs.length
                 ? `<div class="meter-tooltip-title">Восстановлено / распределено:</div>${
                     restoredDevs.map((d) => {
-                        const suffix = d.kind === 'estimate' ? ' (факт, по дням)' : '';
+                        const suffix = d.kind === 'estimate' ? ' (по дням)' : '';
                         return `<div class="meter-tooltip-row"><span>${escapeHtml(d.name)}${suffix}</span><span>+${Number(d.kwh).toFixed(2)} кВт·ч</span></div>`;
                     }).join('')
                 }`
