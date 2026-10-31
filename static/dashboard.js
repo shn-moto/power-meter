@@ -526,6 +526,25 @@ if (dashboardPage) {
     }
 
     const meterUnderpayment = dashboardPage.querySelector('[data-summary-meter-underpayment]');
+    const offlineMeterAlert = document.querySelector('[data-meter-connectivity-alert]');
+    const offlineMeterCount = document.querySelector('[data-meter-offline-count]');
+    const offlineMeterList = document.querySelector('[data-meter-offline-list]');
+
+    const syncOfflineMeters = (devices) => {
+        if (!offlineMeterAlert || !offlineMeterList) return;
+        const offline = devices.filter((device) => device.last_seen_status === 'error');
+        offlineMeterAlert.hidden = offline.length === 0;
+        if (offlineMeterCount) offlineMeterCount.textContent = String(offline.length);
+        offlineMeterList.innerHTML = offline.map((device) => {
+            const lastSeen = device.last_seen
+                ? `последние данные: ${escapeHtml(device.last_seen)}`
+                : 'данных ещё не было';
+            return `<a href="/devices/${encodeURIComponent(device.device_id || '')}">
+                <strong>${escapeHtml(device.name)}</strong>
+                <small>${escapeHtml(device.room)} · ${lastSeen}</small>
+            </a>`;
+        }).join('');
+    };
 
     const applyDashboardPayload = (payload) => {
         monthEnergy.textContent = `${payload.month_energy_kwh} кВт·ч`;
@@ -543,6 +562,7 @@ if (dashboardPage) {
             const upCost = payload.meter?.status?.underpayment_cost;
             meterUnderpayment.textContent = (upCost !== null && upCost !== undefined) ? Number(upCost).toFixed(2) : '—';
         }
+        syncOfflineMeters(payload.devices || []);
         syncDevices(payload.devices || []);
         syncGeneratorDevices(payload.generator_devices || []);
         syncSensorDevices(payload.sensor_devices || []);
@@ -649,6 +669,10 @@ if (meterSection) {
         }).join('');
         const consumptionCells = apts.map((apt) => `<td>${fmtKwhCell(apt.consumption_kwh)}</td>`).join('');
         const totals = meter.status || {};
+        const prepaidMonths = Number(totals.prepaid_months || 0);
+        const prepaidLabel = prepaidMonths > 0
+            ? `Предоплачено (${prepaidMonths} × ${Number(totals.prepaid_monthly_kwh).toFixed(0)})`
+            : 'Предоплачено';
         const totalConsumption = totals.total_consumption_kwh !== null && totals.total_consumption_kwh !== undefined
             ? `<strong>${Number(totals.total_consumption_kwh).toFixed(2)}</strong>` : '—';
         const upKwh = totals.underpayment_kwh;
@@ -664,7 +688,7 @@ if (meterSection) {
                 <tr><th>Расчётное</th>${settlementCells}<td></td></tr>
                 <tr><th>Последнее</th>${latestCells}<td></td></tr>
                 <tr><th>Расход с расчётной</th>${consumptionCells}<td>${totalConsumption}</td></tr>
-                <tr><th>Предоплачено</th><td colspan="${aptCount}"></td><td>${Number(meter.prepaid_kwh).toFixed(0)}</td></tr>
+                <tr><th>${prepaidLabel}</th><td colspan="${aptCount}"></td><td>${Number(meter.prepaid_kwh).toFixed(0)}</td></tr>
                 <tr class="meter-row-underpayment"><th>Недоплата</th><td colspan="${aptCount}"></td><td>${underpaymentCell}</td></tr>
             </tbody>
         </table>`;

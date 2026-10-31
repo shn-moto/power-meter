@@ -88,7 +88,7 @@ from app.raw_listeners import RawListener, RawDpsSnapshot, has_trick678_request_
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-templates.env.globals["static_asset_version"] = "20260506-02"
+templates.env.globals["static_asset_version"] = "20261031-01"
 
 DEVICE_IMAGE_EXTENSIONS = (".png", ".webp", ".jpg", ".jpeg", ".svg")
 AGGREGATE_CACHE_TTL_SECONDS = 5.0
@@ -2519,7 +2519,7 @@ def _build_meter_overview(config: AppConfig) -> dict[str, Any]:
     return {
         "status": status,
         "apartments": list(METER_APARTMENTS),
-        "prepaid_kwh": METER_PREPAID_KWH,
+        "prepaid_kwh": status["prepaid_kwh"],
         "readings": readings,
         "discrepancy_periods": periods,
         "discrepancy_pending": periods_pending,

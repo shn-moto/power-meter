@@ -3830,13 +3830,24 @@ def _coerce_reading_kwh(value: Any) -> float | None:
         return None
 
 
+def _elapsed_calendar_months(start: datetime, end: datetime) -> int:
+    """Number of month boundaries crossed since the settlement reading.
+
+    For example, 14 April through 13 October covers six billing months
+    (May–October), matching the owner's calculation.
+    """
+    if end < start:
+        return 0
+    return (end.year - start.year) * 12 + end.month - start.month
+
+
 def get_meter_status(config: AppConfig) -> dict[str, Any]:
     """Compute current underpayment for the paired apartments.
 
     For each apartment: take the most recent settlement reading and the
     most recent reading overall. Consumption since settlement =
-    latest - settlement. Combined underpayment = sum_consumption -
-    METER_PREPAID_KWH (clamped to zero)."""
+    latest - settlement. The combined underpayment subtracts the monthly
+    prepaid quota once for every elapsed calendar month."""
     tz = _get_timezone(config)
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -3861,6 +3872,8 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
     apartments: list[dict[str, Any]] = []
     total_consumption = 0.0
     have_any_consumption = False
+    period_start: datetime | None = None
+    period_end: datetime | None = None
     for apt in METER_APARTMENTS:
         apt_rows = by_apt[apt]
         latest = apt_rows[0] if apt_rows else None
@@ -3872,6 +3885,10 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             consumption_kwh = max(latest_kwh - settlement_kwh, 0.0)
             total_consumption += consumption_kwh
             have_any_consumption = True
+            settlement_at = settlement["reading_at"]
+            latest_at = latest["reading_at"]
+            period_start = settlement_at if period_start is None else min(period_start, settlement_at)
+            period_end = latest_at if period_end is None else max(period_end, latest_at)
         apartments.append(
             {
                 "apartment": apt,
@@ -3887,15 +3904,23 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             }
         )
 
+    prepaid_months = (
+        _elapsed_calendar_months(period_start, period_end)
+        if period_start is not None and period_end is not None
+        else 0
+    )
+    prepaid_kwh = round(prepaid_months * METER_PREPAID_KWH, 3)
     underpayment_kwh = None
     underpayment_cost = None
     if have_any_consumption:
-        underpayment_kwh = round(max(total_consumption - METER_PREPAID_KWH, 0.0), 3)
+        underpayment_kwh = round(max(total_consumption - prepaid_kwh, 0.0), 3)
         underpayment_cost = round(underpayment_kwh * float(config.tariff_per_kwh or 0.0), 2)
 
     return {
         "apartments": apartments,
-        "prepaid_kwh": METER_PREPAID_KWH,
+        "prepaid_kwh": prepaid_kwh,
+        "prepaid_monthly_kwh": METER_PREPAID_KWH,
+        "prepaid_months": prepaid_months,
         "tariff_per_kwh": float(config.tariff_per_kwh or 0.0),
         "total_consumption_kwh": round(total_consumption, 3) if have_any_consumption else None,
         "underpayment_kwh": underpayment_kwh,

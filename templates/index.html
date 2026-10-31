@@ -85,6 +85,22 @@
     </div>
 </section>
 
+{% set offline_meters = summary.devices|selectattr('last_seen_status', 'equalto', 'error')|list %}
+<section class="meter-connectivity-alert" data-meter-connectivity-alert role="alert" {% if not offline_meters %}hidden{% endif %}>
+    <div class="meter-connectivity-heading">
+        <strong>Нет связи со счётчиками</strong>
+        <span>Отключено: <b data-meter-offline-count>{{ offline_meters|length }}</b></span>
+    </div>
+    <div class="meter-connectivity-list" data-meter-offline-list>
+        {% for device in offline_meters %}
+        <a href="/devices/{{ device.device_id }}">
+            <strong>{{ device.name }}</strong>
+            <small>{{ device.room }} · {% if device.last_seen %}последние данные: {{ device.last_seen }}{% else %}данных ещё не было{% endif %}</small>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+
 {% set meter = summary.meter %}
 <details class="meter-section" data-meter-section>
     <summary class="meter-section-summary">
@@ -126,7 +142,7 @@
                         <td>{% if meter.status.total_consumption_kwh is not none %}<strong>{{ '%.2f'|format(meter.status.total_consumption_kwh) }}</strong>{% else %}—{% endif %}</td>
                     </tr>
                     <tr>
-                        <th>Предоплачено</th>
+                        <th>Предоплачено{% if meter.status.prepaid_months %} ({{ meter.status.prepaid_months }} × {{ '%.0f'|format(meter.status.prepaid_monthly_kwh) }}){% endif %}</th>
                         <td colspan="{{ meter.status.apartments|length }}"></td>
                         <td>{{ '%.0f'|format(meter.prepaid_kwh) }}</td>
                     </tr>

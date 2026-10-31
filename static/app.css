@@ -1857,6 +1857,53 @@ button:hover {
     }
 }
 
+.meter-connectivity-alert {
+    margin: 0 0 18px;
+    padding: 14px 16px;
+    border: 1px solid rgba(208, 82, 82, 0.45);
+    border-left: 4px solid #d05252;
+    border-radius: 4px;
+    background: rgba(176, 62, 62, 0.12);
+}
+
+.meter-connectivity-alert[hidden] {
+    display: none;
+}
+
+.meter-connectivity-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: #ef9a9a;
+}
+
+.meter-connectivity-heading > span {
+    color: var(--text);
+    font-size: 0.88rem;
+}
+
+.meter-connectivity-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-top: 10px;
+}
+
+.meter-connectivity-list a {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.meter-connectivity-list a:hover strong {
+    text-decoration: underline;
+}
+
+.meter-connectivity-list small {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+}
+
 .meter-section {
     margin: 18px 0;
     border: 1px solid rgba(255, 255, 255, 0.08);

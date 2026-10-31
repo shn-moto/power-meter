@@ -250,8 +250,8 @@ toggle-enabled / cron-edit controls. Endpoints under
 
 ## 9. Meter readings ledger
 
-- Independent of Tuya. Two physical meters, apartments "2" and "3", combined billing with 250 kWh prepaid quota per settlement period (`METER_PREPAID_KWH` in `app/storage.py`).
-- One row per (apartment, reading_date) in `meter_readings`. The "settlement" flag marks a reading as the new baseline. The combined undercharge is `(sum of (latest − settlement) across apartments) − 250` clamped to ≥0, converted to currency by `config.tariff_per_kwh`.
+- Independent of Tuya. Two physical meters, apartments "2" and "3", combined billing with 250 kWh prepaid quota per calendar month (`METER_PREPAID_KWH` in `app/storage.py`).
+- One row per (apartment, reading_date) in `meter_readings`. The "settlement" flag marks a reading as the new baseline. The combined undercharge is `(sum of (latest − settlement) across apartments) − (elapsed calendar months × 250)` clamped to ≥0, converted to currency by `config.tariff_per_kwh`. For example, 14 April through 13 October counts as six months (May–October).
 - Surfaced as a stat card in the hero row (currency, same format as estimated cost) and a collapsible status table + form below the device grid. JS lives at the bottom of `static/dashboard.js`.
 
 ## 10. Auth
