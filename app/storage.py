@@ -2187,21 +2187,19 @@ def _counter_bar_energies_kwh(
     bucket_rows: list[dict[str, Any]],
     energy_counter_meta: tuple[str, float],
     initial_anchor_kwh: float | None = None,
+    initial_anchor_captured_at: datetime | None = None,
+    suppress_gap_jumps: bool = False,
 ) -> list[float]:
     """For counter devices, per-bucket energy = last_kwh - prev_bucket_last_kwh.
-    Anchoring on the previous bucket's last counter (instead of this bucket's
-    first counter) makes the bars telescope: sum equals last_of_last_bucket
-    minus first_of_first_bucket. Inter-bucket counter increments are no longer
-    lost between adjacent buckets.
 
-    `initial_anchor_kwh` is used as the anchor for the very first bucket in
-    the range. Passing the counter value AT-OR-BEFORE the query start lets a
-    gap-recovery jump attribute to the first bucket after the gap, even when
-    the pre-gap sample lies outside the query window (e.g. day-view chart
-    that starts on the recovery day)."""
+    When a range has explicit gap-recovery estimates, a counter jump across a
+    sampling gap is suppressed so the reconnection spike is not counted on
+    top of those estimates. Increments within the online bucket are retained.
+    """
     dp_key, scale_divisor = energy_counter_meta
     energies: list[float] = []
     prev_last_kwh: float | None = initial_anchor_kwh
+    prev_captured_at = initial_anchor_captured_at
     for row in bucket_rows:
         last_kwh = _read_energy_counter_kwh(
             _normalize_json_field(row.get("last_raw_dps")), dp_key, scale_divisor
@@ -2209,15 +2207,31 @@ def _counter_bar_energies_kwh(
         first_kwh = _read_energy_counter_kwh(
             _normalize_json_field(row.get("first_raw_dps")), dp_key, scale_divisor
         )
+        first_captured_at = row.get("first_captured_at")
+        last_captured_at = row.get("last_captured_at")
+        if first_captured_at is not None and not isinstance(first_captured_at, datetime):
+            first_captured_at = _parse_dt(first_captured_at)
+        if last_captured_at is not None and not isinstance(last_captured_at, datetime):
+            last_captured_at = _parse_dt(last_captured_at)
         if last_kwh is None:
             energies.append(0.0)
             continue
         anchor_kwh = prev_last_kwh if prev_last_kwh is not None else first_kwh
+        has_sampling_gap = (
+            suppress_gap_jumps
+            and prev_captured_at is not None
+            and first_captured_at is not None
+            and (first_captured_at - prev_captured_at).total_seconds() > 3600
+        )
+        if has_sampling_gap:
+            anchor_kwh = first_kwh
         if anchor_kwh is None or last_kwh < anchor_kwh:
             energies.append(0.0)
         else:
             energies.append(last_kwh - anchor_kwh)
         prev_last_kwh = last_kwh
+        if last_captured_at is not None:
+            prev_captured_at = last_captured_at
     return energies
 
 
@@ -2226,12 +2240,20 @@ def _aggregate_energy_wh(
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
     initial_anchor_kwh: float | None = None,
+    initial_anchor_captured_at: datetime | None = None,
+    suppress_gap_jumps: bool = False,
 ) -> float:
     if not bucket_rows:
         return 0.0
 
     if energy_counter_meta:
-        return sum(_counter_bar_energies_kwh(bucket_rows, energy_counter_meta, initial_anchor_kwh)) * 1000.0
+        return sum(_counter_bar_energies_kwh(
+            bucket_rows,
+            energy_counter_meta,
+            initial_anchor_kwh,
+            initial_anchor_captured_at,
+            suppress_gap_jumps,
+        )) * 1000.0
 
     return sum(_bucket_energy_wh(row, bucket) for row in bucket_rows)
 
@@ -2241,10 +2263,18 @@ def _build_chart_series_from_aggregate(
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
     initial_anchor_kwh: float | None = None,
+    initial_anchor_captured_at: datetime | None = None,
+    suppress_gap_jumps: bool = False,
 ) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
     if energy_counter_meta:
-        counter_energies = _counter_bar_energies_kwh(bucket_rows, energy_counter_meta, initial_anchor_kwh)
+        counter_energies = _counter_bar_energies_kwh(
+            bucket_rows,
+            energy_counter_meta,
+            initial_anchor_kwh,
+            initial_anchor_captured_at,
+            suppress_gap_jumps,
+        )
     else:
         counter_energies = []
 
@@ -2268,6 +2298,28 @@ def _build_chart_series_from_aggregate(
     return series
 
 
+def _has_gap_recovery_estimates(
+    config: AppConfig,
+    device_id: str,
+    start: datetime,
+    end: datetime,
+) -> bool:
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM device_synthetic_hourly
+                    WHERE device_id = %s AND source = 'gap-recovery'
+                      AND bucket >= %s AND bucket < %s
+                ) AS present
+                """,
+                (device_id, start, end),
+            )
+            row = cursor.fetchone()
+    return bool(row and row.get("present"))
+
+
 def _merge_synthetic_hourly(
     config: AppConfig,
     device_id: str,
@@ -2276,15 +2328,10 @@ def _merge_synthetic_hourly(
     end: datetime,
     bucket: str,
 ) -> None:
-    """Attach cloud-verified restoration bars from device_synthetic_hourly
-    onto an already-built chart series. For each synthetic row falling
-    into a series bucket, adds the restored kWh to that bucket's total
-    and stashes the portion in `cloud_kwh` so the frontend can render
-    it with a distinctive fill.
+    """Overlay cloud restorations and explicitly marked gap estimates.
 
-    For hour buckets, sub-hour granularity matches naturally. For day /
-    month buckets, all synthetic rows for the calendar day / month
-    collapse into that bucket.
+    `cloud_kwh` retains the combined restored value for frontend styling;
+    `estimate_kwh` identifies the estimated portion in tooltips.
     """
     if not series:
         return
@@ -2292,7 +2339,8 @@ def _merge_synthetic_hourly(
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT bucket, SUM(kwh) AS kwh, MIN(source) AS source
+                SELECT bucket, SUM(kwh) AS kwh,
+                       COALESCE(SUM(kwh) FILTER (WHERE source = 'gap-recovery'), 0) AS estimate_kwh
                   FROM device_synthetic_hourly
                  WHERE device_id = %s
                    AND bucket >= %s
@@ -2317,12 +2365,17 @@ def _merge_synthetic_hourly(
             return local.strftime("%Y-%m")
         return local.strftime("%Y-%m-%dT%H:%M")
 
-    synth_by_key: dict[str, float] = {}
+    synth_by_key: dict[str, tuple[float, float]] = {}
     for row in rows:
         b = row.get("bucket")
         if not isinstance(b, datetime):
             b = _parse_dt(b)
-        synth_by_key[_key_of(b)] = synth_by_key.get(_key_of(b), 0.0) + float(row.get("kwh") or 0.0)
+        key = _key_of(b)
+        previous, previous_estimate = synth_by_key.get(key, (0.0, 0.0))
+        synth_by_key[key] = (
+            previous + float(row.get("kwh") or 0.0),
+            previous_estimate + float(row.get("estimate_kwh") or 0.0),
+        )
 
     for item in series:
         ts = item.get("timestamp")
@@ -2330,17 +2383,14 @@ def _merge_synthetic_hourly(
             continue
         dt = _parse_dt(ts) if not isinstance(ts, datetime) else ts
         key = _key_of(dt)
-        cloud_kwh = synth_by_key.get(key, 0.0)
-        if cloud_kwh > 0.001:
-            item["cloud_kwh"] = round(cloud_kwh, 4)
-            item["energy_kwh"] = round(float(item.get("energy_kwh") or 0.0) + cloud_kwh, 4)
-            # If `chart_value` was already computed by _prepare_chart_series
-            # (energy-metric chart), keep it in sync so the bar height
-            # includes the restored portion. Doesn't apply to power-metric
-            # charts because those show avg power, not energy.
+        restored_kwh, estimate_kwh = synth_by_key.get(key, (0.0, 0.0))
+        if restored_kwh > 0.001:
+            item["cloud_kwh"] = round(restored_kwh, 4)
+            item["estimate_kwh"] = round(estimate_kwh, 4)
+            item["energy_kwh"] = round(float(item.get("energy_kwh") or 0.0) + restored_kwh, 4)
             if "chart_value" in item:
                 item["chart_value"] = round(
-                    float(item.get("chart_value") or 0.0) + cloud_kwh, 4
+                    float(item.get("chart_value") or 0.0) + restored_kwh, 4
                 )
 
 
@@ -2364,9 +2414,16 @@ def _prepare_chart_series(
     bucket: str,
     energy_counter_meta: tuple[str, float] | None,
     initial_anchor_kwh: float | None = None,
+    initial_anchor_captured_at: datetime | None = None,
+    suppress_gap_jumps: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     base_series = _build_chart_series_from_aggregate(
-        rows_by_device, bucket, energy_counter_meta, initial_anchor_kwh
+        rows_by_device,
+        bucket,
+        energy_counter_meta,
+        initial_anchor_kwh,
+        initial_anchor_captured_at,
+        suppress_gap_jumps,
     )
     use_power_chart = (
         energy_counter_meta is None
@@ -3364,20 +3421,22 @@ def _build_device_stats_result(
     capabilities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     energy_counter_meta = _get_energy_counter_meta(config, device_id, capabilities)
+    suppress_gap_jumps = (
+        energy_counter_meta is not None
+        and _has_gap_recovery_estimates(config, device_id, start, end)
+    )
 
-    # For counter devices, look up the counter value AT-OR-BEFORE start so
-    # the first bucket in range can telescope over any pre-range gap
-    # recovery (Smart Life shows the full delta as a spike on the first
-    # bucket back online — this makes our day-view do the same when the
-    # gap crossed the query start boundary).
+    # For counter devices, anchor the first bucket at the latest pre-range
+    # value. Explicit gap estimates suppress the reconnect jump separately.
     initial_anchor_kwh: float | None = None
+    initial_anchor_captured_at: datetime | None = None
     if energy_counter_meta is not None:
         dp_key, scale_divisor = energy_counter_meta
         with _connect(config.database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT raw_dps FROM samples
+                    SELECT captured_at, raw_dps FROM samples
                     WHERE device_id = %s AND captured_at < %s
                     ORDER BY captured_at DESC LIMIT 1
                     """,
@@ -3388,17 +3447,29 @@ def _build_device_stats_result(
             initial_anchor_kwh = _read_energy_counter_kwh(
                 _normalize_json_field(row["raw_dps"]), dp_key, scale_divisor
             )
+            initial_anchor_captured_at = row["captured_at"]
 
     chart_series, chart = _prepare_chart_series(
-        config, bucket_rows, start, end, period, bucket, energy_counter_meta, initial_anchor_kwh
+        config,
+        bucket_rows,
+        start,
+        end,
+        period,
+        bucket,
+        energy_counter_meta,
+        initial_anchor_kwh,
+        initial_anchor_captured_at,
+        suppress_gap_jumps,
     )
-    # Overlay cloud-verified restoration bars from device_synthetic_hourly.
-    # They land in whichever bucket contains their end-of-day marker; the
-    # frontend uses the injected `cloud_kwh` field to render the extra
-    # amount in a distinct fill.
     _merge_synthetic_hourly(config, device_id, chart_series, start, end, bucket)
-    total_energy_wh = _aggregate_energy_wh(bucket_rows, bucket, energy_counter_meta, initial_anchor_kwh)
-    # Cloud restorations aren't in the samples-hourly totals — add them.
+    total_energy_wh = _aggregate_energy_wh(
+        bucket_rows,
+        bucket,
+        energy_counter_meta,
+        initial_anchor_kwh,
+        initial_anchor_captured_at,
+        suppress_gap_jumps,
+    )
     total_energy_wh += sum(
         float(item.get("cloud_kwh") or 0.0) for item in chart_series
     ) * 1000.0
@@ -4000,6 +4071,7 @@ def _local_fragment_kwh(
     capabilities: list[dict[str, Any]],
     counter_meta: tuple[str, float] | None,
     is_total_type: bool,
+    suppress_gap_jumps: bool = False,
 ) -> float:
     """kWh estimate for an arbitrary [start, end] fragment using local
     samples only. Counter delta preferred, trapezoidal fallback, take
@@ -4008,13 +4080,15 @@ def _local_fragment_kwh(
         return 0.0
 
     counter_kwh: float | None = None
+    start_anchor_kwh: float | None = None
+    start_captured_at: datetime | None = None
     if counter_meta is not None:
         dp_key, scale_divisor = counter_meta
         with _connect(config.database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT raw_dps FROM samples
+                    SELECT captured_at, raw_dps FROM samples
                     WHERE device_id = %s AND captured_at <= %s
                     ORDER BY captured_at DESC LIMIT 1
                     """,
@@ -4031,9 +4105,11 @@ def _local_fragment_kwh(
                 )
                 end_row = cursor.fetchone()
         if start_row and end_row:
+            start_captured_at = start_row["captured_at"]
             start_counter = _read_energy_counter_kwh(
                 _normalize_json_field(start_row["raw_dps"]), dp_key, scale_divisor
             )
+            start_anchor_kwh = start_counter
             end_counter = _read_energy_counter_kwh(
                 _normalize_json_field(end_row["raw_dps"]), dp_key, scale_divisor
             )
@@ -4047,6 +4123,29 @@ def _local_fragment_kwh(
     # total-type: only counter is meaningful — power_w column stores the
     # counter reading, not instantaneous power.
     if is_total_type:
+        if suppress_gap_jumps and counter_meta is not None:
+            with _connect(config.database_url) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT bucket, first_raw_dps, last_raw_dps,
+                               first_captured_at, last_captured_at
+                        FROM samples_hourly
+                        WHERE device_id = %s
+                          AND bucket >= date_trunc('hour', %s)
+                          AND bucket < %s
+                        ORDER BY bucket
+                        """,
+                        (device_id, start_dt, end_dt),
+                    )
+                    rows = list(cursor.fetchall())
+            return sum(_counter_bar_energies_kwh(
+                rows,
+                counter_meta,
+                start_anchor_kwh,
+                start_captured_at,
+                True,
+            ))
         return counter_kwh or 0.0
 
     # Trapezoidal estimate. For fragments longer than 4 hours use the
@@ -4102,6 +4201,38 @@ def _local_fragment_kwh(
     return counter_kwh
 
 
+def _gap_estimate_kwh_for_range(
+    config: AppConfig,
+    device_id: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> float:
+    """Estimated kWh overlapping a range, prorated inside edge hours."""
+    with _connect(config.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(
+                    kwh * GREATEST(
+                        0,
+                        EXTRACT(EPOCH FROM (
+                            LEAST(bucket + INTERVAL '1 hour', %(end)s)
+                            - GREATEST(bucket, %(start)s)
+                        )) / 3600.0
+                    )
+                ), 0) AS kwh
+                FROM device_synthetic_hourly
+                WHERE device_id = %(device_id)s
+                  AND source = 'gap-recovery'
+                  AND bucket < %(end)s
+                  AND bucket + INTERVAL '1 hour' > %(start)s
+                """,
+                {"device_id": device_id, "start": start_dt, "end": end_dt},
+            )
+            row = cursor.fetchone()
+    return float((row or {}).get("kwh") or 0.0)
+
+
 def _device_energy_kwh_for_range(
     config: AppConfig,
     device_id: str,
@@ -4128,6 +4259,10 @@ def _device_energy_kwh_for_range(
     is_total_type = (
         bool(control_device)
         and str(control_device.power_type or "total").strip().lower() == "total"
+    )
+    suppress_gap_jumps = (
+        is_total_type
+        and _has_gap_recovery_estimates(config, device_id, start_dt, end_dt)
     )
 
     # Coverage in hours — unchanged behaviour, based on samples_hourly
@@ -4173,7 +4308,7 @@ def _device_energy_kwh_for_range(
         total_kwh += _local_fragment_kwh(
             config, device_id, start_dt,
             first_full_day_start.astimezone(timezone.utc),
-            capabilities, counter_meta, is_total_type,
+            capabilities, counter_meta, is_total_type, suppress_gap_jumps,
         )
 
     # Whole days between first_full_day_start (inclusive) and
@@ -4200,7 +4335,7 @@ def _device_energy_kwh_for_range(
                 config, device_id,
                 first_full_day_start.astimezone(timezone.utc),
                 last_full_day_end.astimezone(timezone.utc),
-                capabilities, counter_meta, is_total_type,
+                capabilities, counter_meta, is_total_type, suppress_gap_jumps,
             )
         else:
             cursor_day = first_full_day_start
@@ -4218,7 +4353,7 @@ def _device_energy_kwh_for_range(
                         config, device_id,
                         cursor_day.astimezone(timezone.utc),
                         next_day.astimezone(timezone.utc),
-                        capabilities, counter_meta, is_total_type,
+                        capabilities, counter_meta, is_total_type, suppress_gap_jumps,
                     )
                     restored_kwh += max(0.0, verified - local_alt)
                 else:
@@ -4226,7 +4361,7 @@ def _device_energy_kwh_for_range(
                         config, device_id,
                         cursor_day.astimezone(timezone.utc),
                         next_day.astimezone(timezone.utc),
-                        capabilities, counter_meta, is_total_type,
+                        capabilities, counter_meta, is_total_type, suppress_gap_jumps,
                     )
                 cursor_day = next_day
 
@@ -4236,27 +4371,29 @@ def _device_energy_kwh_for_range(
             config, device_id,
             last_full_day_end.astimezone(timezone.utc),
             end_dt,
-            capabilities, counter_meta, is_total_type,
+            capabilities, counter_meta, is_total_type, suppress_gap_jumps,
         )
 
-    # Stash the restoration delta so the meter-discrepancy caller can
-    # surface it without a second pass. Not exposed via return type to
-    # keep the two-tuple contract for other callers; retrievable via
-    # get_last_range_restored_kwh().
+    estimated_kwh = _gap_estimate_kwh_for_range(config, device_id, start_dt, end_dt)
+    total_kwh += estimated_kwh
+
+    # Keep the two-tuple return contract; discrepancy reporting reads these
+    # per-device restoration details immediately after each range call.
     _LAST_RANGE_RESTORED[device_id] = restored_kwh
+    _LAST_RANGE_ESTIMATED[device_id] = estimated_kwh
     return total_kwh, hours_with_data
 
 
 _LAST_RANGE_RESTORED: dict[str, float] = {}
+_LAST_RANGE_ESTIMATED: dict[str, float] = {}
 
 
 def get_last_range_restored_kwh(device_id: str) -> float:
-    """Companion to _device_energy_kwh_for_range: after that function has
-    been called for a (device, range) pair, this returns how much cloud
-    verification contributed above the pure-local estimate. Kept as a
-    module-level side-channel to preserve the existing (kwh, hours)
-    return type without touching every caller."""
     return _LAST_RANGE_RESTORED.get(device_id, 0.0)
+
+
+def get_last_range_estimated_kwh(device_id: str) -> float:
+    return _LAST_RANGE_ESTIMATED.get(device_id, 0.0)
 
 
 def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
@@ -4347,12 +4484,21 @@ def get_meter_discrepancy_periods(config: AppConfig) -> list[dict[str, Any]]:
             device_total += kwh
             device_hours[device_id] = hours
             per_device_restored = get_last_range_restored_kwh(device_id)
-            restored_total += per_device_restored
+            per_device_estimated = get_last_range_estimated_kwh(device_id)
+            restored_total += per_device_restored + per_device_estimated
             if per_device_restored > 0.005:
                 restored_by_device.append({
                     "device_id": device_id,
                     "name": device_names_by_id.get(device_id, device_id),
                     "kwh": round(per_device_restored, 3),
+                    "kind": "cloud",
+                })
+            if per_device_estimated > 0.005:
+                restored_by_device.append({
+                    "device_id": device_id,
+                    "name": device_names_by_id.get(device_id, device_id),
+                    "kwh": round(per_device_estimated, 3),
+                    "kind": "estimate",
                 })
         # Sort by contribution, largest first — the tooltip shows the
         # biggest offenders first.
