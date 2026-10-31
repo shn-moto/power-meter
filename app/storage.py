@@ -3830,26 +3830,78 @@ def _coerce_reading_kwh(value: Any) -> float | None:
         return None
 
 
-def _elapsed_calendar_months(start: datetime, end: datetime) -> int:
-    """Number of prepaid monthly quotas since the settlement reading.
+def _next_billing_month(value: datetime) -> datetime:
+    """Same local time and as same day as possible one month later."""
+    year = value.year + (1 if value.month == 12 else 0)
+    month = 1 if value.month == 12 else value.month + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
 
-    For example, 14 April through 13 October covers six billing months
-    (May–October), matching the owner's calculation. A positive interval
-    within one calendar month still uses that month's prepaid quota.
+
+def _interpolate_meter_reading(
+    timeline: list[tuple[datetime, float]],
+    at: datetime,
+) -> float:
+    """Cumulative meter value at a billing boundary.
+
+    Exact readings win. Otherwise interpolate between the surrounding manual
+    readings; outside the timeline the nearest endpoint is held constant.
+    """
+    if at <= timeline[0][0]:
+        return timeline[0][1]
+    if at >= timeline[-1][0]:
+        return timeline[-1][1]
+    for (start_at, start_kwh), (end_at, end_kwh) in zip(timeline, timeline[1:]):
+        if start_at <= at <= end_at:
+            if at == end_at:
+                return end_kwh
+            ratio = (at - start_at).total_seconds() / (end_at - start_at).total_seconds()
+            return start_kwh + (end_kwh - start_kwh) * ratio
+    raise ValueError("Meter-reading timeline is not ordered")
+
+
+def _calculate_monthly_underpayment(
+    timelines: list[list[tuple[datetime, float]]],
+    start: datetime,
+    end: datetime,
+) -> tuple[int, float]:
+    """Return billing-cycle count and combined underpayment in kWh.
+
+    Each monthly cycle starts on the settlement day's monthly anniversary.
+    The 250 kWh quota is applied to each cycle independently, so unused quota
+    in the current partial month never reduces debt from earlier months.
     """
     if end <= start:
-        return 0
-    elapsed_months = (end.year - start.year) * 12 + end.month - start.month
-    return max(1, elapsed_months)
+        return 0, 0.0
+
+    months = 0
+    underpayment_kwh = 0.0
+    cycle_start = start
+    while cycle_start < end:
+        cycle_end = min(_next_billing_month(cycle_start), end)
+        cycle_consumption = 0.0
+        for timeline in timelines:
+            if not timeline:
+                continue
+            fragment_start = max(cycle_start, timeline[0][0])
+            fragment_end = min(cycle_end, timeline[-1][0])
+            if fragment_end <= fragment_start:
+                continue
+            start_kwh = _interpolate_meter_reading(timeline, fragment_start)
+            end_kwh = _interpolate_meter_reading(timeline, fragment_end)
+            cycle_consumption += max(end_kwh - start_kwh, 0.0)
+        months += 1
+        underpayment_kwh += max(cycle_consumption - METER_PREPAID_KWH, 0.0)
+        cycle_start = cycle_end
+    return months, underpayment_kwh
 
 
 def get_meter_status(config: AppConfig) -> dict[str, Any]:
     """Compute current underpayment for the paired apartments.
 
-    For each apartment: take the most recent settlement reading and the
-    most recent reading overall. Consumption since settlement =
-    latest - settlement. The combined underpayment subtracts the monthly
-    prepaid quota once for every elapsed calendar month."""
+    The latest settlement and overall readings bound each apartment's
+    timeline. Combined consumption is split into monthly billing cycles and
+    each cycle contributes only consumption above the prepaid quota."""
     tz = _get_timezone(config)
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -3872,6 +3924,7 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             by_apt[apt].append(row)
 
     apartments: list[dict[str, Any]] = []
+    billing_timelines: list[list[tuple[datetime, float]]] = []
     total_consumption = 0.0
     have_any_consumption = False
     period_start: datetime | None = None
@@ -3891,6 +3944,14 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             latest_at = latest["reading_at"]
             period_start = settlement_at if period_start is None else min(period_start, settlement_at)
             period_end = latest_at if period_end is None else max(period_end, latest_at)
+
+            timeline_by_time = {settlement_at: settlement_kwh, latest_at: latest_kwh}
+            for reading in apt_rows:
+                reading_at = reading["reading_at"]
+                reading_kwh = _coerce_reading_kwh(reading["reading_kwh"])
+                if reading_kwh is not None and settlement_at <= reading_at <= latest_at:
+                    timeline_by_time[reading_at] = reading_kwh
+            billing_timelines.append(sorted(timeline_by_time.items()))
         apartments.append(
             {
                 "apartment": apt,
@@ -3906,16 +3967,17 @@ def get_meter_status(config: AppConfig) -> dict[str, Any]:
             }
         )
 
-    prepaid_months = (
-        _elapsed_calendar_months(period_start, period_end)
-        if period_start is not None and period_end is not None
-        else 0
-    )
+    prepaid_months = 0
+    calculated_underpayment_kwh = 0.0
+    if period_start is not None and period_end is not None:
+        prepaid_months, calculated_underpayment_kwh = _calculate_monthly_underpayment(
+            billing_timelines, period_start, period_end
+        )
     prepaid_kwh = round(prepaid_months * METER_PREPAID_KWH, 3)
     underpayment_kwh = None
     underpayment_cost = None
     if have_any_consumption:
-        underpayment_kwh = round(max(total_consumption - prepaid_kwh, 0.0), 3)
+        underpayment_kwh = round(calculated_underpayment_kwh, 3)
         underpayment_cost = round(underpayment_kwh * float(config.tariff_per_kwh or 0.0), 2)
 
     return {
