@@ -3174,6 +3174,7 @@ def _get_dashboard_summary_context(
     dict[str, dict[str, Any]],
     dict[str, list[dict[str, Any]]],
     dict[str, tuple[str, float]],
+    dict[str, list[dict[str, Any]]],
 ]:
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
@@ -3203,7 +3204,7 @@ def _get_dashboard_summary_context(
                 if row.get("device_id") and row.get("is_energy_meter")
             ]
             if not device_ids:
-                return [], {}, {}, {}
+                return [], {}, {}, {}, {}
 
             cursor.execute(
                 """
@@ -3215,9 +3216,14 @@ def _get_dashboard_summary_context(
                 (device_ids,),
             )
             latest_rows = cursor.fetchall()
+            latest_by_device = {
+                str(row.get("device_id") or ""): row
+                for row in latest_rows
+                if row.get("device_id")
+            }
 
             if not energy_device_ids:
-                return device_rows, {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")}, {}, {}
+                return device_rows, latest_by_device, {}, {}, {}
 
             cursor.execute(
                 """
@@ -3233,12 +3239,23 @@ def _get_dashboard_summary_context(
                 (energy_device_ids, month_start, now),
             )
             daily_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT device_id, bucket, kwh, source
+                FROM device_synthetic_hourly
+                WHERE device_id = ANY(%s) AND bucket >= %s AND bucket < %s
+                ORDER BY device_id ASC, bucket ASC
+                """,
+                (energy_device_ids, month_start, now),
+            )
+            synthetic_rows = cursor.fetchall()
 
     return (
         device_rows,
-        {str(row.get("device_id") or ""): row for row in latest_rows if row.get("device_id")},
+        latest_by_device,
         _group_aggregate_rows_by_device(daily_rows),
         _build_energy_counter_meta_by_device(device_rows),
+        _group_aggregate_rows_by_device(synthetic_rows),
     )
 
 
@@ -3262,6 +3279,7 @@ def get_dashboard_summary(
         latest_by_device,
         daily_rows_by_device,
         energy_counter_meta_by_device,
+        synthetic_rows_by_device,
     ) = _get_dashboard_summary_context(config, month_start, now)
 
     for device in device_rows:
@@ -3304,22 +3322,31 @@ def get_dashboard_summary(
 
         if device.get("is_energy_meter"):
             bucket_rows = daily_rows_by_device.get(device_id, [])
+            synthetic_rows = synthetic_rows_by_device.get(device_id, [])
             energy_counter_meta = energy_counter_meta_by_device.get(device_id)
+            has_gap_recovery = any(row.get("source") == "gap-recovery" for row in synthetic_rows)
             device_energy_wh = _aggregate_energy_wh(
                 bucket_rows,
                 "day",
                 energy_counter_meta,
-            )
-            today_local_date = now.astimezone(_get_timezone(config)).date()
-            today_rows = [
-                row for row in bucket_rows
-                if (
-                    (_parse_dt(row["bucket"]) if not isinstance(row["bucket"], datetime) else row["bucket"])
-                    .astimezone(_get_timezone(config))
-                    .date()
-                ) == today_local_date
-            ]
-            day_energy_wh = _aggregate_energy_wh(today_rows, "day", energy_counter_meta)
+                suppress_gap_jumps=has_gap_recovery,
+            ) + sum(float(row.get("kwh") or 0.0) for row in synthetic_rows) * 1000.0
+            tz = _get_timezone(config)
+            today_local_date = now.astimezone(tz).date()
+
+            def _is_today(row: dict[str, Any]) -> bool:
+                bucket = row["bucket"]
+                bucket_dt = _parse_dt(bucket) if not isinstance(bucket, datetime) else bucket
+                return bucket_dt.astimezone(tz).date() == today_local_date
+
+            today_rows = [row for row in bucket_rows if _is_today(row)]
+            today_synthetic_rows = [row for row in synthetic_rows if _is_today(row)]
+            day_energy_wh = _aggregate_energy_wh(
+                today_rows,
+                "day",
+                energy_counter_meta,
+                suppress_gap_jumps=has_gap_recovery,
+            ) + sum(float(row.get("kwh") or 0.0) for row in today_synthetic_rows) * 1000.0
             is_generator = bool(device.get("is_generator"))
             if is_generator:
                 generated_energy_wh += device_energy_wh
