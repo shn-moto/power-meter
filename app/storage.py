@@ -3831,14 +3831,16 @@ def _coerce_reading_kwh(value: Any) -> float | None:
 
 
 def _elapsed_calendar_months(start: datetime, end: datetime) -> int:
-    """Number of month boundaries crossed since the settlement reading.
+    """Number of prepaid monthly quotas since the settlement reading.
 
     For example, 14 April through 13 October covers six billing months
-    (May–October), matching the owner's calculation.
+    (May–October), matching the owner's calculation. A positive interval
+    within one calendar month still uses that month's prepaid quota.
     """
-    if end < start:
+    if end <= start:
         return 0
-    return (end.year - start.year) * 12 + end.month - start.month
+    elapsed_months = (end.year - start.year) * 12 + end.month - start.month
+    return max(1, elapsed_months)
 
 
 def get_meter_status(config: AppConfig) -> dict[str, Any]:
