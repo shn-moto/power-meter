@@ -2310,12 +2310,19 @@ def _has_gap_recovery_estimates(
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM device_synthetic_hourly
-                    WHERE device_id = %s AND source = 'gap-recovery'
-                      AND bucket < %s
-                      AND bucket + INTERVAL '1 day' > %s
+                    WHERE device_id = %(device_id)s AND source = 'gap-recovery'
+                      AND (((bucket AT TIME ZONE %(tz)s)::date)::timestamp
+                           AT TIME ZONE %(tz)s) < %(end)s
+                      AND ((((bucket AT TIME ZONE %(tz)s)::date)::timestamp
+                            + INTERVAL '1 day') AT TIME ZONE %(tz)s) > %(start)s
                 ) AS present
                 """,
-                (device_id, end, start),
+                {
+                    "device_id": device_id,
+                    "start": start,
+                    "end": end,
+                    "tz": config.timezone or "Europe/Warsaw",
+                },
             )
             row = cursor.fetchone()
     return bool(row and row.get("present"))
@@ -4214,24 +4221,29 @@ def _gap_estimate_kwh_for_range(
             cursor.execute(
                 """
                 WITH daily AS (
-                    SELECT bucket, kwh,
-                           ((bucket AT TIME ZONE %(tz)s) + INTERVAL '1 day')
-                               AT TIME ZONE %(tz)s AS day_end
+                    SELECT kwh,
+                           (((bucket AT TIME ZONE %(tz)s)::date)::timestamp
+                            AT TIME ZONE %(tz)s) AS day_start
                     FROM device_synthetic_hourly
                     WHERE device_id = %(device_id)s
                       AND source = 'gap-recovery'
+                ), boundaries AS (
+                    SELECT kwh, day_start,
+                           ((day_start AT TIME ZONE %(tz)s) + INTERVAL '1 day')
+                               AT TIME ZONE %(tz)s AS day_end
+                    FROM daily
                 )
                 SELECT COALESCE(SUM(
                     kwh * GREATEST(
                         0,
                         EXTRACT(EPOCH FROM (
                             LEAST(day_end, %(end)s)
-                            - GREATEST(bucket, %(start)s)
+                            - GREATEST(day_start, %(start)s)
                         ))
-                    ) / NULLIF(EXTRACT(EPOCH FROM (day_end - bucket)), 0)
+                    ) / NULLIF(EXTRACT(EPOCH FROM (day_end - day_start)), 0)
                 ), 0) AS kwh
-                FROM daily
-                WHERE bucket < %(end)s AND day_end > %(start)s
+                FROM boundaries
+                WHERE day_start < %(end)s AND day_end > %(start)s
                 """,
                 {
                     "device_id": device_id,
