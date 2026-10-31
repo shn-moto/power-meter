@@ -2311,10 +2311,11 @@ def _has_gap_recovery_estimates(
                 SELECT EXISTS (
                     SELECT 1 FROM device_synthetic_hourly
                     WHERE device_id = %s AND source = 'gap-recovery'
-                      AND bucket >= %s AND bucket < %s
+                      AND bucket < %s
+                      AND bucket + INTERVAL '1 day' > %s
                 ) AS present
                 """,
-                (device_id, start, end),
+                (device_id, end, start),
             )
             row = cursor.fetchone()
     return bool(row and row.get("present"))
@@ -4207,27 +4208,37 @@ def _gap_estimate_kwh_for_range(
     start_dt: datetime,
     end_dt: datetime,
 ) -> float:
-    """Estimated kWh overlapping a range, prorated inside edge hours."""
+    """Actual gap total distributed by local days, prorated at range edges."""
     with _connect(config.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
+                WITH daily AS (
+                    SELECT bucket, kwh,
+                           ((bucket AT TIME ZONE %(tz)s) + INTERVAL '1 day')
+                               AT TIME ZONE %(tz)s AS day_end
+                    FROM device_synthetic_hourly
+                    WHERE device_id = %(device_id)s
+                      AND source = 'gap-recovery'
+                )
                 SELECT COALESCE(SUM(
                     kwh * GREATEST(
                         0,
                         EXTRACT(EPOCH FROM (
-                            LEAST(bucket + INTERVAL '1 hour', %(end)s)
+                            LEAST(day_end, %(end)s)
                             - GREATEST(bucket, %(start)s)
-                        )) / 3600.0
-                    )
+                        ))
+                    ) / NULLIF(EXTRACT(EPOCH FROM (day_end - bucket)), 0)
                 ), 0) AS kwh
-                FROM device_synthetic_hourly
-                WHERE device_id = %(device_id)s
-                  AND source = 'gap-recovery'
-                  AND bucket < %(end)s
-                  AND bucket + INTERVAL '1 hour' > %(start)s
+                FROM daily
+                WHERE bucket < %(end)s AND day_end > %(start)s
                 """,
-                {"device_id": device_id, "start": start_dt, "end": end_dt},
+                {
+                    "device_id": device_id,
+                    "start": start_dt,
+                    "end": end_dt,
+                    "tz": config.timezone or "Europe/Warsaw",
+                },
             )
             row = cursor.fetchone()
     return float((row or {}).get("kwh") or 0.0)

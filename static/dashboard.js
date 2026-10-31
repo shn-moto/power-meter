@@ -821,9 +821,9 @@ if (meterSection) {
             const rText = restored > 0 ? `+${restored.toFixed(2)} кВт·ч` : '—';
             const restoredDevs = Array.isArray(p.restored_devices) ? p.restored_devices : [];
             const tooltipHtml = restoredDevs.length
-                ? `<div class="meter-tooltip-title">Восстановлено / оценка:</div>${
+                ? `<div class="meter-tooltip-title">Восстановлено / распределено:</div>${
                     restoredDevs.map((d) => {
-                        const suffix = d.kind === 'estimate' ? ' (оценка)' : '';
+                        const suffix = d.kind === 'estimate' ? ' (факт, по дням)' : '';
                         return `<div class="meter-tooltip-row"><span>${escapeHtml(d.name)}${suffix}</span><span>+${Number(d.kwh).toFixed(2)} кВт·ч</span></div>`;
                     }).join('')
                 }`

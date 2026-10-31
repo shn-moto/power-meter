@@ -840,7 +840,7 @@ if (page) {
                     const sourceItem = series.find((candidate) => candidate.timestamp === item.timestamp);
                     const estimateKwh = Number(sourceItem?.estimate_kwh || 0);
                     const estimateLine = estimateKwh > 0.0001
-                        ? `<br/>Оценка при отсутствии связи: ${formatNumber(estimateKwh)} кВт·ч`
+                        ? `<br/>Фактический расход за пропуск, по дням: ${formatNumber(estimateKwh)} кВт·ч`
                         : '';
                     return `<strong>${item.tooltipLabel || ''}</strong><br/>${chartConfig.label}: ${formatNumber(metricValue)} ${chartConfig.unit}${estimateLine}`;
                 },
